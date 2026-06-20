@@ -14,7 +14,7 @@ connected track) keeps them from colliding. There is no player input.
 Open [`index.html`](index.html) in any browser, or just double-click it. The
 view auto-scales to fill the window.
 
-Controls: **Pause** (Space), **Reset** (R), **Speed**, **Sound**.
+Controls: **Pause** (Space), **Reset** (R), **Speed**.
 
 ## Files
 
@@ -24,10 +24,10 @@ Controls: **Pause** (Space), **Reset** (R), **Speed**, **Sound**.
 
 ## How the port works
 
-`index.html` embeds the cart's sprite (`__gfx__`), map (`__map__`), and sound
-(`__sfx__`) data verbatim, reproduces PICO-8's primitives (`cls`/`pget`/`pset`/
-`spr`/`mget`/`sfx`) over a 128×128 colour-index framebuffer, and translates the
-Lua game logic 1:1 to JavaScript, so the simulation behaves like the original.
+`index.html` embeds the cart's sprite (`__gfx__`) and map (`__map__`) data
+verbatim, reproduces PICO-8's primitives (`cls`/`pget`/`pset`/`spr`/`mget`)
+over a 128×128 colour-index framebuffer, and translates the Lua game logic 1:1
+to JavaScript, so the simulation behaves like the original.
 
 ## License
 

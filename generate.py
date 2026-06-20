@@ -2,10 +2,10 @@
 """Build a single self-contained index.html port of train3.p8.
 
 The PICO-8 cart is a pixel-buffer simulation: the screen IS the game state.
-We reproduce PICO-8's primitives (cls/pget/pset/spr/mget/sfx) over a 128x128
+We reproduce PICO-8's primitives (cls/pget/pset/spr/mget) over a 128x128
 colour-index framebuffer and translate the Lua logic 1:1 to JS. The sprite
-sheet (__gfx__), map (__map__) and sound (__sfx__) data are embedded verbatim
-so the framebuffer is reproduced exactly.
+sheet (__gfx__) and map (__map__) data are embedded verbatim so the
+framebuffer is reproduced exactly.
 """
 import json
 import re
@@ -35,12 +35,10 @@ def main():
 
     gfx = section(text, "gfx", "map")
     mp = section(text, "map", "sfx")
-    sfx = section(text, "sfx", None)
 
     data_js = (
         "const GFX=" + json.dumps(gfx) + ";\n"
         "const MAP=" + json.dumps(mp) + ";\n"
-        "const SFX=" + json.dumps(sfx) + ";\n"
     )
 
     html = TEMPLATE.replace("/*__DATA__*/", data_js)
@@ -49,7 +47,7 @@ def main():
 
     with open("index.html", "w") as fh:
         fh.write(html)
-    print("wrote index.html (%d gfx rows, %d map rows, %d sfx)" % (len(gfx), len(mp), len(sfx)))
+    print("wrote index.html (%d gfx rows, %d map rows)" % (len(gfx), len(mp)))
 
     # also emit a DOM-free engine for a node smoke test
     test_js = data_js + ENGINE_JS + "\nmodule.exports={_init,_update,getInfo};\n"
@@ -71,7 +69,6 @@ const PALETTE=[
 
 const W=128,H=128;
 let fb=new Uint8Array(W*H);
-let playSfx=function(n){};
 
 function cls(c){ fb.fill(c||0); }
 function pget(x,y){ x=Math.floor(x); y=Math.floor(y);
@@ -97,7 +94,6 @@ function mget(x,y){
   const v=parseInt(row.substr(i,2),16);
   return isNaN(v)?0:v;
 }
-function sfx(n){ playSfx(n); }
 
 function del(a,v){ const i=a.indexOf(v); if(i>=0) a.splice(i,1); }
 function find(v,a){ return v.indexOf(a)!==-1; }
@@ -136,7 +132,6 @@ function unsignal(x,y){ sigcol(x,y,8,11); }
 function sigcol(x,y,oldc,newc){
   const ky=128*x+y+128*128*oldc;
   if(sigx[ky]==null){
-    sfx(2);
     sigx[ky]=[]; sigy[ky]=[];
     let nex=[];
     for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++)
@@ -255,38 +250,6 @@ if (typeof document !== 'undefined') {
   }
   window.addEventListener('resize',fit);
 
-  // --- audio: tiny PICO-8 sfx player (only sfx 2 is used by the cart) ---
-  let actx=null, soundOn=true;
-  const WF=['triangle','sawtooth','sawtooth','square','square','sine','square','sawtooth'];
-  function ensureAudio(){
-    if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ actx=null; } }
-    if(actx && actx.state==='suspended') actx.resume();
-  }
-  playSfx=function(n){
-    if(!soundOn || !actx) return;
-    const line=SFX[n]; if(!line) return;
-    const speed=parseInt(line.substr(2,2),16)||1;
-    const dur=Math.max(0.03, speed/120);
-    let t=actx.currentTime+0.001;
-    for(let k=0;k<32;k++){
-      const off=8+k*5; if(off+5>line.length) break;
-      const pitch=parseInt(line.substr(off,2),16);
-      const wf=parseInt(line.charAt(off+2),16);
-      const vol=parseInt(line.charAt(off+3),16);
-      if(vol>0 && !isNaN(pitch)){
-        const osc=actx.createOscillator(), g=actx.createGain();
-        osc.type=WF[wf]||'square';
-        osc.frequency.value=440*Math.pow(2,(pitch-33)/12);
-        g.gain.setValueAtTime(0,t);
-        g.gain.linearRampToValueAtTime((vol/7)*0.14,t+0.005);
-        g.gain.linearRampToValueAtTime(0.0001,t+dur);
-        osc.connect(g); g.connect(actx.destination);
-        osc.start(t); osc.stop(t+dur+0.02);
-      }
-      t+=dur;
-    }
-  };
-
   // --- run loop: PICO-8 updates at 30Hz ---
   let running=true, speed=1, acc=0, last=0;
   const STEP=1000/30;
@@ -306,26 +269,17 @@ if (typeof document !== 'undefined') {
   const btnPause=document.getElementById('pause');
   const btnReset=document.getElementById('reset');
   const btnSpeed=document.getElementById('speed');
-  const btnSound=document.getElementById('sound');
   const speeds=[1,2,4,0.5];
   let si=0;
   function setPause(p){ running=!p; btnPause.textContent=running?'❙❙ Pause':'▶ Play'; }
-  btnPause.onclick=()=>{ ensureAudio(); setPause(running); };
-  btnReset.onclick=()=>{ ensureAudio(); _init(); acc=0; render(); };
+  btnPause.onclick=()=>{ setPause(running); };
+  btnReset.onclick=()=>{ _init(); acc=0; render(); };
   btnSpeed.onclick=()=>{ si=(si+1)%speeds.length; speed=speeds[si]; btnSpeed.textContent='Speed '+speed+'×'; };
-  btnSound.onclick=()=>{ soundOn=!soundOn; ensureAudio(); btnSound.textContent=soundOn?'♪ Sound On':'♪ Sound Off'; };
 
   window.addEventListener('keydown',(e)=>{
-    if(e.code==='Space'){ e.preventDefault(); ensureAudio(); setPause(running); }
-    else if(e.key==='r'||e.key==='R'){ ensureAudio(); _init(); acc=0; render(); }
+    if(e.code==='Space'){ e.preventDefault(); setPause(running); }
+    else if(e.key==='r'||e.key==='R'){ _init(); acc=0; render(); }
   });
-
-  // browsers need a user gesture before audio can start
-  function firstGesture(){ ensureAudio();
-    window.removeEventListener('pointerdown',firstGesture);
-    window.removeEventListener('keydown',firstGesture); }
-  window.addEventListener('pointerdown',firstGesture);
-  window.addEventListener('keydown',firstGesture);
 
   _init();
   fit();
@@ -382,7 +336,6 @@ TEMPLATE = r'''<!DOCTYPE html>
     <button id="pause">&#10073;&#10073; Pause</button>
     <button id="reset">&#8635; Reset</button>
     <button id="speed">Speed 1&times;</button>
-    <button id="sound">&#9834; Sound On</button>
   </div>
 
 <script>
