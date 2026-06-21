@@ -258,7 +258,7 @@ if (typeof document !== 'undefined') {
   const btnPause=document.getElementById('pause');
   const btnReset=document.getElementById('reset');
   const btnSpeed=document.getElementById('speed');
-  const speeds=[1,2,4,0.5];
+  const speeds=[1,2,4,0.5,0.25];
   let si=0;
   function setPause(p){ running=!p; btnPause.textContent=running?'❙❙ Pause':'▶ Play'; }
   btnPause.onclick=()=>{ setPause(running); };
