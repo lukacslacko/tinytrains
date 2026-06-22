@@ -885,12 +885,13 @@
       seen.add(id);
       const tile = getTile(n.x,n.y);
       if (!tile) continue;
+      // A signal bounds the block: it is a wall, not part of the protected run of
+      // track, so it is never flooded through *and* never counts as occupancy. If a
+      // boundary signal tile counted, two trains each waiting on the other's signal
+      // would each see the other inside their block and deadlock forever.
+      if (tile.kind === "signal") continue;
       tiles.add(key(n.x,n.y));
       if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) blocked = true;
-      // A block is the run of connected track between signals: any signal tile is a
-      // boundary. Include it (so a train sitting on it still counts) but never flood
-      // through it, otherwise the block would bleed past the next signal.
-      if (tile.kind === "signal") continue;
       for (const ex of exitsForBlock(tile,n.from)){
         todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
       }
