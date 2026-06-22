@@ -59,6 +59,7 @@
     flex-direction:column;
     gap:14px;
   }
+  .toolbar>*{flex:0 0 auto}
   .group{display:grid;gap:8px}
   .quick-controls{
     flex:0 0 auto;
@@ -255,7 +256,7 @@
       <details class="palette">
         <summary>Signals</summary>
         <div class="palette-body">
-          <p class="help">A signal protects the track in its arrow direction. A train that would exit through the signal arrow waits when the protected block ahead contains another train; the block search follows all connected switch branches until another same-direction signal or a dead end. Red means occupied, green means clear.</p>
+          <p class="help">A signal protects the block of track in its arrow direction. The block is the run of connected track &mdash; flooding through tracks and switches &mdash; up to the next signal or a dead end. A train that would exit through the signal arrow waits while any other train is anywhere in that block. Red means occupied, green means clear.</p>
           <div class="shape-grid" id="signalPalette"></div>
         </div>
       </details>
@@ -870,8 +871,11 @@
       if (!tile) continue;
       tiles.add(key(n.x,n.y));
       if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) blocked = true;
+      // A block is the run of connected track between signals: any signal tile is a
+      // boundary. Include it (so a train sitting on it still counts) but never flood
+      // through it, otherwise the block would bleed past the next signal.
+      if (tile.kind === "signal") continue;
       for (const ex of exitsForBlock(tile,n.from)){
-        if (tile.kind === "signal" && ex === tile.dir) continue;
         todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
       }
     }
