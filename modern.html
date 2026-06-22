@@ -179,6 +179,10 @@
         <div class="shape-grid" id="trackPalette"></div>
       </section>
       <section class="group">
+        <div class="label">Stops</div>
+        <div class="shape-grid" id="stopPalette"></div>
+      </section>
+      <section class="group">
         <div class="label">Switches</div>
         <div class="shape-grid" id="switchPalette"></div>
       </section>
@@ -248,7 +252,8 @@
   const COLOR_NAMES = Object.keys(COLORS);
   const TRAIN_SPEED = 0.018;
   const SPAWN_TICK_FRAMES = 14;
-  const DWELL_FRAME_SCALE = SPAWN_TICK_FRAMES;
+  const FRAMES_PER_SECOND = 60;
+  const DEFAULT_DWELL_SECONDS = 2;
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
     {name:"NE", dx:1, dy:-1, px:1, py:0},
@@ -277,6 +282,19 @@
     {label:"Buffer N", route:[0]},
     {label:"Buffer S", route:[4]}
   ];
+  function buildStopShapes(){
+    const shapes = [];
+    for (const shape of TRACK_SHAPES){
+      for (const dir of shape.route){
+        shapes.push({
+          label: `${shape.label} stop ${DIRS[dir].name}`,
+          route: cloneRoute(shape.route),
+          dir
+        });
+      }
+    }
+    return shapes;
+  }
   function switchShape(stem, branches){
     return {
       label: `${DIRS[stem].name} to ${branches.map(b => DIRS[b].name).join(" / ")}`,
@@ -306,6 +324,7 @@
     return shapes;
   }
   const SWITCH_SHAPES = buildSwitchShapes();
+  const STOP_SHAPES = buildStopShapes();
   const TOOLS = [
     ["crossPlus","Cross +"],
     ["crossX","Cross X"],
@@ -325,9 +344,11 @@
     selectedTool: "track",
     selectedColor: "red",
     selectedShape: 0,
+    selectedStopShape: 0,
     selectedSwitchShape: 0,
     view: {x: 0, y: 0, zoom: 1},
     drag: null,
+    hover: null,
     message: ""
   };
 
@@ -368,7 +389,10 @@
     if (tool === "crossX") return {kind:"crossX"};
     if (tool === "switch") return defaultSwitch();
     if (tool === "spawn") return {kind:"spawn", route:[6,2], dir:2, color:state.selectedColor};
-    if (tool === "stop") return {kind:"stop", route, dir:route[route.length - 1], filter:null, dwell:70};
+    if (tool === "stop"){
+      const shape = STOP_SHAPES[state.selectedStopShape];
+      return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, filter:null, dwellSeconds:DEFAULT_DWELL_SECONDS};
+    }
     if (tool === "signal") return {kind:"signal", route, dir:route[route.length - 1]};
     return null;
   }
@@ -432,10 +456,6 @@
       pctx.lineTo(e.x,e.y);
     }
     pctx.stroke();
-    pctx.fillStyle = muted ? "#71808e" : "#edf3f6";
-    pctx.beginPath();
-    pctx.arc(c.x,c.y,3.5,0,Math.PI*2);
-    pctx.fill();
   }
   function drawPreviewTriangle(pctx,w,h,d,color){
     const c = {x:w / 2, y:h / 2};
@@ -478,9 +498,12 @@
     pctx.strokeRect(.5,.5,w-1,h-1);
     if (kind === "track"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
+    } else if (kind === "stop"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewTriangle(pctx,w,h,shape.dir,"#f1ca57");
     } else {
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
-      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],true);
+      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
       drawPreviewTriangle(pctx,w,h,shape.defaultBranch,"#64d7c4");
     }
     button.appendChild(preview);
@@ -522,10 +545,6 @@
       ctx.lineTo(e.x,e.y);
     }
     ctx.stroke();
-    ctx.fillStyle = muted ? "#71808e" : "#edf3f6";
-    ctx.beginPath();
-    ctx.arc(c.x,c.y,Math.max(2, tileSize() * .055),0,Math.PI*2);
-    ctx.fill();
   }
 
   function drawTriangle(x,y,d,color,scale){
@@ -557,7 +576,7 @@
     ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
     if (tile.kind === "switch"){
       drawRoute(x,y,[tile.stem, tile.branches[0]], false);
-      drawRoute(x,y,[tile.stem, tile.branches[1]], true);
+      drawRoute(x,y,[tile.stem, tile.branches[1]], false);
       for (const b of tile.branches){
         const filter = tile.filters[String(b)];
         if (!filter) continue;
@@ -573,9 +592,6 @@
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
     if (tile.kind === "spawn"){
       drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
-      const c = centerPoint(x,y);
-      ctx.fillStyle = COLORS[tile.color];
-      ctx.beginPath(); ctx.arc(c.x,c.y,Math.max(4,s*.11),0,Math.PI*2); ctx.fill();
     }
     if (tile.kind === "stop"){
       drawTriangle(x,y,tile.dir,tile.filter ? COLORS[tile.filter] : "#f1ca57",.18);
@@ -601,12 +617,39 @@
     }
   }
 
+  function drawPlacementGhost(){
+    if (!state.hover) return;
+    const {x,y} = state.hover;
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    ctx.save();
+    if (state.selectedTool === "erase"){
+      ctx.globalAlpha = .42;
+      ctx.fillStyle = "#ff6b76";
+      ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+      ctx.strokeStyle = "#ff9aa3";
+      ctx.lineWidth = Math.max(1, s * .035);
+      ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
+    } else {
+      const tile = makeTile(state.selectedTool);
+      if (!tile){ ctx.restore(); return; }
+      ctx.globalAlpha = .52;
+      drawTile(x,y,tile);
+      ctx.globalAlpha = .9;
+      ctx.strokeStyle = "#64d7c4";
+      ctx.lineWidth = Math.max(1, s * .035);
+      ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
+    }
+    ctx.restore();
+  }
+
   function draw(){
     drawGrid();
     for (const [k,tile] of state.tiles){
       const {x,y} = readKey(k);
       drawTile(x,y,tile);
     }
+    drawPlacementGhost();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool}`;
@@ -691,6 +734,18 @@
     return true;
   }
 
+  function stopDwellSeconds(tile){
+    if (tile.dwellSeconds != null){
+      const seconds = Number(tile.dwellSeconds);
+      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
+    }
+    if (tile.dwell != null){
+      const seconds = Number(tile.dwell) / 40;
+      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
+    }
+    return DEFAULT_DWELL_SECONDS;
+  }
+
   function moveTrain(train){
     if (advanceTrain(train)) return;
     if (train.wait > 0){ train.wait--; return; }
@@ -698,8 +753,12 @@
     const ex = exitFor(tile, train.from, train.color);
     if (ex == null) return;
     if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
-      train.wait = (tile.dwell || 70) * DWELL_FRAME_SCALE;
-      return;
+      const stopKey = key(train.x,train.y);
+      if (train.stopKey !== stopKey){
+        train.wait = Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
+        train.stopKey = stopKey;
+        return;
+      }
     }
     if (tile.kind === "signal" && ex === tile.dir && signalBlocked(train.x,train.y,tile,train)){
       return;
@@ -709,6 +768,7 @@
     const nf = opposite(ex);
     const nextTile = getTile(nx,ny);
     if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)) return;
+    delete train.stopKey;
     train.prevX = train.x;
     train.prevY = train.y;
     train.moveDir = ex;
@@ -764,16 +824,26 @@
     const r = canvas.getBoundingClientRect();
     return {x:event.clientX - r.left, y:event.clientY - r.top};
   }
+  function setHoverFromPoint(p){
+    const w = screenToWorld(p.x,p.y);
+    if (state.hover && state.hover.x === w.x && state.hover.y === w.y) return;
+    state.hover = w;
+    draw();
+  }
   canvas.addEventListener("pointerdown", event => {
     if (event.button !== 0) return;
     const p = pointerPos(event);
+    setHoverFromPoint(p);
     state.drag = {sx:p.x, sy:p.y, vx:state.view.x, vy:state.view.y, moved:false};
     canvas.setPointerCapture(event.pointerId);
     canvas.classList.add("dragging");
   });
   canvas.addEventListener("pointermove", event => {
-    if (!state.drag) return;
     const p = pointerPos(event);
+    if (!state.drag){
+      setHoverFromPoint(p);
+      return;
+    }
     const dx = p.x - state.drag.sx;
     const dy = p.y - state.drag.sy;
     if (Math.hypot(dx,dy) > 5) state.drag.moved = true;
@@ -792,6 +862,12 @@
     }
     state.drag = null;
     canvas.classList.remove("dragging");
+    setHoverFromPoint(p);
+  });
+  canvas.addEventListener("pointerleave", () => {
+    if (state.drag) return;
+    state.hover = null;
+    draw();
   });
   canvas.addEventListener("wheel", event => {
     event.preventDefault();
@@ -803,6 +879,7 @@
     const s = tileSize();
     state.view.x += (after.x - before.x) * s;
     state.view.y += (after.y - before.y) * s;
+    setHoverFromPoint({x:event.offsetX, y:event.offsetY});
     draw();
   }, {passive:false});
   canvas.addEventListener("contextmenu", event => {
@@ -841,7 +918,7 @@
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Color filter</span><select name="filter">${colorOptions(tile.filter,true)}</select></label>`;
-      body += `<label class="field"><span>Dwell ticks</span><input name="dwell" type="number" min="10" max="600" value="${tile.dwell || 70}"></label>`;
+      body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
     }
     if (tile.kind === "signal"){
       body += `<label class="field"><span>Protected direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
@@ -878,7 +955,10 @@
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
     if (data.get("color")) tile.color = data.get("color");
     if (data.get("filter") != null) tile.filter = data.get("filter") || null;
-    if (data.get("dwell")) tile.dwell = Number(data.get("dwell"));
+    if (data.get("dwellSeconds")){
+      tile.dwellSeconds = Number(data.get("dwellSeconds"));
+      delete tile.dwell;
+    }
     if (tile.kind === "switch"){
       tile.filters = {};
       tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
@@ -892,10 +972,12 @@
   function setupControls(){
     const toolButtons = document.getElementById("toolButtons");
     const trackPalette = document.getElementById("trackPalette");
+    const stopPalette = document.getElementById("stopPalette");
     const switchPalette = document.getElementById("switchPalette");
     function syncSelection(){
       for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
       for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
+      for (const b of stopPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "stop" && Number(b.dataset.shape) === state.selectedStopShape);
       for (const b of switchPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "switch" && Number(b.dataset.shape) === state.selectedSwitchShape);
       draw();
     }
@@ -928,6 +1010,23 @@
         syncSelection();
       });
       trackPalette.appendChild(btn);
+    });
+    STOP_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "stop");
+      const label = document.createElement("span");
+      label.textContent = `Stop ${DIRS[shape.dir].name}`;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "stop";
+        state.selectedStopShape = i;
+        syncSelection();
+      });
+      stopPalette.appendChild(btn);
     });
     SWITCH_SHAPES.forEach((shape,i) => {
       const btn = document.createElement("button");
@@ -1074,10 +1173,10 @@
     setTile(4,0,{kind:"signal",route:[6,2],dir:2});
     setTile(5,-5,{kind:"signal",route:[5,1],dir:1});
     setTile(5,5,{kind:"signal",route:[7,3],dir:3});
-    setTile(7,0,{kind:"stop",route:[6,2],dir:2,filter:"blue",dwell:90});
-    setTile(6,-6,{kind:"stop",route:[5,1],dir:1,filter:"red",dwell:90});
-    setTile(5,1,{kind:"stop",route:[6,2],dir:2,filter:"green",dwell:80});
-    setTile(6,7,{kind:"stop",route:[7,3],dir:3,filter:"yellow",dwell:80});
+    setTile(7,0,{kind:"stop",route:[6,2],dir:2,filter:"blue",dwellSeconds:2.25});
+    setTile(6,-6,{kind:"stop",route:[5,1],dir:1,filter:"red",dwellSeconds:2.25});
+    setTile(5,1,{kind:"stop",route:[6,2],dir:2,filter:"green",dwellSeconds:2});
+    setTile(6,7,{kind:"stop",route:[7,3],dir:3,filter:"yellow",dwellSeconds:2});
     setTile(3,3,{kind:"crossPlus"});
     setTile(4,3,{kind:"track",route:[6,2]});
     setTile(2,3,{kind:"track",route:[6,2]});
