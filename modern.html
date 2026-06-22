@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Trains Modern Control</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg:#0f1318;
+    --rail:#dde6ef;
+    --grid:#252d36;
+    --grid-strong:#36414d;
+    --panel:#151a20;
+    --panel-2:#1c232b;
+    --line:#303944;
+    --ink:#edf3f6;
+    --muted:#8f9aa5;
+    --accent:#64d7c4;
+    --warn:#f1c25f;
+    --danger:#ff6b76;
+    --green:#43d17b;
+    --red:#f05264;
+    --blue:#58a8ff;
+    --yellow:#f1ca57;
+    --violet:#b58cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink)}
+  body{
+    font:13px/1.35 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  #app{height:100%;display:grid;grid-template-columns:276px minmax(0,1fr)}
+  aside{
+    min-width:0;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+  }
+  .brand{
+    padding:16px 16px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  h1{font-size:20px;line-height:1.05;margin:0 0 5px;letter-spacing:0}
+  .brand p{margin:0;color:var(--muted)}
+  .toolbar{
+    padding:12px;
+    overflow:auto;
+    display:grid;
+    gap:14px;
+  }
+  .group{display:grid;gap:8px}
+  .label{
+    color:var(--muted);
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+  }
+  .tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  button,select,input,textarea{
+    font:inherit;
+    color:var(--ink);
+  }
+  button,select{
+    min-height:34px;
+    border:1px solid var(--line);
+    background:var(--panel-2);
+    border-radius:7px;
+    padding:7px 9px;
+  }
+  button{cursor:pointer;text-align:left}
+  button:hover,select:hover{border-color:#4a5664}
+  button.active{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent) inset}
+  button.danger.active{border-color:var(--danger)}
+  .row{display:flex;gap:7px;align-items:center}
+  .row>*{flex:1 1 0}
+  .color-row{display:flex;gap:7px;flex-wrap:wrap}
+  .swatch{
+    width:30px;height:30px;min-height:30px;padding:0;border-radius:50%;
+    border:2px solid #0000;
+  }
+  .swatch.active{border-color:var(--ink);box-shadow:0 0 0 1px #000 inset}
+  .status{
+    padding:10px 12px;
+    border-top:1px solid var(--line);
+    color:var(--muted);
+    display:grid;
+    gap:4px;
+  }
+  #stage{position:relative;min-width:0;min-height:0;background:#0d1116}
+  canvas{display:block;width:100%;height:100%;cursor:grab}
+  canvas.dragging{cursor:grabbing}
+  #contextMenu,#ioPanel{
+    position:absolute;
+    z-index:5;
+    background:#151b22;
+    border:1px solid #3a4653;
+    border-radius:8px;
+    box-shadow:0 16px 40px #0008;
+  }
+  #contextMenu{min-width:250px;padding:12px;display:none;gap:10px}
+  #contextMenu.open{display:grid}
+  #contextMenu h2,#ioPanel h2{font-size:14px;margin:0}
+  .field{display:grid;gap:5px}
+  .field span{color:var(--muted);font-size:12px}
+  .field input,.field select,.field textarea{
+    width:100%;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:#0f141a;
+    padding:8px;
+  }
+  #ioPanel{
+    width:min(680px,calc(100vw - 36px));
+    left:50%;top:50%;transform:translate(-50%,-50%);
+    padding:14px;
+    display:none;
+    gap:10px;
+  }
+  #ioPanel.open{display:grid}
+  #ioPanel textarea{height:300px;resize:vertical;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  @media (max-width:760px){
+    #app{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+    aside{border-right:0;border-bottom:1px solid var(--line);max-height:48vh}
+    .toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand">
+      <h1>Tiny Trains Control</h1>
+      <p>Click to place, drag to pan, wheel to zoom. Right-click configurable tiles.</p>
+    </div>
+    <div class="toolbar">
+      <section class="group">
+        <div class="label">Tool</div>
+        <div class="tools" id="toolButtons"></div>
+      </section>
+      <section class="group">
+        <div class="label">Track Shape</div>
+        <select id="shapeSelect" aria-label="Track shape"></select>
+      </section>
+      <section class="group">
+        <div class="label">Train Color</div>
+        <div class="color-row" id="colorButtons"></div>
+      </section>
+      <section class="group">
+        <div class="label">Simulation</div>
+        <div class="row">
+          <button id="pauseBtn">Pause</button>
+          <button id="stepBtn">Step</button>
+        </div>
+        <div class="row">
+          <button id="clearBtn">Clear Trains</button>
+          <button id="demoBtn">Demo Layout</button>
+        </div>
+      </section>
+      <section class="group">
+        <div class="label">Save / Load</div>
+        <div class="row">
+          <button id="saveBtn">Save Browser</button>
+          <button id="loadBtn">Load Browser</button>
+        </div>
+        <div class="row">
+          <button id="exportBtn">Export JSON</button>
+          <button id="importBtn">Import JSON</button>
+        </div>
+      </section>
+    </div>
+    <div class="status">
+      <div id="stats">0 trains</div>
+      <div id="hint">Selected: track</div>
+    </div>
+  </aside>
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <form id="contextMenu"></form>
+    <section id="ioPanel" aria-label="Import export panel">
+      <h2 id="ioTitle">Export JSON</h2>
+      <textarea id="ioText" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="ioApply">Apply</button>
+        <button id="ioClose">Close</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const stage = document.getElementById("stage");
+  const contextMenu = document.getElementById("contextMenu");
+  const stats = document.getElementById("stats");
+  const hint = document.getElementById("hint");
+
+  const COLORS = {
+    red: "#f05264",
+    blue: "#58a8ff",
+    yellow: "#f1ca57",
+    green: "#43d17b",
+    violet: "#b58cff"
+  };
+  const COLOR_NAMES = Object.keys(COLORS);
+  const DIRS = [
+    {name:"N", dx:0, dy:-1, px:.5, py:0},
+    {name:"NE", dx:1, dy:-1, px:1, py:0},
+    {name:"E", dx:1, dy:0, px:1, py:.5},
+    {name:"SE", dx:1, dy:1, px:1, py:1},
+    {name:"S", dx:0, dy:1, px:.5, py:1},
+    {name:"SW", dx:-1, dy:1, px:0, py:1},
+    {name:"W", dx:-1, dy:0, px:0, py:.5},
+    {name:"NW", dx:-1, dy:-1, px:0, py:0}
+  ];
+  const TRACK_SHAPES = [
+    {label:"Straight E-W", route:[6,2]},
+    {label:"Straight N-S", route:[0,4]},
+    {label:"Straight NE-SW", route:[1,5]},
+    {label:"Straight NW-SE", route:[7,3]},
+    {label:"Turn W to NE", route:[6,1]},
+    {label:"Turn W to SE", route:[6,3]},
+    {label:"Turn E to NW", route:[2,7]},
+    {label:"Turn E to SW", route:[2,5]},
+    {label:"Turn N to SE", route:[0,3]},
+    {label:"Turn N to SW", route:[0,5]},
+    {label:"Turn S to NE", route:[4,1]},
+    {label:"Turn S to NW", route:[4,7]},
+    {label:"Buffer E", route:[2]},
+    {label:"Buffer W", route:[6]},
+    {label:"Buffer N", route:[0]},
+    {label:"Buffer S", route:[4]}
+  ];
+  const TOOLS = [
+    ["track","Track"],
+    ["crossPlus","Cross +"],
+    ["crossX","Cross X"],
+    ["switch","Switch"],
+    ["spawn","Spawn"],
+    ["stop","Stop"],
+    ["signal","Signal"],
+    ["erase","Erase"]
+  ];
+
+  const state = {
+    tiles: new Map(),
+    trains: [],
+    nextTrainId: 1,
+    tick: 0,
+    paused: false,
+    selectedTool: "track",
+    selectedColor: "red",
+    selectedShape: 0,
+    view: {x: 0, y: 0, zoom: 1},
+    drag: null,
+    message: ""
+  };
+
+  function key(x,y){ return `${x},${y}`; }
+  function readKey(k){ const [x,y] = k.split(",").map(Number); return {x,y}; }
+  function opposite(d){ return (d + 4) % 8; }
+  function cloneRoute(route){ return route.slice(); }
+  function routesFor(tile){
+    if (!tile) return [];
+    if (tile.kind === "track") return [tile.route];
+    if (tile.kind === "crossPlus") return [[6,2],[0,4]];
+    if (tile.kind === "crossX") return [[7,3],[1,5]];
+    if (tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn") return [tile.route];
+    if (tile.kind === "switch") return [[tile.stem, tile.branches[0]],[tile.stem, tile.branches[1]]];
+    return [];
+  }
+  function tileAccepts(tile, enterDir){
+    return routesFor(tile).some(route => route.includes(enterDir));
+  }
+  function getTile(x,y){ return state.tiles.get(key(x,y)); }
+  function setTile(x,y,tile){ state.tiles.set(key(x,y), tile); }
+  function removeTile(x,y){ state.tiles.delete(key(x,y)); }
+
+  function defaultSwitch(){
+    return {
+      kind: "switch",
+      stem: 6,
+      branches: [2,1],
+      defaultBranch: 2,
+      filters: {"2": null, "1": null}
+    };
+  }
+  function makeTile(tool){
+    const route = cloneRoute(TRACK_SHAPES[state.selectedShape].route);
+    if (tool === "track") return {kind:"track", route};
+    if (tool === "crossPlus") return {kind:"crossPlus"};
+    if (tool === "crossX") return {kind:"crossX"};
+    if (tool === "switch") return defaultSwitch();
+    if (tool === "spawn") return {kind:"spawn", route:[6,2], dir:2, color:state.selectedColor, every:150, phase:0};
+    if (tool === "stop") return {kind:"stop", route, dir:route[route.length - 1], filter:null, dwell:70};
+    if (tool === "signal") return {kind:"signal", route, dir:route[route.length - 1]};
+    return null;
+  }
+
+  function resize(){
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const rect = stage.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    canvas.style.width = rect.width + "px";
+    canvas.style.height = rect.height + "px";
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    draw();
+  }
+  window.addEventListener("resize", resize);
+
+  function tileSize(){ return 46 * state.view.zoom; }
+  function worldToScreen(x,y){
+    const s = tileSize();
+    return {
+      x: stage.clientWidth / 2 + state.view.x + x * s,
+      y: stage.clientHeight / 2 + state.view.y + y * s
+    };
+  }
+  function screenToWorld(px,py){
+    const s = tileSize();
+    return {
+      x: Math.floor((px - stage.clientWidth / 2 - state.view.x) / s),
+      y: Math.floor((py - stage.clientHeight / 2 - state.view.y) / s)
+    };
+  }
+  function centerPoint(x,y){
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    return {x:p.x + s/2, y:p.y + s/2};
+  }
+  function endpointPoint(x,y,d){
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    return {x:p.x + DIRS[d].px * s, y:p.y + DIRS[d].py * s};
+  }
+
+  function drawGrid(){
+    const s = tileSize();
+    const w = stage.clientWidth;
+    const h = stage.clientHeight;
+    const left = Math.floor((-w/2 - state.view.x) / s) - 1;
+    const right = Math.ceil((w/2 - state.view.x) / s) + 1;
+    const top = Math.floor((-h/2 - state.view.y) / s) - 1;
+    const bottom = Math.ceil((h/2 - state.view.y) / s) + 1;
+    ctx.fillStyle = "#0d1116";
+    ctx.fillRect(0,0,w,h);
+    ctx.lineWidth = 1;
+    for (let x=left; x<=right; x++){
+      const p = worldToScreen(x,0).x;
+      ctx.strokeStyle = x === 0 ? "#3f4b58" : "#242b34";
+      ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,h); ctx.stroke();
+    }
+    for (let y=top; y<=bottom; y++){
+      const p = worldToScreen(0,y).y;
+      ctx.strokeStyle = y === 0 ? "#3f4b58" : "#242b34";
+      ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(w,p); ctx.stroke();
+    }
+  }
+
+  function drawRoute(x,y,route,muted){
+    const c = centerPoint(x,y);
+    ctx.strokeStyle = muted ? "#71808e" : "#dde6ef";
+    ctx.lineWidth = Math.max(3, tileSize() * .085);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const d of route){
+      const e = endpointPoint(x,y,d);
+      ctx.moveTo(c.x,c.y);
+      ctx.lineTo(e.x,e.y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = muted ? "#71808e" : "#edf3f6";
+    ctx.beginPath();
+    ctx.arc(c.x,c.y,Math.max(2, tileSize() * .055),0,Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawTriangle(x,y,d,color,scale){
+    const c = centerPoint(x,y);
+    const e = endpointPoint(x,y,d);
+    const vx = e.x - c.x;
+    const vy = e.y - c.y;
+    const len = Math.hypot(vx,vy) || 1;
+    const ux = vx / len;
+    const uy = vy / len;
+    const px = -uy;
+    const py = ux;
+    const size = tileSize() * (scale || .17);
+    const cx = c.x + ux * tileSize() * .18;
+    const cy = c.y + uy * tileSize() * .18;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx + ux * size, cy + uy * size);
+    ctx.lineTo(cx - ux * size * .75 + px * size * .65, cy - uy * size * .75 + py * size * .65);
+    ctx.lineTo(cx - ux * size * .75 - px * size * .65, cy - uy * size * .75 - py * size * .65);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawTile(x,y,tile){
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    ctx.fillStyle = "#121820";
+    ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+    if (tile.kind === "switch"){
+      drawRoute(x,y,[tile.stem, tile.branches[0]], false);
+      drawRoute(x,y,[tile.stem, tile.branches[1]], true);
+      for (const b of tile.branches){
+        const filter = tile.filters[String(b)];
+        if (!filter) continue;
+        const e = endpointPoint(x,y,b);
+        ctx.fillStyle = COLORS[filter];
+        ctx.beginPath(); ctx.arc(e.x,e.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
+      }
+      drawTriangle(x,y,tile.defaultBranch,"#64d7c4",.13);
+      return;
+    }
+    for (const route of routesFor(tile)) drawRoute(x,y,route,false);
+    if (tile.kind === "spawn"){
+      drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
+      const c = centerPoint(x,y);
+      ctx.fillStyle = COLORS[tile.color];
+      ctx.beginPath(); ctx.arc(c.x,c.y,Math.max(4,s*.11),0,Math.PI*2); ctx.fill();
+    }
+    if (tile.kind === "stop"){
+      drawTriangle(x,y,tile.dir,tile.filter ? COLORS[tile.filter] : "#f1ca57",.18);
+    }
+    if (tile.kind === "signal"){
+      const red = signalBlocked(x,y,tile,null);
+      drawTriangle(x,y,tile.dir,red ? "#f05264" : "#43d17b",.18);
+    }
+  }
+
+  function drawTrains(){
+    for (const train of state.trains){
+      const c = centerPoint(train.x, train.y);
+      const r = Math.max(6, tileSize() * .16);
+      ctx.fillStyle = "#06090d";
+      ctx.beginPath(); ctx.arc(c.x,c.y,r+3,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = COLORS[train.color];
+      ctx.beginPath(); ctx.arc(c.x,c.y,r,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.globalAlpha = .75;
+      ctx.beginPath(); ctx.arc(c.x-r*.3,c.y-r*.3,r*.28,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function draw(){
+    drawGrid();
+    for (const [k,tile] of state.tiles){
+      const {x,y} = readKey(k);
+      drawTile(x,y,tile);
+    }
+    drawTrains();
+    stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
+    hint.textContent = state.message || `Selected: ${state.selectedTool}`;
+  }
+
+  function exitFor(tile, from, color){
+    if (!tile) return null;
+    if (tile.kind === "switch"){
+      if (from === tile.stem){
+        const exact = tile.branches.find(b => tile.filters[String(b)] === color);
+        if (exact !== undefined) return exact;
+        const open = tile.branches.find(b => !tile.filters[String(b)]);
+        return open !== undefined ? open : tile.defaultBranch;
+      }
+      if (tile.branches.includes(from)) return tile.stem;
+      return null;
+    }
+    for (const route of routesFor(tile)){
+      if (!route.includes(from)) continue;
+      if (route.length < 2) return null;
+      return route[0] === from ? route[1] : route[0];
+    }
+    return null;
+  }
+
+  function signalBlocked(x,y,tile,train){
+    const nx = x + DIRS[tile.dir].dx;
+    const ny = y + DIRS[tile.dir].dy;
+    return blockHasTrain(nx, ny, opposite(tile.dir), train && train.id);
+  }
+
+  function blockHasTrain(x,y,from,ignoreId){
+    const seen = new Set();
+    const todo = [{x,y,from}];
+    while (todo.length){
+      const n = todo.pop();
+      const id = `${n.x},${n.y},${n.from}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (state.trains.some(t => t.id !== ignoreId && t.x === n.x && t.y === n.y)) return true;
+      const tile = getTile(n.x,n.y);
+      if (!tile) continue;
+      const ex = exitFor(tile,n.from,"red");
+      if (ex == null) continue;
+      if (tile.kind === "signal" && ex === tile.dir) continue;
+      todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
+    }
+    return false;
+  }
+
+  function occupied(x,y,ignoreId){
+    return state.trains.some(t => t.id !== ignoreId && t.x === x && t.y === y);
+  }
+
+  function moveTrain(train){
+    if (train.wait > 0){ train.wait--; return; }
+    const tile = getTile(train.x,train.y);
+    const ex = exitFor(tile, train.from, train.color);
+    if (ex == null) return;
+    if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
+      train.wait = tile.dwell || 70;
+      return;
+    }
+    if (tile.kind === "signal" && ex === tile.dir && signalBlocked(train.x,train.y,tile,train)){
+      return;
+    }
+    const nx = train.x + DIRS[ex].dx;
+    const ny = train.y + DIRS[ex].dy;
+    const nf = opposite(ex);
+    const nextTile = getTile(nx,ny);
+    if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)) return;
+    train.x = nx;
+    train.y = ny;
+    train.from = nf;
+  }
+
+  function spawnTrains(){
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "spawn") continue;
+      const {x,y} = readKey(k);
+      const every = Math.max(20, Number(tile.every) || 150);
+      if ((state.tick + (Number(tile.phase) || 0)) % every !== 0) continue;
+      const nx = x + DIRS[tile.dir].dx;
+      const ny = y + DIRS[tile.dir].dy;
+      const nf = opposite(tile.dir);
+      const nextTile = getTile(nx,ny);
+      if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,null)) continue;
+      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0});
+    }
+  }
+
+  function simStep(){
+    state.tick++;
+    spawnTrains();
+    for (const train of state.trains) moveTrain(train);
+    draw();
+  }
+
+  function animation(){
+    if (!state.paused && state.tick % 14 === 0) simStep();
+    state.tick++;
+    requestAnimationFrame(animation);
+  }
+
+  function placeTile(x,y){
+    closeContext();
+    if (state.selectedTool === "erase"){
+      removeTile(x,y);
+      state.trains = state.trains.filter(t => t.x !== x || t.y !== y);
+    } else {
+      setTile(x,y,makeTile(state.selectedTool));
+    }
+    draw();
+  }
+
+  function pointerPos(event){
+    const r = canvas.getBoundingClientRect();
+    return {x:event.clientX - r.left, y:event.clientY - r.top};
+  }
+  canvas.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    const p = pointerPos(event);
+    state.drag = {sx:p.x, sy:p.y, vx:state.view.x, vy:state.view.y, moved:false};
+    canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", event => {
+    if (!state.drag) return;
+    const p = pointerPos(event);
+    const dx = p.x - state.drag.sx;
+    const dy = p.y - state.drag.sy;
+    if (Math.hypot(dx,dy) > 5) state.drag.moved = true;
+    if (state.drag.moved){
+      state.view.x = state.drag.vx + dx;
+      state.view.y = state.drag.vy + dy;
+      draw();
+    }
+  });
+  canvas.addEventListener("pointerup", event => {
+    if (!state.drag) return;
+    const p = pointerPos(event);
+    if (!state.drag.moved){
+      const w = screenToWorld(p.x,p.y);
+      placeTile(w.x,w.y);
+    }
+    state.drag = null;
+    canvas.classList.remove("dragging");
+  });
+  canvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    closeContext();
+    const before = screenToWorld(event.offsetX,event.offsetY);
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    state.view.zoom = Math.max(.35, Math.min(2.7, state.view.zoom * factor));
+    const after = screenToWorld(event.offsetX,event.offsetY);
+    const s = tileSize();
+    state.view.x += (after.x - before.x) * s;
+    state.view.y += (after.y - before.y) * s;
+    draw();
+  }, {passive:false});
+  canvas.addEventListener("contextmenu", event => {
+    event.preventDefault();
+    const p = pointerPos(event);
+    const w = screenToWorld(p.x,p.y);
+    const tile = getTile(w.x,w.y);
+    if (!tile) return closeContext();
+    openContext(w.x,w.y,tile,event.clientX,event.clientY);
+  });
+
+  function colorOptions(value, allowAny){
+    const any = allowAny ? `<option value="">Any color</option>` : "";
+    return any + COLOR_NAMES.map(c => `<option value="${c}" ${value === c ? "selected" : ""}>${c}</option>`).join("");
+  }
+  function dirOptions(value){
+    return DIRS.map((d,i) => `<option value="${i}" ${Number(value) === i ? "selected" : ""}>${d.name}</option>`).join("");
+  }
+  function shapeOptions(route){
+    const r = route ? route.join("-") : "";
+    return TRACK_SHAPES.map((s,i) => `<option value="${i}" ${s.route.join("-") === r ? "selected" : ""}>${s.label}</option>`).join("");
+  }
+
+  function openContext(x,y,tile,clientX,clientY){
+    contextMenu.dataset.x = x;
+    contextMenu.dataset.y = y;
+    let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
+    if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn"){
+      body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
+    }
+    if (tile.kind === "spawn"){
+      body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
+      body += `<label class="field"><span>Color</span><select name="color">${colorOptions(tile.color,false)}</select></label>`;
+      body += `<label class="field"><span>Spawn interval</span><input name="every" type="number" min="20" max="1000" value="${tile.every || 150}"></label>`;
+    }
+    if (tile.kind === "stop"){
+      body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
+      body += `<label class="field"><span>Color filter</span><select name="filter">${colorOptions(tile.filter,true)}</select></label>`;
+      body += `<label class="field"><span>Dwell ticks</span><input name="dwell" type="number" min="10" max="600" value="${tile.dwell || 70}"></label>`;
+    }
+    if (tile.kind === "signal"){
+      body += `<label class="field"><span>Protected direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
+    }
+    if (tile.kind === "switch"){
+      body += `<label class="field"><span>Incoming stem</span><select name="stem">${dirOptions(tile.stem)}</select></label>`;
+      body += `<label class="field"><span>Branch A</span><select name="branch0">${dirOptions(tile.branches[0])}</select></label>`;
+      body += `<label class="field"><span>Branch A filter</span><select name="filter0">${colorOptions(tile.filters[String(tile.branches[0])],true)}</select></label>`;
+      body += `<label class="field"><span>Branch B</span><select name="branch1">${dirOptions(tile.branches[1])}</select></label>`;
+      body += `<label class="field"><span>Branch B filter</span><select name="filter1">${colorOptions(tile.filters[String(tile.branches[1])],true)}</select></label>`;
+      body += `<label class="field"><span>Fallback branch</span><select name="defaultBranch">${dirOptions(tile.defaultBranch)}</select></label>`;
+    }
+    body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
+    contextMenu.innerHTML = body;
+    const rect = stage.getBoundingClientRect();
+    contextMenu.style.left = Math.max(8, Math.min(clientX - rect.left, rect.width - 280)) + "px";
+    contextMenu.style.top = Math.max(8, Math.min(clientY - rect.top, rect.height - 420)) + "px";
+    contextMenu.classList.add("open");
+  }
+  function closeContext(){ contextMenu.classList.remove("open"); }
+  contextMenu.addEventListener("click", event => {
+    if (event.target.name === "delete"){
+      removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
+      closeContext();
+      draw();
+    }
+  });
+  contextMenu.addEventListener("submit", event => {
+    event.preventDefault();
+    const x = Number(contextMenu.dataset.x);
+    const y = Number(contextMenu.dataset.y);
+    const tile = getTile(x,y);
+    const data = new FormData(contextMenu);
+    if (!tile) return;
+    const routeShape = data.get("routeShape");
+    if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
+    if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
+    if (data.get("color")) tile.color = data.get("color");
+    if (data.get("filter") != null) tile.filter = data.get("filter") || null;
+    if (data.get("every")) tile.every = Number(data.get("every"));
+    if (data.get("dwell")) tile.dwell = Number(data.get("dwell"));
+    if (tile.kind === "switch"){
+      tile.stem = Number(data.get("stem"));
+      tile.branches = [Number(data.get("branch0")), Number(data.get("branch1"))];
+      tile.filters = {};
+      tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
+      tile.filters[String(tile.branches[1])] = data.get("filter1") || null;
+      tile.defaultBranch = Number(data.get("defaultBranch"));
+      if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
+    }
+    closeContext();
+    draw();
+  });
+
+  function setupControls(){
+    const toolButtons = document.getElementById("toolButtons");
+    for (const [id,label] of TOOLS){
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = label;
+      btn.dataset.tool = id;
+      if (id === state.selectedTool) btn.classList.add("active");
+      if (id === "erase") btn.classList.add("danger");
+      btn.addEventListener("click", () => {
+        state.selectedTool = id;
+        for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === id);
+        draw();
+      });
+      toolButtons.appendChild(btn);
+    }
+    const shapeSelect = document.getElementById("shapeSelect");
+    TRACK_SHAPES.forEach((shape,i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = shape.label;
+      shapeSelect.appendChild(opt);
+    });
+    shapeSelect.addEventListener("change", () => { state.selectedShape = Number(shapeSelect.value); });
+    const colorButtons = document.getElementById("colorButtons");
+    for (const name of COLOR_NAMES){
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "swatch" + (name === state.selectedColor ? " active" : "");
+      btn.style.background = COLORS[name];
+      btn.title = name;
+      btn.dataset.color = name;
+      btn.addEventListener("click", () => {
+        state.selectedColor = name;
+        for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === name);
+      });
+      colorButtons.appendChild(btn);
+    }
+    document.getElementById("pauseBtn").addEventListener("click", () => {
+      state.paused = !state.paused;
+      document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
+    });
+    document.getElementById("stepBtn").addEventListener("click", simStep);
+    document.getElementById("clearBtn").addEventListener("click", () => { state.trains = []; draw(); });
+    document.getElementById("demoBtn").addEventListener("click", () => { loadDemo(); draw(); });
+    document.getElementById("saveBtn").addEventListener("click", () => {
+      localStorage.setItem("tinytrains-modern-layout", serialize());
+      state.message = "Saved in this browser";
+      draw();
+    });
+    document.getElementById("loadBtn").addEventListener("click", () => {
+      const saved = localStorage.getItem("tinytrains-modern-layout");
+      if (saved) deserialize(saved);
+      state.message = saved ? "Loaded browser save" : "No browser save found";
+      draw();
+    });
+    document.getElementById("exportBtn").addEventListener("click", () => openIO("export"));
+    document.getElementById("importBtn").addEventListener("click", () => openIO("import"));
+  }
+
+  const ioPanel = document.getElementById("ioPanel");
+  const ioText = document.getElementById("ioText");
+  function openIO(mode){
+    ioPanel.dataset.mode = mode;
+    document.getElementById("ioTitle").textContent = mode === "export" ? "Export JSON" : "Import JSON";
+    ioText.value = mode === "export" ? serialize() : "";
+    document.getElementById("ioApply").textContent = mode === "export" ? "Refresh" : "Load JSON";
+    ioPanel.classList.add("open");
+  }
+  document.getElementById("ioClose").addEventListener("click", () => ioPanel.classList.remove("open"));
+  document.getElementById("ioApply").addEventListener("click", () => {
+    if (ioPanel.dataset.mode === "export"){
+      ioText.value = serialize();
+    } else {
+      try {
+        deserialize(ioText.value);
+        ioPanel.classList.remove("open");
+        state.message = "Imported JSON";
+      } catch (err) {
+        state.message = "Import failed: " + err.message;
+      }
+      draw();
+    }
+  });
+
+  function serialize(){
+    return JSON.stringify({
+      version: 1,
+      tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
+      view: state.view
+    }, null, 2);
+  }
+  function deserialize(text){
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.tiles)) throw new Error("Missing tiles array");
+    state.tiles = new Map();
+    for (const item of data.tiles){
+      if (!Number.isFinite(item.x) || !Number.isFinite(item.y) || !item.tile) continue;
+      setTile(item.x,item.y,item.tile);
+    }
+    state.trains = [];
+    if (data.view) state.view = {...state.view, ...data.view};
+  }
+
+  function line(x1,y1,x2,y2,kind){
+    if (x1 === x2){
+      const a = Math.min(y1,y2), b = Math.max(y1,y2);
+      for (let y=a; y<=b; y++) setTile(x1,y,{kind:kind || "track",route:[0,4]});
+      return;
+    }
+    if (y1 === y2){
+      const a = Math.min(x1,x2), b = Math.max(x1,x2);
+      for (let x=a; x<=b; x++) setTile(x,y1,{kind:kind || "track",route:[6,2]});
+      return;
+    }
+    const sx = Math.sign(x2-x1);
+    const sy = Math.sign(y2-y1);
+    const route = sx === sy ? [7,3] : [5,1];
+    let x = x1, y = y1;
+    while (true){
+      setTile(x,y,{kind:kind || "track",route:cloneRoute(route)});
+      if (x === x2 && y === y2) break;
+      x += sx; y += sy;
+    }
+  }
+
+  function loadDemo(){
+    state.tiles = new Map();
+    state.trains = [];
+    state.nextTrainId = 1;
+    state.tick = 0;
+    line(-10,0,-1,0);
+    line(1,0,8,0);
+    line(1,-1,6,-6);
+    line(1,1,6,6);
+    setTile(0,0,{kind:"switch",stem:6,branches:[2,1],defaultBranch:2,filters:{"2":"blue","1":"red"}});
+    setTile(0,1,{kind:"switch",stem:6,branches:[2,3],defaultBranch:2,filters:{"2":"green","3":"yellow"}});
+    line(-7,1,-1,1);
+    line(1,1,6,1);
+    line(1,2,6,7);
+    setTile(-10,0,{kind:"spawn",route:[6,2],dir:2,color:"red",every:120,phase:0});
+    setTile(-8,0,{kind:"spawn",route:[6,2],dir:2,color:"blue",every:170,phase:40});
+    setTile(-7,1,{kind:"spawn",route:[6,2],dir:2,color:"green",every:150,phase:20});
+    setTile(-5,1,{kind:"spawn",route:[6,2],dir:2,color:"yellow",every:210,phase:80});
+    setTile(4,0,{kind:"signal",route:[6,2],dir:2});
+    setTile(5,-5,{kind:"signal",route:[5,1],dir:1});
+    setTile(5,5,{kind:"signal",route:[7,3],dir:3});
+    setTile(7,0,{kind:"stop",route:[6,2],dir:2,filter:"blue",dwell:90});
+    setTile(6,-6,{kind:"stop",route:[5,1],dir:1,filter:"red",dwell:90});
+    setTile(5,1,{kind:"stop",route:[6,2],dir:2,filter:"green",dwell:80});
+    setTile(6,7,{kind:"stop",route:[7,3],dir:3,filter:"yellow",dwell:80});
+    setTile(3,3,{kind:"crossPlus"});
+    setTile(4,3,{kind:"track",route:[6,2]});
+    setTile(2,3,{kind:"track",route:[6,2]});
+    setTile(3,2,{kind:"track",route:[0,4]});
+    setTile(3,4,{kind:"track",route:[0,4]});
+    state.view = {x: 40, y: 0, zoom: .95};
+    state.message = "Loaded demo layout";
+  }
+
+  window.addEventListener("keydown", event => {
+    if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
+    if (event.code === "Space"){ event.preventDefault(); state.paused = !state.paused; }
+    if (event.key === "s") simStep();
+    if (event.key === "Escape"){ closeContext(); ioPanel.classList.remove("open"); }
+  });
+
+  setupControls();
+  loadDemo();
+  resize();
+  animation();
+})();
+</script>
+</body>
+</html>

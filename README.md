@@ -11,14 +11,23 @@ connected track) keeps them from colliding. There is no player input.
 
 ## Play
 
-Open [`index.html`](index.html) in any browser, or just double-click it. The
-view auto-scales to fill the window.
+Open [`index.html`](index.html) in any browser, or just double-click it. It now
+links to both versions:
 
-Controls: **Pause** (Space), **Reset** (R), **Speed**.
+- [`modern.html`](modern.html) — a new tile-based control simulation with a
+  sleek editor, switch color filters, train spawns, stops, signals, draggable
+  pan, mouse-wheel zoom, browser save, and JSON import/export.
+- [`classic.html`](classic.html) — the original PICO-8 style port.
+
+The classic view auto-scales to fill the window.
+
+Classic controls: **Pause** (Space), **Reset** (R), **Speed**.
 
 ## Files
 
-- `index.html` — the finished, self-contained game (no dependencies).
+- `index.html` — version selector.
+- `modern.html` — the new tile-based control simulation.
+- `classic.html` — the finished, self-contained classic game (no dependencies).
 - `train3.p8` — the original PICO-8 cart.
 - `generate.py` — rebuilds `index.html` from the cart: `python3 generate.py`.
 
