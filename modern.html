@@ -56,11 +56,58 @@
     gap:14px;
   }
   .group{display:grid;gap:8px}
+  .quick-controls{
+    flex:0 0 auto;
+    padding:10px 12px;
+    border-bottom:1px solid var(--line);
+    display:grid;
+    gap:8px;
+  }
   .label{
     color:var(--muted);
     font-size:11px;
     text-transform:uppercase;
     letter-spacing:.08em;
+  }
+  details.palette{
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:#121820;
+    overflow:hidden;
+  }
+  details.palette summary{
+    min-height:36px;
+    padding:9px 10px;
+    color:var(--ink);
+    cursor:pointer;
+    list-style:none;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    font-weight:700;
+  }
+  details.palette summary::-webkit-details-marker{display:none}
+  details.palette summary::after{
+    content:"+";
+    color:var(--muted);
+    font-size:16px;
+    line-height:1;
+  }
+  details.palette[open] summary{
+    border-bottom:1px solid var(--line);
+  }
+  details.palette[open] summary::after{content:"-"}
+  .palette-body{
+    padding:8px;
+    display:grid;
+    gap:8px;
+  }
+  .help{
+    margin:0;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.35;
   }
   .tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
   .shape-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
@@ -169,33 +216,54 @@
       <h1>Tiny Trains Control</h1>
       <p>Click to place, drag to pan, wheel to zoom. Right-click configurable tiles.</p>
     </div>
+    <div class="quick-controls">
+      <div class="row">
+        <button id="pauseBtn">Pause</button>
+        <button id="stepBtn">Step</button>
+      </div>
+    </div>
     <div class="toolbar">
       <section class="group">
         <div class="label">Tool</div>
         <div class="tools" id="toolButtons"></div>
       </section>
-      <section class="group">
-        <div class="label">Tracks</div>
-        <div class="shape-grid" id="trackPalette"></div>
-      </section>
-      <section class="group">
-        <div class="label">Stops</div>
-        <div class="shape-grid" id="stopPalette"></div>
-      </section>
-      <section class="group">
-        <div class="label">Switches</div>
-        <div class="shape-grid" id="switchPalette"></div>
-      </section>
+      <details class="palette" open>
+        <summary>Tracks</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="trackPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Spawns</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="spawnPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Stops</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="stopPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Signals</summary>
+        <div class="palette-body">
+          <p class="help">A signal protects the track in its arrow direction. A train that would exit through the signal arrow waits when the protected block ahead contains a train; the block search follows connected rail until another same-direction signal or a dead end, using red/default switch paths. Red means hold, green means clear.</p>
+          <div class="shape-grid" id="signalPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Switches</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="switchPalette"></div>
+        </div>
+      </details>
       <section class="group">
         <div class="label">Train Color</div>
         <div class="color-row" id="colorButtons"></div>
       </section>
       <section class="group">
         <div class="label">Simulation</div>
-        <div class="row">
-          <button id="pauseBtn">Pause</button>
-          <button id="stepBtn">Step</button>
-        </div>
         <div class="row">
           <button id="clearBtn">Clear Trains</button>
           <button id="demoBtn">Demo Layout</button>
@@ -254,6 +322,7 @@
   const SPAWN_TICK_FRAMES = 14;
   const FRAMES_PER_SECOND = 60;
   const DEFAULT_DWELL_SECONDS = 2;
+  const STOP_BROWN = "#8b5a2b";
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
     {name:"NE", dx:1, dy:-1, px:1, py:0},
@@ -282,12 +351,12 @@
     {label:"Buffer N", route:[0]},
     {label:"Buffer S", route:[4]}
   ];
-  function buildStopShapes(){
+  function buildDirectionalShapes(kind){
     const shapes = [];
     for (const shape of TRACK_SHAPES){
       for (const dir of shape.route){
         shapes.push({
-          label: `${shape.label} stop ${DIRS[dir].name}`,
+          label: `${shape.label} ${kind} ${DIRS[dir].name}`,
           route: cloneRoute(shape.route),
           dir
         });
@@ -324,7 +393,9 @@
     return shapes;
   }
   const SWITCH_SHAPES = buildSwitchShapes();
-  const STOP_SHAPES = buildStopShapes();
+  const SPAWN_SHAPES = buildDirectionalShapes("spawn");
+  const STOP_SHAPES = buildDirectionalShapes("stop");
+  const SIGNAL_SHAPES = buildDirectionalShapes("signal");
   const TOOLS = [
     ["crossPlus","Cross +"],
     ["crossX","Cross X"],
@@ -344,7 +415,9 @@
     selectedTool: "track",
     selectedColor: "red",
     selectedShape: 0,
+    selectedSpawnShape: 0,
     selectedStopShape: 0,
+    selectedSignalShape: 0,
     selectedSwitchShape: 0,
     view: {x: 0, y: 0, zoom: 1},
     drag: null,
@@ -388,12 +461,18 @@
     if (tool === "crossPlus") return {kind:"crossPlus"};
     if (tool === "crossX") return {kind:"crossX"};
     if (tool === "switch") return defaultSwitch();
-    if (tool === "spawn") return {kind:"spawn", route:[6,2], dir:2, color:state.selectedColor};
+    if (tool === "spawn"){
+      const shape = SPAWN_SHAPES[state.selectedSpawnShape];
+      return {kind:"spawn", route:cloneRoute(shape.route), dir:shape.dir, color:state.selectedColor};
+    }
     if (tool === "stop"){
       const shape = STOP_SHAPES[state.selectedStopShape];
       return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, filter:null, dwellSeconds:DEFAULT_DWELL_SECONDS};
     }
-    if (tool === "signal") return {kind:"signal", route, dir:route[route.length - 1]};
+    if (tool === "signal"){
+      const shape = SIGNAL_SHAPES[state.selectedSignalShape];
+      return {kind:"signal", route:cloneRoute(shape.route), dir:shape.dir};
+    }
     return null;
   }
 
@@ -457,7 +536,7 @@
     }
     pctx.stroke();
   }
-  function drawPreviewTriangle(pctx,w,h,d,color){
+  function drawPreviewTriangle(pctx,w,h,d,color,scale,strokeColor,lineWidth){
     const c = {x:w / 2, y:h / 2};
     const e = previewPoint(d,w,h,9);
     const vx = e.x - c.x;
@@ -467,9 +546,9 @@
     const uy = vy / len;
     const px = -uy;
     const py = ux;
-    const size = 7;
-    const cx = c.x + ux * 9;
-    const cy = c.y + uy * 9;
+    const size = Math.min(w,h) * (scale || .12);
+    const cx = c.x + ux * Math.min(w,h) * .18;
+    const cy = c.y + uy * Math.min(w,h) * .18;
     pctx.fillStyle = color;
     pctx.beginPath();
     pctx.moveTo(cx + ux * size, cy + uy * size);
@@ -477,6 +556,15 @@
     pctx.lineTo(cx - ux * size * .75 - px * size * .65, cy - uy * size * .75 - py * size * .65);
     pctx.closePath();
     pctx.fill();
+    if (strokeColor){
+      pctx.strokeStyle = strokeColor;
+      pctx.lineWidth = lineWidth || 2;
+      pctx.stroke();
+    }
+  }
+  function drawPreviewStopMarker(pctx,w,h,d){
+    drawPreviewTriangle(pctx,w,h,d,"#ffffff",.38,STOP_BROWN,2.4);
+    drawPreviewTriangle(pctx,w,h,d,STOP_BROWN,.28);
   }
   function addShapePreview(button, shape, kind){
     const preview = document.createElement("canvas");
@@ -498,13 +586,19 @@
     pctx.strokeRect(.5,.5,w-1,h-1);
     if (kind === "track"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
+    } else if (kind === "spawn"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewTriangle(pctx,w,h,shape.dir,COLORS[state.selectedColor] || "#f05264",.18);
     } else if (kind === "stop"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewTriangle(pctx,w,h,shape.dir,"#f1ca57");
+      drawPreviewStopMarker(pctx,w,h,shape.dir);
+    } else if (kind === "signal"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewTriangle(pctx,w,h,shape.dir,"#43d17b",.18);
     } else {
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
-      drawPreviewTriangle(pctx,w,h,shape.defaultBranch,"#64d7c4");
+      drawPreviewTriangle(pctx,w,h,shape.defaultBranch,"#64d7c4",.13);
     }
     button.appendChild(preview);
   }
@@ -547,7 +641,7 @@
     ctx.stroke();
   }
 
-  function drawTriangle(x,y,d,color,scale){
+  function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth){
     const c = centerPoint(x,y);
     const e = endpointPoint(x,y,d);
     const vx = e.x - c.x;
@@ -567,6 +661,15 @@
     ctx.lineTo(cx - ux * size * .75 - px * size * .65, cy - uy * size * .75 - py * size * .65);
     ctx.closePath();
     ctx.fill();
+    if (strokeColor){
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = lineWidth || Math.max(2, tileSize() * .035);
+      ctx.stroke();
+    }
+  }
+  function drawStopMarker(x,y,d){
+    drawTriangle(x,y,d,"#ffffff",.38,STOP_BROWN,Math.max(2, tileSize() * .045));
+    drawTriangle(x,y,d,STOP_BROWN,.28);
   }
 
   function drawTile(x,y,tile){
@@ -594,7 +697,14 @@
       drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
     }
     if (tile.kind === "stop"){
-      drawTriangle(x,y,tile.dir,tile.filter ? COLORS[tile.filter] : "#f1ca57",.18);
+      drawStopMarker(x,y,tile.dir);
+      if (tile.filter){
+        const c = centerPoint(x,y);
+        ctx.fillStyle = COLORS[tile.filter];
+        ctx.beginPath();
+        ctx.arc(c.x,c.y,Math.max(3,s*.07),0,Math.PI*2);
+        ctx.fill();
+      }
     }
     if (tile.kind === "signal"){
       const red = signalBlocked(x,y,tile,null);
@@ -652,7 +762,7 @@
     drawPlacementGhost();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
-    hint.textContent = state.message || `Selected: ${state.selectedTool}`;
+    hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
   }
 
   function trainMoving(train){
@@ -815,7 +925,9 @@
       removeTile(x,y);
       state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
     } else {
-      setTile(x,y,makeTile(state.selectedTool));
+      const tile = makeTile(state.selectedTool);
+      if (!tile) return;
+      setTile(x,y,tile);
     }
     draw();
   }
@@ -969,18 +1081,36 @@
     draw();
   });
 
+  let syncControls = () => draw();
+  function updatePauseButton(){
+    document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
+  }
+  function togglePause(){
+    state.paused = !state.paused;
+    updatePauseButton();
+    draw();
+  }
+  function closeAllPalettes(){
+    for (const palette of document.querySelectorAll("details.palette")) palette.open = false;
+  }
+
   function setupControls(){
     const toolButtons = document.getElementById("toolButtons");
     const trackPalette = document.getElementById("trackPalette");
+    const spawnPalette = document.getElementById("spawnPalette");
     const stopPalette = document.getElementById("stopPalette");
+    const signalPalette = document.getElementById("signalPalette");
     const switchPalette = document.getElementById("switchPalette");
     function syncSelection(){
       for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
       for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
+      for (const b of spawnPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "spawn" && Number(b.dataset.shape) === state.selectedSpawnShape);
       for (const b of stopPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "stop" && Number(b.dataset.shape) === state.selectedStopShape);
+      for (const b of signalPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "signal" && Number(b.dataset.shape) === state.selectedSignalShape);
       for (const b of switchPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "switch" && Number(b.dataset.shape) === state.selectedSwitchShape);
       draw();
     }
+    syncControls = syncSelection;
     for (const [id,label] of TOOLS){
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1011,6 +1141,23 @@
       });
       trackPalette.appendChild(btn);
     });
+    SPAWN_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "spawn");
+      const label = document.createElement("span");
+      label.textContent = `Spawn ${DIRS[shape.dir].name}`;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "spawn";
+        state.selectedSpawnShape = i;
+        syncSelection();
+      });
+      spawnPalette.appendChild(btn);
+    });
     STOP_SHAPES.forEach((shape,i) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1027,6 +1174,23 @@
         syncSelection();
       });
       stopPalette.appendChild(btn);
+    });
+    SIGNAL_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "signal");
+      const label = document.createElement("span");
+      label.textContent = `Signal ${DIRS[shape.dir].name}`;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "signal";
+        state.selectedSignalShape = i;
+        syncSelection();
+      });
+      signalPalette.appendChild(btn);
     });
     SWITCH_SHAPES.forEach((shape,i) => {
       const btn = document.createElement("button");
@@ -1060,10 +1224,8 @@
       });
       colorButtons.appendChild(btn);
     }
-    document.getElementById("pauseBtn").addEventListener("click", () => {
-      state.paused = !state.paused;
-      document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
-    });
+    updatePauseButton();
+    document.getElementById("pauseBtn").addEventListener("click", togglePause);
     document.getElementById("stepBtn").addEventListener("click", simStep);
     document.getElementById("clearBtn").addEventListener("click", () => { state.trains = []; draw(); });
     document.getElementById("demoBtn").addEventListener("click", () => { loadDemo(); draw(); });
@@ -1188,9 +1350,19 @@
 
   window.addEventListener("keydown", event => {
     if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
-    if (event.code === "Space"){ event.preventDefault(); state.paused = !state.paused; }
+    if (event.code === "Space"){ event.preventDefault(); togglePause(); }
     if (event.key === "s") simStep();
-    if (event.key === "Escape"){ closeContext(); ioPanel.classList.remove("open"); }
+    if (event.key === "Escape"){
+      closeContext();
+      ioPanel.classList.remove("open");
+      if (state.selectedTool){
+        state.selectedTool = null;
+        syncControls();
+      } else {
+        closeAllPalettes();
+        draw();
+      }
+    }
   });
 
   setupControls();
