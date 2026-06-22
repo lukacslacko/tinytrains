@@ -222,7 +222,7 @@
   <aside>
     <div class="brand">
       <h1>Tiny Trains Control</h1>
-      <p>Click to place, drag to pan, wheel to zoom. Right-click configurable tiles.</p>
+      <p>Click to place, drag to pan, wheel to zoom. Middle-click to pick a tile. Right-click configurable tiles.</p>
     </div>
     <div class="quick-controls">
       <div class="row">
@@ -475,6 +475,22 @@
       return {kind:"signal", route:cloneRoute(shape.route), dir:shape.dir};
     }
     return null;
+  }
+
+  function sortedRouteKey(route){ return route.slice().sort((a,b) => a - b).join("-"); }
+  function findTrackShapeIndex(route){
+    const r = sortedRouteKey(route);
+    const i = TRACK_SHAPES.findIndex(s => sortedRouteKey(s.route) === r);
+    return i < 0 ? state.selectedShape : i;
+  }
+  function findDirShapeIndex(shapes, route, dir){
+    const r = sortedRouteKey(route);
+    return shapes.findIndex(s => s.dir === dir && sortedRouteKey(s.route) === r);
+  }
+  function findSwitchShapeIndex(tile){
+    const b = tile.branches.slice().sort((a,b) => a - b).join(",");
+    return SWITCH_SHAPES.findIndex(s =>
+      s.stem === tile.stem && s.branches.slice().sort((x,y) => x - y).join(",") === b);
   }
 
   function resize(){
@@ -991,6 +1007,45 @@
     draw();
   }
 
+  // Middle-click eyedropper: make the active tool match the tile under the cursor
+  // so left-clicks stamp copies of its kind, shape, orientation (and spawn color).
+  function pickTile(x,y){
+    const tile = getTile(x,y);
+    if (!tile) return;
+    closeContext();
+    const kind = tile.kind;
+    if (kind === "track"){
+      state.selectedTool = "track";
+      state.selectedShape = findTrackShapeIndex(tile.route);
+    } else if (kind === "crossPlus" || kind === "crossX"){
+      state.selectedTool = kind;
+    } else if (kind === "spawn"){
+      state.selectedTool = "spawn";
+      const i = findDirShapeIndex(SPAWN_SHAPES, tile.route, tile.dir);
+      if (i >= 0) state.selectedSpawnShape = i;
+      if (tile.color){
+        state.selectedColor = tile.color;
+        refreshColorUI();
+      }
+    } else if (kind === "stop"){
+      state.selectedTool = "stop";
+      const i = findDirShapeIndex(STOP_SHAPES, tile.route, tile.dir);
+      if (i >= 0) state.selectedStopShape = i;
+    } else if (kind === "signal"){
+      state.selectedTool = "signal";
+      const i = findDirShapeIndex(SIGNAL_SHAPES, tile.route, tile.dir);
+      if (i >= 0) state.selectedSignalShape = i;
+    } else if (kind === "switch"){
+      state.selectedTool = "switch";
+      const i = findSwitchShapeIndex(tile);
+      if (i >= 0) state.selectedSwitchShape = i;
+    } else {
+      return;
+    }
+    state.message = `Picked ${kind}`;
+    syncControls();
+  }
+
   function pointerPos(event){
     const r = canvas.getBoundingClientRect();
     return {x:event.clientX - r.left, y:event.clientY - r.top};
@@ -1002,12 +1057,22 @@
     draw();
   }
   canvas.addEventListener("pointerdown", event => {
+    if (event.button === 1){
+      event.preventDefault();
+      const p = pointerPos(event);
+      const w = screenToWorld(p.x,p.y);
+      pickTile(w.x,w.y);
+      return;
+    }
     if (event.button !== 0) return;
     const p = pointerPos(event);
     setHoverFromPoint(p);
     state.drag = {sx:p.x, sy:p.y, vx:state.view.x, vy:state.view.y, moved:false};
     canvas.setPointerCapture(event.pointerId);
     canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("auxclick", event => {
+    if (event.button === 1) event.preventDefault();
   });
   canvas.addEventListener("pointermove", event => {
     const p = pointerPos(event);
@@ -1141,6 +1206,7 @@
   });
 
   let syncControls = () => draw();
+  let refreshColorUI = () => {};
   function updatePauseButton(){
     document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
   }
@@ -1295,6 +1361,10 @@
       }
     }
     const colorButtons = document.getElementById("colorButtons");
+    refreshColorUI = () => {
+      for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === state.selectedColor);
+      refreshSpawnPalettePreviews();
+    };
     for (const name of COLOR_NAMES){
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1304,8 +1374,7 @@
       btn.dataset.color = name;
       btn.addEventListener("click", () => {
         state.selectedColor = name;
-        for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === name);
-        refreshSpawnPalettePreviews();
+        refreshColorUI();
       });
       colorButtons.appendChild(btn);
     }
