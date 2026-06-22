@@ -553,7 +553,7 @@
     }
     pctx.stroke();
   }
-  function drawPreviewTriangle(pctx,w,h,d,color,scale,strokeColor,lineWidth){
+  function drawPreviewTriangle(pctx,w,h,d,color,scale,strokeColor,lineWidth,offset){
     const c = {x:w / 2, y:h / 2};
     const e = previewPoint(d,w,h,9);
     const vx = e.x - c.x;
@@ -564,8 +564,9 @@
     const px = -uy;
     const py = ux;
     const size = Math.min(w,h) * (scale || .12);
-    const cx = c.x + ux * Math.min(w,h) * .18;
-    const cy = c.y + uy * Math.min(w,h) * .18;
+    const off = offset != null ? offset : .18;
+    const cx = c.x + ux * Math.min(w,h) * off;
+    const cy = c.y + uy * Math.min(w,h) * off;
     pctx.fillStyle = color;
     pctx.beginPath();
     pctx.moveTo(cx + ux * size, cy + uy * size);
@@ -617,11 +618,10 @@
       drawPreviewStopMarker(pctx,w,h,shape.dir);
     } else if (kind === "signal"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewTriangle(pctx,w,h,shape.dir,"#43d17b",.18);
+      drawPreviewTriangle(pctx,w,h,shape.dir,"#16a34a",.385,null,null,0);
     } else {
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
-      drawPreviewTriangle(pctx,w,h,shape.defaultBranch,"#64d7c4",.13);
     }
     button.insertBefore(preview, button.firstChild);
   }
@@ -664,7 +664,7 @@
     ctx.stroke();
   }
 
-  function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth){
+  function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset){
     const c = centerPoint(x,y);
     const e = endpointPoint(x,y,d);
     const vx = e.x - c.x;
@@ -675,8 +675,9 @@
     const px = -uy;
     const py = ux;
     const size = tileSize() * (scale || .17);
-    const cx = c.x + ux * tileSize() * .18;
-    const cy = c.y + uy * tileSize() * .18;
+    const off = offset != null ? offset : .18;
+    const cx = c.x + ux * tileSize() * off;
+    const cy = c.y + uy * tileSize() * off;
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(cx + ux * size, cy + uy * size);
@@ -712,7 +713,6 @@
         ctx.fillStyle = COLORS[filter];
         ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
       }
-      drawTriangle(x,y,tile.defaultBranch,"#64d7c4",.13);
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
@@ -731,7 +731,8 @@
     }
     if (tile.kind === "signal"){
       const red = signalBlocked(x,y,tile,null);
-      drawTriangle(x,y,tile.dir,red ? "#f05264" : "#43d17b",.18);
+      // base (orthogonal to the track) spans ~half the tile (1.3*scale); centered so it stays in-tile
+      drawTriangle(x,y,tile.dir,red ? "#ff2a2a" : "#16a34a",.385,null,null,0);
     }
   }
 
