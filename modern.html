@@ -34,11 +34,14 @@
   #app{min-height:100vh;display:grid;grid-template-columns:276px minmax(0,1fr);align-items:start}
   aside{
     min-width:0;
-    min-height:100vh;
+    height:100vh;
+    position:sticky;
+    top:0;
     background:var(--panel);
     border-right:1px solid var(--line);
     display:flex;
     flex-direction:column;
+    overflow:hidden;
   }
   .brand{
     padding:16px 16px 12px;
@@ -206,7 +209,7 @@
   #ioPanel textarea{height:300px;resize:vertical;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
   @media (max-width:760px){
     #app{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
-    aside{min-height:auto;border-right:0;border-bottom:1px solid var(--line)}
+    aside{position:relative;height:min(72vh,760px);border-right:0;border-bottom:1px solid var(--line)}
     #stage{height:100vh}
     .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
     .shape-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -252,7 +255,7 @@
       <details class="palette">
         <summary>Signals</summary>
         <div class="palette-body">
-          <p class="help">A signal protects the track in its arrow direction. A train that would exit through the signal arrow waits when the protected block ahead contains a train; the block search follows connected rail until another same-direction signal or a dead end, using red/default switch paths. Red means hold, green means clear.</p>
+          <p class="help">A signal protects the track in its arrow direction. A train that would exit through the signal arrow waits when the protected block ahead contains another train; the block search follows all connected switch branches until another same-direction signal or a dead end. Red means occupied, green means clear.</p>
           <div class="shape-grid" id="signalPalette"></div>
         </div>
       </details>
@@ -395,9 +398,11 @@
   const STOP_SHAPES = buildDirectionalShapes("stop");
   const SIGNAL_SHAPES = buildDirectionalShapes("signal");
   const TOOLS = [
-    ["crossPlus","Cross +"],
-    ["crossX","Cross X"],
     ["erase","Erase"]
+  ];
+  const CROSSING_SHAPES = [
+    {label:"Cross +", tool:"crossPlus"},
+    {label:"Cross X", tool:"crossX"}
   ];
 
   const state = {
@@ -581,6 +586,12 @@
     pctx.strokeRect(.5,.5,w-1,h-1);
     if (kind === "track"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
+    } else if (kind === "crossPlus"){
+      drawPreviewRoute(pctx,w,h,[6,2],false);
+      drawPreviewRoute(pctx,w,h,[0,4],false);
+    } else if (kind === "crossX"){
+      drawPreviewRoute(pctx,w,h,[7,3],false);
+      drawPreviewRoute(pctx,w,h,[1,5],false);
     } else if (kind === "spawn"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
       drawPreviewTriangle(pctx,w,h,shape.dir,COLORS[state.selectedColor] || "#f05264",.18);
@@ -707,6 +718,30 @@
     }
   }
 
+  function drawProtectedHighlight(){
+    if (!state.hover) return;
+    const tile = getTile(state.hover.x,state.hover.y);
+    if (!tile || tile.kind !== "signal") return;
+    const block = collectProtectedBlock(state.hover.x,state.hover.y,tile,null);
+    ctx.save();
+    for (const k of block.tiles){
+      const {x,y} = readKey(k);
+      const p = worldToScreen(x,y);
+      const s = tileSize();
+      ctx.fillStyle = block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)";
+      ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
+      ctx.strokeStyle = block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)";
+      ctx.lineWidth = Math.max(1, s * .035);
+      ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+    }
+    const p = worldToScreen(state.hover.x,state.hover.y);
+    const s = tileSize();
+    ctx.strokeStyle = "#64d7c4";
+    ctx.lineWidth = Math.max(2, s * .045);
+    ctx.strokeRect(p.x+4,p.y+4,s-8,s-8);
+    ctx.restore();
+  }
+
   function drawTrains(){
     for (const train of state.trains){
       const c = trainPoint(train);
@@ -754,6 +789,7 @@
       const {x,y} = readKey(k);
       drawTile(x,y,tile);
     }
+    drawProtectedHighlight();
     drawPlacementGhost();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
@@ -794,28 +830,52 @@
   }
 
   function signalBlocked(x,y,tile,train){
-    const nx = x + DIRS[tile.dir].dx;
-    const ny = y + DIRS[tile.dir].dy;
-    return blockHasTrain(nx, ny, opposite(tile.dir), train && train.id);
+    return collectProtectedBlock(x,y,tile,train && train.id).blocked;
   }
 
-  function blockHasTrain(x,y,from,ignoreId){
+  function exitsForBlock(tile, from){
+    if (!tile) return [];
+    if (tile.kind === "switch"){
+      const dirs = [tile.stem, ...tile.branches];
+      if (!dirs.includes(from)) return [];
+      return dirs.filter(d => d !== from);
+    }
+    const exits = [];
+    for (const route of routesFor(tile)){
+      if (!route.includes(from) || route.length < 2) continue;
+      for (const d of route){
+        if (d !== from && !exits.includes(d)) exits.push(d);
+      }
+    }
+    return exits;
+  }
+
+  function collectProtectedBlock(x,y,tile,ignoreId){
+    const nx = x + DIRS[tile.dir].dx;
+    const ny = y + DIRS[tile.dir].dy;
+    return scanProtectedBlock(nx, ny, opposite(tile.dir), ignoreId);
+  }
+
+  function scanProtectedBlock(x,y,from,ignoreId){
     const seen = new Set();
+    const tiles = new Set();
     const todo = [{x,y,from}];
+    let blocked = false;
     while (todo.length){
       const n = todo.pop();
       const id = `${n.x},${n.y},${n.from}`;
       if (seen.has(id)) continue;
       seen.add(id);
-      if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) return true;
       const tile = getTile(n.x,n.y);
       if (!tile) continue;
-      const ex = exitFor(tile,n.from,"red");
-      if (ex == null) continue;
-      if (tile.kind === "signal" && ex === tile.dir) continue;
-      todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
+      tiles.add(key(n.x,n.y));
+      if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) blocked = true;
+      for (const ex of exitsForBlock(tile,n.from)){
+        if (tile.kind === "signal" && ex === tile.dir) continue;
+        todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
+      }
     }
-    return false;
+    return {blocked, tiles};
   }
 
   function occupied(x,y,ignoreId){
@@ -1099,6 +1159,7 @@
     function syncSelection(){
       for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
       for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
+      for (const b of trackPalette.querySelectorAll("button[data-crossing]")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
       for (const b of spawnPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "spawn" && Number(b.dataset.shape) === state.selectedSpawnShape);
       for (const b of stopPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "stop" && Number(b.dataset.shape) === state.selectedStopShape);
       for (const b of signalPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "signal" && Number(b.dataset.shape) === state.selectedSignalShape);
@@ -1132,6 +1193,23 @@
       btn.addEventListener("click", () => {
         state.selectedTool = "track";
         state.selectedShape = i;
+        syncSelection();
+      });
+      trackPalette.appendChild(btn);
+    });
+    CROSSING_SHAPES.forEach(shape => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.crossing = "true";
+      btn.dataset.tool = shape.tool;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, shape.tool);
+      const label = document.createElement("span");
+      label.textContent = shape.label;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = shape.tool;
         syncSelection();
       });
       trackPalette.appendChild(btn);
