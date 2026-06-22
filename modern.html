@@ -63,17 +63,18 @@
     letter-spacing:.08em;
   }
   .tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
-  .shape-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .shape-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
   .shape-button{
-    min-height:86px;
-    padding:7px;
+    min-height:78px;
+    padding:6px;
     display:grid;
-    gap:5px;
+    gap:4px;
     justify-items:stretch;
   }
   .shape-preview{
     width:100%;
-    height:48px;
+    aspect-ratio:1;
+    height:auto;
     border-radius:5px;
     background:#10161d;
     border:1px solid #26313b;
@@ -157,7 +158,7 @@
     aside{border-right:0;border-bottom:1px solid var(--line);max-height:48vh}
     .toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .shape-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .shape-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
   }
 </style>
 </head>
@@ -276,16 +277,35 @@
     {label:"Buffer N", route:[0]},
     {label:"Buffer S", route:[4]}
   ];
-  const SWITCH_SHAPES = [
-    {label:"W to E / NE", stem:6, branches:[2,1], defaultBranch:2},
-    {label:"W to E / SE", stem:6, branches:[2,3], defaultBranch:2},
-    {label:"E to W / NW", stem:2, branches:[6,7], defaultBranch:6},
-    {label:"E to W / SW", stem:2, branches:[6,5], defaultBranch:6},
-    {label:"N to S / SE", stem:0, branches:[4,3], defaultBranch:4},
-    {label:"N to S / SW", stem:0, branches:[4,5], defaultBranch:4},
-    {label:"S to N / NE", stem:4, branches:[0,1], defaultBranch:0},
-    {label:"S to N / NW", stem:4, branches:[0,7], defaultBranch:0}
-  ];
+  function switchShape(stem, branches){
+    return {
+      label: `${DIRS[stem].name} to ${branches.map(b => DIRS[b].name).join(" / ")}`,
+      stem,
+      branches,
+      defaultBranch: branches[0]
+    };
+  }
+  function buildSwitchShapes(){
+    const shapes = [];
+    const seen = new Set();
+    function add(stem, branches){
+      const id = `${stem}:${branches.join(",")}`;
+      if (seen.has(id)) return;
+      seen.add(id);
+      shapes.push(switchShape(stem, branches));
+    }
+    for (let stem=0; stem<DIRS.length; stem++){
+      const oppositeDir = opposite(stem);
+      add(stem, [oppositeDir, (oppositeDir + 7) % 8]);
+      add(stem, [oppositeDir, (oppositeDir + 1) % 8]);
+    }
+    for (let stem=0; stem<DIRS.length; stem++){
+      const oppositeDir = opposite(stem);
+      add(stem, [(oppositeDir + 1) % 8, (oppositeDir + 7) % 8]);
+    }
+    return shapes;
+  }
+  const SWITCH_SHAPES = buildSwitchShapes();
   const TOOLS = [
     ["crossPlus","Cross +"],
     ["crossX","Cross X"],
@@ -440,14 +460,14 @@
   }
   function addShapePreview(button, shape, kind){
     const preview = document.createElement("canvas");
-    const w = 96;
-    const h = 48;
+    const w = 64;
+    const h = 64;
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     preview.className = "shape-preview";
     preview.width = w * dpr;
     preview.height = h * dpr;
     preview.style.width = "100%";
-    preview.style.height = h + "px";
+    preview.style.height = "auto";
     const pctx = preview.getContext("2d");
     pctx.setTransform(dpr,0,0,dpr,0,0);
     pctx.clearRect(0,0,w,h);
@@ -455,12 +475,7 @@
     pctx.fillRect(0,0,w,h);
     pctx.strokeStyle = "#26313b";
     pctx.lineWidth = 1;
-    for (let x=0; x<=w; x+=24){
-      pctx.beginPath(); pctx.moveTo(x,.5); pctx.lineTo(x,h+.5); pctx.stroke();
-    }
-    for (let y=0; y<=h; y+=24){
-      pctx.beginPath(); pctx.moveTo(.5,y); pctx.lineTo(w+.5,y); pctx.stroke();
-    }
+    pctx.strokeRect(.5,.5,w-1,h-1);
     if (kind === "track"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
     } else {
@@ -714,9 +729,9 @@
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
       state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0});
-      spent.push(k);
+      spent.push({x, y, route:cloneRoute(tile.route)});
     }
-    for (const k of spent) state.tiles.delete(k);
+    for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
   }
 
   function simStep(){
