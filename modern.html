@@ -208,6 +208,9 @@
     violet: "#b58cff"
   };
   const COLOR_NAMES = Object.keys(COLORS);
+  const TRAIN_SPEED = 0.018;
+  const SPAWN_TICK_FRAMES = 14;
+  const DWELL_FRAME_SCALE = SPAWN_TICK_FRAMES;
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
     {name:"NE", dx:1, dy:-1, px:1, py:0},
@@ -335,6 +338,9 @@
     const s = tileSize();
     return {x:p.x + s/2, y:p.y + s/2};
   }
+  function lerpPoint(a,b,t){
+    return {x:a.x + (b.x - a.x) * t, y:a.y + (b.y - a.y) * t};
+  }
   function endpointPoint(x,y,d){
     const p = worldToScreen(x,y);
     const s = tileSize();
@@ -441,7 +447,7 @@
 
   function drawTrains(){
     for (const train of state.trains){
-      const c = centerPoint(train.x, train.y);
+      const c = trainPoint(train);
       const r = Math.max(6, tileSize() * .16);
       ctx.fillStyle = "#06090d";
       ctx.beginPath(); ctx.arc(c.x,c.y,r+3,0,Math.PI*2); ctx.fill();
@@ -463,6 +469,19 @@
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool}`;
+  }
+
+  function trainMoving(train){
+    return train.progress != null && train.progress < 1 && train.prevX != null && train.prevY != null;
+  }
+
+  function trainPoint(train){
+    if (!trainMoving(train)) return centerPoint(train.x, train.y);
+    const start = centerPoint(train.prevX, train.prevY);
+    const joint = endpointPoint(train.prevX, train.prevY, train.moveDir);
+    const end = centerPoint(train.x, train.y);
+    if (train.progress < .5) return lerpPoint(start, joint, train.progress * 2);
+    return lerpPoint(joint, end, (train.progress - .5) * 2);
   }
 
   function exitFor(tile, from, color){
@@ -499,7 +518,7 @@
       const id = `${n.x},${n.y},${n.from}`;
       if (seen.has(id)) continue;
       seen.add(id);
-      if (state.trains.some(t => t.id !== ignoreId && t.x === n.x && t.y === n.y)) return true;
+      if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) return true;
       const tile = getTile(n.x,n.y);
       if (!tile) continue;
       const ex = exitFor(tile,n.from,"red");
@@ -511,16 +530,34 @@
   }
 
   function occupied(x,y,ignoreId){
-    return state.trains.some(t => t.id !== ignoreId && t.x === x && t.y === y);
+    return state.trains.some(t => t.id !== ignoreId && trainOccupies(t,x,y));
+  }
+
+  function trainOccupies(train,x,y){
+    return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
+  }
+
+  function advanceTrain(train){
+    if (!trainMoving(train)) return false;
+    const d = DIRS[train.moveDir];
+    const segmentLength = Math.hypot(d.dx,d.dy) || 1;
+    train.progress = Math.min(1, train.progress + TRAIN_SPEED / segmentLength);
+    if (train.progress >= 1){
+      delete train.prevX;
+      delete train.prevY;
+      delete train.moveDir;
+    }
+    return true;
   }
 
   function moveTrain(train){
+    if (advanceTrain(train)) return;
     if (train.wait > 0){ train.wait--; return; }
     const tile = getTile(train.x,train.y);
     const ex = exitFor(tile, train.from, train.color);
     if (ex == null) return;
     if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
-      train.wait = tile.dwell || 70;
+      train.wait = (tile.dwell || 70) * DWELL_FRAME_SCALE;
       return;
     }
     if (tile.kind === "signal" && ex === tile.dir && signalBlocked(train.x,train.y,tile,train)){
@@ -531,6 +568,10 @@
     const nf = opposite(ex);
     const nextTile = getTile(nx,ny);
     if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)) return;
+    train.prevX = train.x;
+    train.prevY = train.y;
+    train.moveDir = ex;
+    train.progress = 0;
     train.x = nx;
     train.y = ny;
     train.from = nf;
@@ -546,25 +587,22 @@
       const ny = y + DIRS[tile.dir].dy;
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
-      if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,null)) continue;
-      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0});
+      if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
+      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0});
     }
   }
 
   function simStep(){
-    spawnTrains();
+    if (state.frame === 0) spawnTrains();
     for (const train of state.trains) moveTrain(train);
-    state.tick++;
+    state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
+    if (state.frame === 0) state.tick++;
     draw();
   }
 
   function animation(){
     if (!state.paused){
-      state.frame++;
-      if (state.frame >= 14){
-        state.frame = 0;
-        simStep();
-      }
+      simStep();
     }
     requestAnimationFrame(animation);
   }
@@ -573,7 +611,7 @@
     closeContext();
     if (state.selectedTool === "erase"){
       removeTile(x,y);
-      state.trains = state.trains.filter(t => t.x !== x || t.y !== y);
+      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
     } else {
       setTile(x,y,makeTile(state.selectedTool));
     }
