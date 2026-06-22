@@ -58,6 +58,9 @@
     letter-spacing:.08em;
   }
   .tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .shape-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .shape-button{min-height:42px}
+  .shape-button span{display:block;color:var(--muted);font-size:11px;margin-top:2px}
   button,select,input,textarea{
     font:inherit;
     color:var(--ink);
@@ -125,6 +128,7 @@
     aside{border-right:0;border-bottom:1px solid var(--line);max-height:48vh}
     .toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .shape-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
 </style>
 </head>
@@ -141,8 +145,12 @@
         <div class="tools" id="toolButtons"></div>
       </section>
       <section class="group">
-        <div class="label">Track Shape</div>
-        <select id="shapeSelect" aria-label="Track shape"></select>
+        <div class="label">Tracks</div>
+        <div class="shape-grid" id="trackPalette"></div>
+      </section>
+      <section class="group">
+        <div class="label">Switches</div>
+        <div class="shape-grid" id="switchPalette"></div>
       </section>
       <section class="group">
         <div class="label">Train Color</div>
@@ -239,11 +247,19 @@
     {label:"Buffer N", route:[0]},
     {label:"Buffer S", route:[4]}
   ];
+  const SWITCH_SHAPES = [
+    {label:"W to E / NE", stem:6, branches:[2,1], defaultBranch:2},
+    {label:"W to E / SE", stem:6, branches:[2,3], defaultBranch:2},
+    {label:"E to W / NW", stem:2, branches:[6,7], defaultBranch:6},
+    {label:"E to W / SW", stem:2, branches:[6,5], defaultBranch:6},
+    {label:"N to S / SE", stem:0, branches:[4,3], defaultBranch:4},
+    {label:"N to S / SW", stem:0, branches:[4,5], defaultBranch:4},
+    {label:"S to N / NE", stem:4, branches:[0,1], defaultBranch:0},
+    {label:"S to N / NW", stem:4, branches:[0,7], defaultBranch:0}
+  ];
   const TOOLS = [
-    ["track","Track"],
     ["crossPlus","Cross +"],
     ["crossX","Cross X"],
-    ["switch","Switch"],
     ["spawn","Spawn"],
     ["stop","Stop"],
     ["signal","Signal"],
@@ -260,6 +276,7 @@
     selectedTool: "track",
     selectedColor: "red",
     selectedShape: 0,
+    selectedSwitchShape: 0,
     view: {x: 0, y: 0, zoom: 1},
     drag: null,
     message: ""
@@ -286,12 +303,13 @@
   function removeTile(x,y){ state.tiles.delete(key(x,y)); }
 
   function defaultSwitch(){
+    const shape = SWITCH_SHAPES[state.selectedSwitchShape];
     return {
       kind: "switch",
-      stem: 6,
-      branches: [2,1],
-      defaultBranch: 2,
-      filters: {"2": null, "1": null}
+      stem: shape.stem,
+      branches: shape.branches.slice(),
+      defaultBranch: shape.defaultBranch,
+      filters: Object.fromEntries(shape.branches.map(branch => [String(branch), null]))
     };
   }
   function makeTile(tool){
@@ -300,7 +318,7 @@
     if (tool === "crossPlus") return {kind:"crossPlus"};
     if (tool === "crossX") return {kind:"crossX"};
     if (tool === "switch") return defaultSwitch();
-    if (tool === "spawn") return {kind:"spawn", route:[6,2], dir:2, color:state.selectedColor, every:150, phase:0};
+    if (tool === "spawn") return {kind:"spawn", route:[6,2], dir:2, color:state.selectedColor};
     if (tool === "stop") return {kind:"stop", route, dir:route[route.length - 1], filter:null, dwell:70};
     if (tool === "signal") return {kind:"signal", route, dir:route[route.length - 1]};
     return null;
@@ -422,9 +440,11 @@
       for (const b of tile.branches){
         const filter = tile.filters[String(b)];
         if (!filter) continue;
+        const c = centerPoint(x,y);
         const e = endpointPoint(x,y,b);
+        const p = lerpPoint(c,e,.5);
         ctx.fillStyle = COLORS[filter];
-        ctx.beginPath(); ctx.arc(e.x,e.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
       }
       drawTriangle(x,y,tile.defaultBranch,"#64d7c4",.13);
       return;
@@ -578,22 +598,23 @@
   }
 
   function spawnTrains(){
+    const spent = [];
     for (const [k,tile] of state.tiles){
       if (tile.kind !== "spawn") continue;
       const {x,y} = readKey(k);
-      const every = Math.max(20, Number(tile.every) || 150);
-      if ((state.tick + (Number(tile.phase) || 0)) % every !== 0) continue;
       const nx = x + DIRS[tile.dir].dx;
       const ny = y + DIRS[tile.dir].dy;
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
       state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0});
+      spent.push(k);
     }
+    for (const k of spent) state.tiles.delete(k);
   }
 
   function simStep(){
-    if (state.frame === 0) spawnTrains();
+    spawnTrains();
     for (const train of state.trains) moveTrain(train);
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
@@ -679,6 +700,7 @@
   function dirOptions(value){
     return DIRS.map((d,i) => `<option value="${i}" ${Number(value) === i ? "selected" : ""}>${d.name}</option>`).join("");
   }
+  function dirName(value){ return DIRS[Number(value)] ? DIRS[Number(value)].name : String(value); }
   function shapeOptions(route){
     const r = route ? route.join("-") : "";
     return TRACK_SHAPES.map((s,i) => `<option value="${i}" ${s.route.join("-") === r ? "selected" : ""}>${s.label}</option>`).join("");
@@ -694,7 +716,6 @@
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Color</span><select name="color">${colorOptions(tile.color,false)}</select></label>`;
-      body += `<label class="field"><span>Spawn interval</span><input name="every" type="number" min="20" max="1000" value="${tile.every || 150}"></label>`;
     }
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
@@ -705,12 +726,9 @@
       body += `<label class="field"><span>Protected direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
     }
     if (tile.kind === "switch"){
-      body += `<label class="field"><span>Incoming stem</span><select name="stem">${dirOptions(tile.stem)}</select></label>`;
-      body += `<label class="field"><span>Branch A</span><select name="branch0">${dirOptions(tile.branches[0])}</select></label>`;
-      body += `<label class="field"><span>Branch A filter</span><select name="filter0">${colorOptions(tile.filters[String(tile.branches[0])],true)}</select></label>`;
-      body += `<label class="field"><span>Branch B</span><select name="branch1">${dirOptions(tile.branches[1])}</select></label>`;
-      body += `<label class="field"><span>Branch B filter</span><select name="filter1">${colorOptions(tile.filters[String(tile.branches[1])],true)}</select></label>`;
-      body += `<label class="field"><span>Fallback branch</span><select name="defaultBranch">${dirOptions(tile.defaultBranch)}</select></label>`;
+      const filters = tile.filters || {};
+      body += `<label class="field"><span>${dirName(tile.branches[0])} filter</span><select name="filter0">${colorOptions(filters[String(tile.branches[0])],true)}</select></label>`;
+      body += `<label class="field"><span>${dirName(tile.branches[1])} filter</span><select name="filter1">${colorOptions(filters[String(tile.branches[1])],true)}</select></label>`;
     }
     body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
     contextMenu.innerHTML = body;
@@ -739,15 +757,11 @@
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
     if (data.get("color")) tile.color = data.get("color");
     if (data.get("filter") != null) tile.filter = data.get("filter") || null;
-    if (data.get("every")) tile.every = Number(data.get("every"));
     if (data.get("dwell")) tile.dwell = Number(data.get("dwell"));
     if (tile.kind === "switch"){
-      tile.stem = Number(data.get("stem"));
-      tile.branches = [Number(data.get("branch0")), Number(data.get("branch1"))];
       tile.filters = {};
       tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
       tile.filters[String(tile.branches[1])] = data.get("filter1") || null;
-      tile.defaultBranch = Number(data.get("defaultBranch"));
       if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
     }
     closeContext();
@@ -756,6 +770,14 @@
 
   function setupControls(){
     const toolButtons = document.getElementById("toolButtons");
+    const trackPalette = document.getElementById("trackPalette");
+    const switchPalette = document.getElementById("switchPalette");
+    function syncSelection(){
+      for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
+      for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
+      for (const b of switchPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "switch" && Number(b.dataset.shape) === state.selectedSwitchShape);
+      draw();
+    }
     for (const [id,label] of TOOLS){
       const btn = document.createElement("button");
       btn.type = "button";
@@ -765,19 +787,37 @@
       if (id === "erase") btn.classList.add("danger");
       btn.addEventListener("click", () => {
         state.selectedTool = id;
-        for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === id);
-        draw();
+        syncSelection();
       });
       toolButtons.appendChild(btn);
     }
-    const shapeSelect = document.getElementById("shapeSelect");
     TRACK_SHAPES.forEach((shape,i) => {
-      const opt = document.createElement("option");
-      opt.value = i;
-      opt.textContent = shape.label;
-      shapeSelect.appendChild(opt);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.innerHTML = `${shape.label}<span>${shape.route.map(dirName).join(" - ")}</span>`;
+      btn.addEventListener("click", () => {
+        state.selectedTool = "track";
+        state.selectedShape = i;
+        syncSelection();
+      });
+      trackPalette.appendChild(btn);
     });
-    shapeSelect.addEventListener("change", () => { state.selectedShape = Number(shapeSelect.value); });
+    SWITCH_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.innerHTML = `${shape.label}<span>${dirName(shape.stem)} in</span>`;
+      btn.addEventListener("click", () => {
+        state.selectedTool = "switch";
+        state.selectedSwitchShape = i;
+        syncSelection();
+      });
+      switchPalette.appendChild(btn);
+    });
+    syncSelection();
     const colorButtons = document.getElementById("colorButtons");
     for (const name of COLOR_NAMES){
       const btn = document.createElement("button");
@@ -898,10 +938,10 @@
     line(-7,1,-1,1);
     line(1,1,6,1);
     line(1,2,6,7);
-    setTile(-10,0,{kind:"spawn",route:[6,2],dir:2,color:"red",every:120,phase:0});
-    setTile(-8,0,{kind:"spawn",route:[6,2],dir:2,color:"blue",every:170,phase:40});
-    setTile(-7,1,{kind:"spawn",route:[6,2],dir:2,color:"green",every:150,phase:20});
-    setTile(-5,1,{kind:"spawn",route:[6,2],dir:2,color:"yellow",every:210,phase:80});
+    setTile(-10,0,{kind:"spawn",route:[6,2],dir:2,color:"red"});
+    setTile(-8,0,{kind:"spawn",route:[6,2],dir:2,color:"blue"});
+    setTile(-7,1,{kind:"spawn",route:[6,2],dir:2,color:"green"});
+    setTile(-5,1,{kind:"spawn",route:[6,2],dir:2,color:"yellow"});
     setTile(4,0,{kind:"signal",route:[6,2],dir:2});
     setTile(5,-5,{kind:"signal",route:[5,1],dir:1});
     setTile(5,5,{kind:"signal",route:[7,3],dir:3});
