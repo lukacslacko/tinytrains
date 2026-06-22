@@ -256,7 +256,7 @@
       <details class="palette">
         <summary>Signals</summary>
         <div class="palette-body">
-          <p class="help">A signal protects the block of track in its arrow direction. The block is the run of connected track &mdash; flooding through tracks and switches &mdash; up to the next signal or a dead end. A train that would exit through the signal arrow waits while any other train is anywhere in that block. Red means occupied, green means clear.</p>
+          <p class="help">A signal protects the block of track in its arrow direction &mdash; the run of connected track (through tracks and switches) up to the next signal or a dead end. A small <strong>distant</strong> marker is shown automatically one clean straight tile before each signal: green when the block is free, orange when it is taken. A train passing a green distant reserves the block and rolls through on a green main; one passing an orange distant brakes and waits at the red main, then proceeds once the block clears. Only one train holds a block at a time; waiting trains are served in turn.</p>
           <div class="shape-grid" id="signalPalette"></div>
         </div>
       </details>
@@ -320,7 +320,14 @@
     violet: "#b58cff"
   };
   const COLOR_NAMES = Object.keys(COLORS);
-  const TRAIN_SPEED = 0.018;
+  // Movement is now speed-based: trains accelerate up to MAX_SPEED and brake along a
+  // sqrt curve so they coast to a stop exactly on the tile they must halt at. DECEL is
+  // tuned so a train at full speed can stop within one tile (the distant-to-main gap).
+  const MAX_SPEED = 0.018;
+  const ACCEL = 0.0008;
+  const DECEL = 0.0002;
+  const MIN_SPEED = 0.0016;
+  const DISTANT_ORANGE = "#ff9f1c";
   const SPAWN_TICK_FRAMES = 14;
   const FRAMES_PER_SECOND = 60;
   const DEFAULT_DWELL_SECONDS = 2;
@@ -730,9 +737,23 @@
       }
     }
     if (tile.kind === "signal"){
-      const red = signalBlocked(x,y,tile,null);
+      const green = state.sys ? mainRenderGreen(key(x,y), state.sys) : false;
       // base (orthogonal to the track) spans ~half the tile (1.3*scale); centered so it stays in-tile
-      drawTriangle(x,y,tile.dir,red ? "#ff2a2a" : "#16a34a",.385,null,null,0);
+      drawTriangle(x,y,tile.dir,green ? "#16a34a" : "#ff2a2a",.385,null,null,0);
+    }
+  }
+
+  // Distant signals are derived (not stored tiles): one per main signal, drawn on the
+  // clean straight tile before it, showing green (block open) or orange (occupied/queued).
+  function drawDistantSignals(){
+    const sys = state.sys;
+    if (!sys) return;
+    for (const [mainKey] of sys.blockOfMain){
+      if (!distantDrawable(mainKey, sys)) continue;
+      const dir = sys.dirOfMain.get(mainKey);
+      const {x,y} = readKey(sys.distantOfMain.get(mainKey));
+      const green = distantRenderGreen(mainKey, sys);
+      drawTriangle(x,y,dir, green ? "#16a34a" : DISTANT_ORANGE, .27, "#0b0e12", Math.max(1.5, tileSize()*.03), 0);
     }
   }
 
@@ -808,6 +829,7 @@
       drawTile(x,y,tile);
     }
     drawProtectedHighlight();
+    drawDistantSignals();
     drawPlacementGhost();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
@@ -845,10 +867,6 @@
       return route[0] === from ? route[1] : route[0];
     }
     return null;
-  }
-
-  function signalBlocked(x,y,tile,train){
-    return collectProtectedBlock(x,y,tile,train && train.id).blocked;
   }
 
   function exitsForBlock(tile, from){
@@ -900,6 +918,133 @@
     return {blocked, tiles};
   }
 
+  // ---- Distant signals & block reservation ------------------------------------------
+  // Each main signal guards a block (the run of track up to the next signal). A block has
+  // at most one holder. A train reserves the block when it reaches the distant (the tile
+  // before the main) and the block is free; otherwise it brakes to a stop at the main and
+  // waits its turn. A train may hold two adjacent blocks while straddling the main between
+  // them. buildSignalSystem() recomputes the static topology each tick.
+  function buildSignalSystem(){
+    const blockOfMain = new Map();    // mainKey -> blockId
+    const dirOfMain = new Map();      // mainKey -> protected direction
+    const distantOfMain = new Map();  // mainKey -> distant tile key (one tile before)
+    const blockTiles = new Map();     // blockId -> Set of tile keys
+    const mainsOfBlock = new Map();   // blockId -> [mainKey]
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "signal") continue;
+      const {x,y} = readKey(k);
+      const tiles = scanProtectedBlock(x + DIRS[tile.dir].dx, y + DIRS[tile.dir].dy, opposite(tile.dir), null).tiles;
+      const id = [...tiles].sort().join("|");
+      blockOfMain.set(k, id);
+      dirOfMain.set(k, tile.dir);
+      distantOfMain.set(k, key(x - DIRS[tile.dir].dx, y - DIRS[tile.dir].dy));
+      if (!blockTiles.has(id)) blockTiles.set(id, tiles);
+      if (!mainsOfBlock.has(id)) mainsOfBlock.set(id, []);
+      mainsOfBlock.get(id).push(k);
+    }
+    return {blockOfMain, dirOfMain, distantOfMain, blockTiles, mainsOfBlock, holder:new Map()};
+  }
+
+  // The block+main a train is about to enter: either it is on the main itself, or one
+  // clean straight tile before it (the distant). Returns null otherwise.
+  function approachInfo(train, sys){
+    const tile = getTile(train.x, train.y);
+    if (!tile) return null;
+    const ex = exitFor(tile, train.from, train.color);
+    if (ex == null) return null;
+    const here = key(train.x, train.y);
+    if (tile.kind === "signal" && ex === tile.dir && sys.blockOfMain.has(here)){
+      return {blockId: sys.blockOfMain.get(here), mainKey: here};
+    }
+    const nk = key(train.x + DIRS[ex].dx, train.y + DIRS[ex].dy);
+    if (sys.blockOfMain.has(nk) && sys.dirOfMain.get(nk) === ex){
+      return {blockId: sys.blockOfMain.get(nk), mainKey: nk};
+    }
+    return null;
+  }
+
+  function nextWantSeq(){ state.wantSeq = (state.wantSeq || 0) + 1; return state.wantSeq; }
+  function trainHolds(train, blockId){ return train.holds && train.holds.some(h => h.blockId === blockId); }
+  // Physical occupancy of a block's tiles (a safety net for trains that are inside a block
+  // without holding it, e.g. spawned in or placed by an edit).
+  function blockOccupiedByOther(blockId, sys, ignoreId){
+    const tiles = sys.blockTiles.get(blockId);
+    if (!tiles) return false;
+    for (const t of state.trains){
+      if (t.id === ignoreId) continue;
+      if (tiles.has(key(t.x,t.y)) || (trainMoving(t) && tiles.has(key(t.prevX,t.prevY)))) return true;
+    }
+    return false;
+  }
+  function inBlockRegion(train, h, sys){
+    const tiles = sys.blockTiles.get(h.blockId);
+    if (!tiles) return false;
+    const here = key(train.x, train.y);
+    return tiles.has(here) || here === h.entryMainKey || here === h.entryDistantKey;
+  }
+
+  function updateSignals(){
+    const sys = buildSignalSystem();
+    // release holds once the train has left the block's protected tiles and entry approach
+    for (const t of state.trains){
+      if (!t.holds) t.holds = [];
+      t.holds = t.holds.filter(h => sys.blockTiles.has(h.blockId) && inBlockRegion(t, h, sys));
+    }
+    for (const t of state.trains) for (const h of t.holds) sys.holder.set(h.blockId, t.id);
+    // gather contenders, then grant each free block to its longest-waiting contender
+    const contenders = new Map();
+    for (const t of state.trains){
+      const ap = approachInfo(t, sys);
+      t._ap = ap;
+      if (!ap || trainHolds(t, ap.blockId)){ t.wantSince = null; continue; }
+      if (!contenders.has(ap.blockId)) contenders.set(ap.blockId, []);
+      contenders.get(ap.blockId).push({train:t, mainKey:ap.mainKey});
+    }
+    for (const [blockId, list] of contenders){
+      for (const c of list) if (c.train.wantSince == null) c.train.wantSince = nextWantSeq();
+      if (sys.holder.has(blockId)) continue; // reserved: everyone keeps waiting
+      list.sort((a,b) => (a.train.wantSince - b.train.wantSince) || (a.train.id - b.train.id));
+      const win = list[0];
+      if (blockOccupiedByOther(blockId, sys, win.train.id)) continue; // physically obstructed
+      win.train.holds.push({blockId, entryMainKey: win.mainKey, entryDistantKey: sys.distantOfMain.get(win.mainKey)});
+      win.train.wantSince = null;
+      sys.holder.set(blockId, win.train.id);
+    }
+    state.sys = sys;
+  }
+
+  // A main is "green" for a train that holds its block via that main. For rendering it is
+  // shown green only while that holder has not yet entered the protected tiles.
+  function mainIsGreenFor(train, mainKey){
+    return !!(train.holds && train.holds.some(h => h.entryMainKey === mainKey));
+  }
+  function mainRenderGreen(mainKey, sys){
+    const id = sys.blockOfMain.get(mainKey);
+    const tiles = sys.blockTiles.get(id);
+    for (const t of state.trains){
+      if (!t.holds) continue;
+      for (const h of t.holds){
+        if (h.blockId === id && h.entryMainKey === mainKey && tiles && !tiles.has(key(t.x,t.y))) return true;
+      }
+    }
+    return false;
+  }
+  // A distant is green when its block is free and unclaimed; orange when held or queued.
+  function distantRenderGreen(mainKey, sys){
+    const id = sys.blockOfMain.get(mainKey);
+    if (sys.holder.has(id) || blockOccupiedByOther(id, sys, null)) return false;
+    for (const t of state.trains) if (t.wantSince != null && t._ap && t._ap.blockId === id) return false;
+    return true;
+  }
+  // A distant only renders where the tile before the main is a clean straight through track.
+  function distantDrawable(mainKey, sys){
+    const dir = sys.dirOfMain.get(mainKey);
+    const {x,y} = readKey(sys.distantOfMain.get(mainKey));
+    const dt = getTile(x,y);
+    return !!dt && dt.kind === "track" && dt.route.length === 2 &&
+      dt.route.includes(dir) && dt.route.includes(opposite(dir));
+  }
+
   function occupied(x,y,ignoreId){
     return state.trains.some(t => t.id !== ignoreId && trainOccupies(t,x,y));
   }
@@ -908,15 +1053,43 @@
     return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
   }
 
-  function advanceTrain(train){
+  // True if a train arriving at (x,y) via `from` can immediately continue onward; its
+  // negation is what tells a moving train to brake to a stop on the tile it is entering.
+  function canLeave(train, x, y, from){
+    const tile = getTile(x,y);
+    if (!tile) return false;
+    const ex = exitFor(tile, from, train.color);
+    if (ex == null) return false;
+    if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
+      if (train.stopKey !== key(x,y)) return false; // still owes a dwell here
+    }
+    if (tile.kind === "signal" && ex === tile.dir && !mainIsGreenFor(train, key(x,y))) return false;
+    const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
+    const nt = getTile(nx,ny);
+    if (!nt || !tileAccepts(nt, opposite(ex)) || occupied(nx,ny,train.id)) return false;
+    return true;
+  }
+
+  // Advance a moving train by its current speed, easing toward MAX_SPEED or braking along
+  // a sqrt curve so it coasts to a stop exactly on the tile it cannot continue past.
+  function advanceWithSpeed(train){
     if (!trainMoving(train)) return false;
     const d = DIRS[train.moveDir];
-    const segmentLength = Math.hypot(d.dx,d.dy) || 1;
-    train.progress = Math.min(1, train.progress + TRAIN_SPEED / segmentLength);
+    const seg = Math.hypot(d.dx,d.dy) || 1;
+    const halt = !canLeave(train, train.x, train.y, train.from);
+    const remaining = (1 - train.progress) * seg;
+    let target = MAX_SPEED;
+    if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
+    if (train.speed < target) train.speed = Math.min(target, train.speed + ACCEL);
+    else train.speed = target;
+    if (halt && train.speed < MIN_SPEED && remaining < 0.5){
+      train.progress = 1; // crawling and almost there: dock on the tile centre
+    } else {
+      train.progress = Math.min(1, train.progress + train.speed / seg);
+    }
     if (train.progress >= 1){
-      delete train.prevX;
-      delete train.prevY;
-      delete train.moveDir;
+      delete train.prevX; delete train.prevY; delete train.moveDir;
+      if (halt) train.speed = 0;
     }
     return true;
   }
@@ -934,27 +1107,29 @@
   }
 
   function moveTrain(train){
-    if (advanceTrain(train)) return;
-    if (train.wait > 0){ train.wait--; return; }
+    if (train.speed == null) train.speed = 0;
+    if (trainMoving(train)){ advanceWithSpeed(train); return; }
+    if (train.wait > 0){ train.wait--; train.speed = 0; return; }
     const tile = getTile(train.x,train.y);
     const ex = exitFor(tile, train.from, train.color);
-    if (ex == null) return;
+    if (ex == null){ train.speed = 0; return; }
     if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
       const stopKey = key(train.x,train.y);
       if (train.stopKey !== stopKey){
         train.wait = Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
         train.stopKey = stopKey;
+        train.speed = 0;
         return;
       }
     }
-    if (tile.kind === "signal" && ex === tile.dir && signalBlocked(train.x,train.y,tile,train)){
-      return;
+    if (tile.kind === "signal" && ex === tile.dir && !mainIsGreenFor(train, key(train.x,train.y))){
+      train.speed = 0; return; // hold at the main signal until this train is granted the block
     }
     const nx = train.x + DIRS[ex].dx;
     const ny = train.y + DIRS[ex].dy;
     const nf = opposite(ex);
     const nextTile = getTile(nx,ny);
-    if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)) return;
+    if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)){ train.speed = 0; return; }
     delete train.stopKey;
     train.prevX = train.x;
     train.prevY = train.y;
@@ -963,6 +1138,7 @@
     train.x = nx;
     train.y = ny;
     train.from = nf;
+    advanceWithSpeed(train);
   }
 
   function spawnTrains(){
@@ -975,7 +1151,7 @@
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
-      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0});
+      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null});
       spent.push({x, y, route:cloneRoute(tile.route)});
     }
     for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
@@ -983,6 +1159,7 @@
 
   function simStep(){
     spawnTrains();
+    updateSignals();
     for (const train of state.trains) moveTrain(train);
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
@@ -1006,6 +1183,7 @@
       if (!tile) return;
       setTile(x,y,tile);
     }
+    updateSignals();
     draw();
   }
 
@@ -1178,6 +1356,7 @@
     if (event.target.name === "delete"){
       removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
       closeContext();
+      updateSignals();
       draw();
     }
   });
@@ -1204,6 +1383,7 @@
       if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
     }
     closeContext();
+    updateSignals();
     draw();
   });
 
@@ -1441,6 +1621,7 @@
     state.tick = 0;
     state.frame = 0;
     if (data.view) state.view = {...state.view, ...data.view};
+    updateSignals();
   }
 
   function loadBrowserSave(){
@@ -1478,6 +1659,7 @@
 
   setupControls();
   loadBrowserSave();
+  updateSignals();
   resize();
   animation();
 })();
