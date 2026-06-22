@@ -51,8 +51,8 @@
     padding:12px;
     overflow-y:auto;
     overscroll-behavior:contain;
-    display:grid;
-    align-content:start;
+    display:flex;
+    flex-direction:column;
     gap:14px;
   }
   .group{display:grid;gap:8px}
@@ -203,7 +203,6 @@
   @media (max-width:760px){
     #app{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
     aside{border-right:0;border-bottom:1px solid var(--line);max-height:48vh}
-    .toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
     .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
     .shape-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
   }
@@ -259,15 +258,9 @@
         </div>
       </details>
       <section class="group">
-        <div class="label">Train Color</div>
+        <div class="label">Spawn Color</div>
+        <p class="help">New spawn tiles use this train color.</p>
         <div class="color-row" id="colorButtons"></div>
-      </section>
-      <section class="group">
-        <div class="label">Simulation</div>
-        <div class="row">
-          <button id="clearBtn">Clear Trains</button>
-          <button id="demoBtn">Demo Layout</button>
-        </div>
       </section>
       <section class="group">
         <div class="label">Save / Load</div>
@@ -399,9 +392,6 @@
   const TOOLS = [
     ["crossPlus","Cross +"],
     ["crossX","Cross X"],
-    ["spawn","Spawn"],
-    ["stop","Stop"],
-    ["signal","Signal"],
     ["erase","Erase"]
   ];
 
@@ -600,7 +590,7 @@
       drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
       drawPreviewTriangle(pctx,w,h,shape.defaultBranch,"#64d7c4",.13);
     }
-    button.appendChild(preview);
+    button.insertBefore(preview, button.firstChild);
   }
 
   function drawGrid(){
@@ -1210,6 +1200,13 @@
       switchPalette.appendChild(btn);
     });
     syncSelection();
+    function refreshSpawnPalettePreviews(){
+      for (const btn of spawnPalette.querySelectorAll("button")){
+        const preview = btn.querySelector("canvas");
+        if (preview) preview.remove();
+        addShapePreview(btn, SPAWN_SHAPES[Number(btn.dataset.shape)], "spawn");
+      }
+    }
     const colorButtons = document.getElementById("colorButtons");
     for (const name of COLOR_NAMES){
       const btn = document.createElement("button");
@@ -1221,23 +1218,20 @@
       btn.addEventListener("click", () => {
         state.selectedColor = name;
         for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === name);
+        refreshSpawnPalettePreviews();
       });
       colorButtons.appendChild(btn);
     }
     updatePauseButton();
     document.getElementById("pauseBtn").addEventListener("click", togglePause);
     document.getElementById("stepBtn").addEventListener("click", simStep);
-    document.getElementById("clearBtn").addEventListener("click", () => { state.trains = []; draw(); });
-    document.getElementById("demoBtn").addEventListener("click", () => { loadDemo(); draw(); });
     document.getElementById("saveBtn").addEventListener("click", () => {
       localStorage.setItem("tinytrains-modern-layout", serialize());
       state.message = "Saved in this browser";
       draw();
     });
     document.getElementById("loadBtn").addEventListener("click", () => {
-      const saved = localStorage.getItem("tinytrains-modern-layout");
-      if (saved) deserialize(saved);
-      state.message = saved ? "Loaded browser save" : "No browser save found";
+      loadBrowserSave();
       draw();
     });
     document.getElementById("exportBtn").addEventListener("click", () => openIO("export"));
@@ -1291,61 +1285,20 @@
     if (data.view) state.view = {...state.view, ...data.view};
   }
 
-  function line(x1,y1,x2,y2,kind){
-    if (x1 === x2){
-      const a = Math.min(y1,y2), b = Math.max(y1,y2);
-      for (let y=a; y<=b; y++) setTile(x1,y,{kind:kind || "track",route:[0,4]});
-      return;
+  function loadBrowserSave(){
+    const saved = localStorage.getItem("tinytrains-modern-layout");
+    if (!saved){
+      state.message = "No browser save found";
+      return false;
     }
-    if (y1 === y2){
-      const a = Math.min(x1,x2), b = Math.max(x1,x2);
-      for (let x=a; x<=b; x++) setTile(x,y1,{kind:kind || "track",route:[6,2]});
-      return;
+    try {
+      deserialize(saved);
+      state.message = "Loaded browser save";
+      return true;
+    } catch (err) {
+      state.message = "Browser save failed: " + err.message;
+      return false;
     }
-    const sx = Math.sign(x2-x1);
-    const sy = Math.sign(y2-y1);
-    const route = sx === sy ? [7,3] : [5,1];
-    let x = x1, y = y1;
-    while (true){
-      setTile(x,y,{kind:kind || "track",route:cloneRoute(route)});
-      if (x === x2 && y === y2) break;
-      x += sx; y += sy;
-    }
-  }
-
-  function loadDemo(){
-    state.tiles = new Map();
-    state.trains = [];
-    state.nextTrainId = 1;
-    state.tick = 0;
-    state.frame = 0;
-    line(-10,0,-1,0);
-    line(1,0,8,0);
-    line(1,-1,6,-6);
-    line(1,1,6,6);
-    setTile(0,0,{kind:"switch",stem:6,branches:[2,1],defaultBranch:2,filters:{"2":"blue","1":"red"}});
-    setTile(0,1,{kind:"switch",stem:6,branches:[2,3],defaultBranch:2,filters:{"2":"green","3":"yellow"}});
-    line(-7,1,-1,1);
-    line(1,1,6,1);
-    line(1,2,6,7);
-    setTile(-10,0,{kind:"spawn",route:[6,2],dir:2,color:"red"});
-    setTile(-8,0,{kind:"spawn",route:[6,2],dir:2,color:"blue"});
-    setTile(-7,1,{kind:"spawn",route:[6,2],dir:2,color:"green"});
-    setTile(-5,1,{kind:"spawn",route:[6,2],dir:2,color:"yellow"});
-    setTile(4,0,{kind:"signal",route:[6,2],dir:2});
-    setTile(5,-5,{kind:"signal",route:[5,1],dir:1});
-    setTile(5,5,{kind:"signal",route:[7,3],dir:3});
-    setTile(7,0,{kind:"stop",route:[6,2],dir:2,filter:"blue",dwellSeconds:2.25});
-    setTile(6,-6,{kind:"stop",route:[5,1],dir:1,filter:"red",dwellSeconds:2.25});
-    setTile(5,1,{kind:"stop",route:[6,2],dir:2,filter:"green",dwellSeconds:2});
-    setTile(6,7,{kind:"stop",route:[7,3],dir:3,filter:"yellow",dwellSeconds:2});
-    setTile(3,3,{kind:"crossPlus"});
-    setTile(4,3,{kind:"track",route:[6,2]});
-    setTile(2,3,{kind:"track",route:[6,2]});
-    setTile(3,2,{kind:"track",route:[0,4]});
-    setTile(3,4,{kind:"track",route:[0,4]});
-    state.view = {x: 40, y: 0, zoom: .95};
-    state.message = "Loaded demo layout";
   }
 
   window.addEventListener("keydown", event => {
@@ -1366,7 +1319,7 @@
   });
 
   setupControls();
-  loadDemo();
+  loadBrowserSave();
   resize();
   animation();
 })();
