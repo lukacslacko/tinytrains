@@ -665,8 +665,7 @@
     }
   }
   function drawPreviewStopMarker(pctx,w,h,d){
-    drawPreviewTriangle(pctx,w,h,d,"#ffffff",.38,STOP_BROWN,2.4);
-    drawPreviewTriangle(pctx,w,h,d,STOP_BROWN,.28);
+    drawPreviewTriangle(pctx,w,h,d,STOP_BROWN,.385,"#ffffff",2.4,0);
   }
   function addShapePreview(button, shape, kind){
     const preview = document.createElement("canvas");
@@ -777,8 +776,8 @@
     }
   }
   function drawStopMarker(x,y,d){
-    drawTriangle(x,y,d,"#ffffff",.38,STOP_BROWN,Math.max(2, tileSize() * .045));
-    drawTriangle(x,y,d,STOP_BROWN,.28);
+    // same size, offset and side placement as a main signal, but a brown arrow with a white outline
+    drawTriangle(x,y,d,STOP_BROWN,.385,"#ffffff",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
   }
 
   function drawTile(x,y,tile){
