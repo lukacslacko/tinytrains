@@ -231,6 +231,10 @@
         <button id="pauseBtn">Pause</button>
         <button id="stepBtn">Step</button>
       </div>
+      <div class="row">
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+      </div>
     </div>
     <div class="toolbar">
       <section class="group">
@@ -402,6 +406,8 @@
   const STOP_SHAPES = buildDirectionalShapes("stop");
   const SIGNAL_SHAPES = buildDirectionalShapes("signal");
   const TOOLS = [
+    ["select","Select"],
+    ["caution","Caution"],
     ["erase","Erase"]
   ];
   const CROSSING_SHAPES = [
@@ -426,8 +432,70 @@
     view: {x: 0, y: 0, zoom: 1},
     drag: null,
     hover: null,
+    selection: null,   // committed rectangle {x0,y0,x1,y1} in world cells
+    selecting: null,   // rectangle being dragged out
     message: ""
   };
+
+  // Undo/redo history of the tile map, plus a clipboard for copy/cut/paste.
+  const history = { undo: [], redo: [] };
+  let clipboard = null;
+  function tilesToString(){ return JSON.stringify([...state.tiles]); }
+  function applyTilesString(s){ state.tiles = new Map(JSON.parse(s)); updateSignals(); }
+  function pushHistory(){
+    history.undo.push(tilesToString());
+    if (history.undo.length > 200) history.undo.shift();
+    history.redo.length = 0;
+  }
+  function undo(){
+    if (!history.undo.length){ state.message = "Nothing to undo"; draw(); return; }
+    history.redo.push(tilesToString());
+    applyTilesString(history.undo.pop());
+    state.message = "Undo";
+    draw();
+  }
+  function redo(){
+    if (!history.redo.length){ state.message = "Nothing to redo"; draw(); return; }
+    history.undo.push(tilesToString());
+    applyTilesString(history.redo.pop());
+    state.message = "Redo";
+    draw();
+  }
+  function normRect(s){
+    return s && {x0:Math.min(s.x0,s.x1), y0:Math.min(s.y0,s.y1), x1:Math.max(s.x0,s.x1), y1:Math.max(s.y0,s.y1)};
+  }
+  function forSelection(fn){
+    const r = normRect(state.selection); if (!r) return false;
+    for (let y=r.y0; y<=r.y1; y++) for (let x=r.x0; x<=r.x1; x++) fn(x,y,r);
+    return r;
+  }
+  function copySelection(){
+    const r = normRect(state.selection); if (!r) return;
+    const tiles = [];
+    forSelection((x,y) => { const t = getTile(x,y); if (t) tiles.push({dx:x-r.x0, dy:y-r.y0, tile:JSON.parse(JSON.stringify(t))}); });
+    clipboard = {tiles};
+    state.message = `Copied ${tiles.length} tiles`;
+    draw();
+  }
+  function deleteSelection(){
+    const r = normRect(state.selection); if (!r) return;
+    pushHistory();
+    forSelection((x,y) => removeTile(x,y));
+    state.trains = state.trains.filter(t => !(t.x>=r.x0 && t.x<=r.x1 && t.y>=r.y0 && t.y<=r.y1));
+    updateSignals();
+    state.message = "Deleted selection";
+    draw();
+  }
+  function cutSelection(){ copySelection(); deleteSelection(); }
+  function pasteClipboard(){
+    if (!clipboard || !clipboard.tiles.length || !state.hover){ state.message = "Nothing to paste"; draw(); return; }
+    pushHistory();
+    const ax = state.hover.x, ay = state.hover.y;
+    for (const it of clipboard.tiles) setTile(ax+it.dx, ay+it.dy, JSON.parse(JSON.stringify(it.tile)));
+    updateSignals();
+    state.message = `Pasted ${clipboard.tiles.length} tiles`;
+    draw();
+  }
 
   function key(x,y){ return `${x},${y}`; }
   function readKey(k){ const [x,y] = k.split(",").map(Number); return {x,y}; }
@@ -705,6 +773,11 @@
     const s = tileSize();
     ctx.fillStyle = "#121820";
     ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+    if (tile.caution){
+      ctx.strokeStyle = DISTANT_ORANGE;
+      ctx.lineWidth = Math.max(1.5, s * .05);
+      ctx.strokeRect(p.x + s*.06, p.y + s*.06, s - s*.12, s - s*.12);
+    }
     if (tile.kind === "switch"){
       drawRoute(x,y,[tile.stem, tile.branches[0]], false);
       drawRoute(x,y,[tile.stem, tile.branches[1]], false);
@@ -793,17 +866,34 @@
     }
   }
 
+  function drawSelectionOverlay(){
+    const r = normRect(state.selecting || state.selection);
+    if (!r) return;
+    const a = worldToScreen(r.x0, r.y0);
+    const s = tileSize();
+    const w = (r.x1-r.x0+1)*s, h = (r.y1-r.y0+1)*s;
+    ctx.save();
+    ctx.fillStyle = "rgba(100,215,196,.10)";
+    ctx.fillRect(a.x, a.y, w, h);
+    ctx.strokeStyle = "#64d7c4";
+    ctx.lineWidth = Math.max(1.5, s*.04);
+    ctx.setLineDash([Math.max(5,s*.2), Math.max(3,s*.12)]);
+    ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+    ctx.restore();
+  }
+
   function drawPlacementGhost(){
-    if (!state.hover) return;
+    if (!state.hover || state.selectedTool === "select") return;
     const {x,y} = state.hover;
     const p = worldToScreen(x,y);
     const s = tileSize();
     ctx.save();
-    if (state.selectedTool === "erase"){
-      ctx.globalAlpha = .42;
-      ctx.fillStyle = "#ff6b76";
+    if (state.selectedTool === "erase" || state.selectedTool === "caution"){
+      const caution = state.selectedTool === "caution";
+      ctx.globalAlpha = caution ? .3 : .42;
+      ctx.fillStyle = caution ? DISTANT_ORANGE : "#ff6b76";
       ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
-      ctx.strokeStyle = "#ff9aa3";
+      ctx.strokeStyle = caution ? DISTANT_ORANGE : "#ff9aa3";
       ctx.lineWidth = Math.max(1, s * .035);
       ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
     } else {
@@ -828,6 +918,7 @@
     }
     drawProtectedHighlight();
     drawDistantSignals();
+    drawSelectionOverlay();
     drawPlacementGhost();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
@@ -1193,7 +1284,19 @@
 
   function placeTile(x,y){
     closeContext();
+    if (state.selectedTool === "select") return;
+    if (state.selectedTool === "caution"){
+      const tile = getTile(x,y);
+      if (!tile) return;
+      pushHistory();
+      if (tile.caution) delete tile.caution; else tile.caution = true;
+      updateSignals();
+      draw();
+      return;
+    }
     if (state.selectedTool === "erase"){
+      if (!getTile(x,y) && !state.trains.some(t => trainOccupies(t,x,y))) return;
+      pushHistory();
       removeTile(x,y);
       state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
     } else {
@@ -1204,6 +1307,7 @@
         draw();
         return;
       }
+      pushHistory();
       setTile(x,y,tile);
     }
     updateSignals();
@@ -1270,6 +1374,14 @@
     if (event.button !== 0) return;
     const p = pointerPos(event);
     setHoverFromPoint(p);
+    if (state.selectedTool === "select"){
+      const w = screenToWorld(p.x,p.y);
+      state.drag = {select:true, sx:p.x, sy:p.y, moved:false};
+      state.selecting = {x0:w.x, y0:w.y, x1:w.x, y1:w.y};
+      canvas.setPointerCapture(event.pointerId);
+      draw();
+      return;
+    }
     state.drag = {sx:p.x, sy:p.y, vx:state.view.x, vy:state.view.y, moved:false};
     canvas.setPointerCapture(event.pointerId);
     canvas.classList.add("dragging");
@@ -1281,6 +1393,13 @@
     const p = pointerPos(event);
     if (!state.drag){
       setHoverFromPoint(p);
+      return;
+    }
+    if (state.drag.select){
+      const w = screenToWorld(p.x,p.y);
+      state.selecting.x1 = w.x; state.selecting.y1 = w.y;
+      if (Math.hypot(p.x-state.drag.sx, p.y-state.drag.sy) > 5) state.drag.moved = true;
+      draw();
       return;
     }
     const dx = p.x - state.drag.sx;
@@ -1295,6 +1414,14 @@
   canvas.addEventListener("pointerup", event => {
     if (!state.drag) return;
     const p = pointerPos(event);
+    if (state.drag.select){
+      state.selection = state.selecting;
+      state.selecting = null;
+      state.drag = null;
+      setHoverFromPoint(p);
+      draw();
+      return;
+    }
     if (!state.drag.moved){
       const w = screenToWorld(p.x,p.y);
       placeTile(w.x,w.y);
@@ -1387,6 +1514,7 @@
   contextMenu.addEventListener("click", event => {
     const t = event.target;
     if (t.name === "delete"){
+      pushHistory();
       removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
       closeContext();
       updateSignals();
@@ -1402,11 +1530,13 @@
     if (!tile || tile.kind !== "track"){ closeContext(); return; }
     const route = cloneRoute(tile.route);
     if (action === "spawn"){
-      setTile(x,y,{kind:"spawn", route, dir, color: state.selectedColor});
+      pushHistory();
+      setTile(x,y,{kind:"spawn", route, dir, color: state.selectedColor, caution: tile.caution});
       state.message = `Spawn heading ${DIRS[dir].name}`;
     } else if (action === "signal"){
       if (!canPlaceSignalAt(x,y,dir)){ state.message = "No clean track to host a distant that way"; return; }
-      setTile(x,y,{kind:"signal", route, dir});
+      pushHistory();
+      setTile(x,y,{kind:"signal", route, dir, caution: tile.caution});
       state.message = `Signal facing ${DIRS[dir].name}`;
     }
     closeContext();
@@ -1420,6 +1550,7 @@
     const tile = getTile(x,y);
     const data = new FormData(contextMenu);
     if (!tile) return;
+    pushHistory();
     const prevDir = tile.dir;
     const routeShape = data.get("routeShape");
     if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
@@ -1575,6 +1706,8 @@
     updatePauseButton();
     document.getElementById("pauseBtn").addEventListener("click", togglePause);
     document.getElementById("stepBtn").addEventListener("click", simStep);
+    document.getElementById("undoBtn").addEventListener("click", undo);
+    document.getElementById("redoBtn").addEventListener("click", redo);
     document.getElementById("saveBtn").addEventListener("click", () => {
       localStorage.setItem("tinytrains-modern-layout", serialize());
       state.message = "Saved in this browser";
@@ -1654,12 +1787,22 @@
 
   window.addEventListener("keydown", event => {
     if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && (event.key === "z" || event.key === "Z")){ event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
+    if (mod && (event.key === "y" || event.key === "Y")){ event.preventDefault(); redo(); return; }
+    if (mod && (event.key === "c" || event.key === "C")){ event.preventDefault(); copySelection(); return; }
+    if (mod && (event.key === "x" || event.key === "X")){ event.preventDefault(); cutSelection(); return; }
+    if (mod && (event.key === "v" || event.key === "V")){ event.preventDefault(); pasteClipboard(); return; }
+    if ((event.key === "Delete" || event.key === "Backspace") && state.selection){ event.preventDefault(); deleteSelection(); return; }
     if (event.code === "Space"){ event.preventDefault(); togglePause(); }
     if (event.key === "s") simStep();
     if (event.key === "Escape"){
       closeContext();
       ioPanel.classList.remove("open");
-      if (state.selectedTool){
+      if (state.selection || state.selecting){
+        state.selection = null; state.selecting = null;
+        draw();
+      } else if (state.selectedTool){
         state.selectedTool = null;
         syncControls();
       } else {
