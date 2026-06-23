@@ -58,7 +58,7 @@ clean track per cell.
 | `crossX` | An `×` crossing: two diagonal routes `[NW–SE]` and `[NE–SW]`. |
 | `switch` | A **stem** plus two **branches** (a straight + a 45° diagonal). Routes by train type. |
 | `spawn` | Emits a train of a chosen type in a chosen direction, then becomes plain track. |
-| `stop` | Halts matching trains for a dwell time (a station platform). |
+| `stop` | Halts matching trains (a station platform): a dwell pause, or a per-type **timetable** (§12). |
 | `signal` | A **main** block signal (green when the block ahead is clear, red when taken). |
 | `distant` | A repeater placed before a main so a train can roll through on green. |
 
@@ -127,6 +127,8 @@ The pop-up adapts to the tile kind. Common controls:
 - **Distant signals (toggle each way)** — add/remove distant repeaters.
 - **Remove train** — appears when a train sits on the tile; deletes just that
   train without erasing the track.
+- **Dwell seconds / Timetable** — for stops: the fallback pause length, and the
+  per-type departure schedule (see §8 and §12).
 - **Name** — for stops/switches/signals (see §9).
 - **Apply** / **Delete**.
 
@@ -191,11 +193,14 @@ Getting the merge backwards derails through traffic.
 
 ### Stops
 
-A **stop** halts a train heading out its facing direction for a **dwell** time
-(seconds, configurable), then releases it — a station platform. A stop has a
-**type filter** (a set of ids): an empty set stops **any** train; otherwise it
-only stops trains whose type is in the set (others pass straight through). The
-platform bar is drawn alongside the stopped train.
+A **stop** halts a train heading out its facing direction, then releases it — a
+station platform. A stop has a **type filter** (a set of ids): an empty set stops
+**any** train; otherwise it only stops trains whose type is in the set (others
+pass straight through). The platform bar is drawn alongside the stopped train.
+
+How long a train is held depends on whether the stop has a **timetable** for that
+train's type (see §12): with a timetable, the train waits for its next scheduled
+slot; without one, it pauses for the configured **dwell** time (seconds) and goes.
 
 ### Caution track
 
@@ -283,13 +288,82 @@ Nothing built on an old save breaks.
 
 ---
 
-## 12. Roadmap
+## 12. Timetables and the sim clock
+
+### The sim clock
+
+The simulation runs a **clock**, shown as `mm:ss` in the status line. It advances
+one frame per simulation step (60 frames = one sim-second) and **pauses with the
+simulation** (the Step button advances it one frame). Timetables are scheduled
+against this clock; it resets to `00:00` when a layout is loaded.
+
+### Timetables
+
+Beyond the simple dwell, a stop can carry a **timetable for each train type that
+stops there**. A timetable entry has:
+
+- a **recurrence period** — in seconds (the schedule repeats every period); and
+- a list of **departure times** — seconds **within** the period at which a train
+  of that type is allowed to leave.
+
+**Example.** A stop "Foo City 2E" (the eastbound departure from platform 2) gives
+train type *Express* a period of `60` and departure times `10, 50`. The clock
+then lets an *Express* depart at each minute's `:10` and `:50`.
+
+**Semantics.**
+
+- When a train docks at a timetabled stop, it is held until the **next scheduled
+  slot at or after it arrived**, then released (still subject to the normal
+  signal/occupancy checks ahead). Arriving *after* a slot just means it catches
+  the next slot — that still counts as on time.
+- A train that is **held past its slot** (e.g. a red signal ahead) and finally
+  leaves late is reported as **delayed** (§13).
+- A train held right through a **whole period** without leaving has **missed**
+  that departure entirely — reported as an alert (§13) — and is re-targeted at
+  the following slot.
+- A type with **no** timetable entry at this stop falls back to the **dwell**
+  pause. Leave a type's period/times blank to mean "just dwell".
+
+**Editing.** Right-click a stop → the **Timetable** section shows one row per
+served type (the stop's filter types, or every type when the filter is "any"),
+each with a **period (s)** field and a **departure times (s)** field (comma- or
+space-separated). Timetables are saved inside the tile.
+
+> **Reversing is *not* a timetable feature.** A train changing direction at a
+> terminal is a **shunting** manoeuvre for the future station-master / shunting
+> AIs (§14), not something a stop's timetable does. Timetables only schedule
+> *departures*.
+
+---
+
+## 13. Notifications
+
+A scrolling **notification window** sits at the bottom-left of the map
+(collapsible via the header arrow; **Clear** empties it). Each line is stamped
+with the sim-clock time and coloured by severity:
+
+| Level | Colour | Fires when |
+|-------|--------|------------|
+| **info** | green | a train departs a timetabled stop **on time**; also a plain "departed" line when leaving a **named** (but un-timetabled) stop. |
+| **warning** | orange | a train departs a timetabled stop **late** (held past its slot beyond a one-second grace) — the line shows the delay in seconds. |
+| **alert** | red | a **collision**, or a **missed departure** (a train held at a timetabled stop through a whole schedule period). |
+
+Departures from **unnamed, un-timetabled** stops are silent, so plain
+mechanical dwell points don't flood the log. The window keeps the most recent
+200 lines.
+
+---
+
+## 14. Roadmap
 
 Done so far in V2: one-click block boundary, remove-train-by-right-click, train
-types by id, multi-colour filters, stations + element naming, this document.
+types by id, multi-colour filters, stations + element naming, **timetables + the
+sim clock**, the **notification window**, and this document.
 
-Still planned (see `V2_FEATURES.md`): **timetables** (named stops, per-type
-departure schedules, reversing stops), and **local AI station masters** (a clean
+Still planned (see `V2_FEATURES.md`): **local AI station masters** (a clean
 state/action interface a scripted or LLM-driven master can drive, with the
-interlocking still enforcing safety). Speculative V3+: night/day timetables,
-a graphical timetable editor, shunting, and per-train driver AIs.
+interlocking still enforcing safety) — **train reversal / shunting lives here**,
+not in the timetable. A small **UX TODO** is also open: fold station placement
+into a right-click pop-up instead of its own tool/palette. Speculative V3+:
+night/day timetables, a graphical timetable editor, shunting, and per-train
+driver AIs.

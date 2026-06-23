@@ -201,8 +201,39 @@
     border-radius:8px;
     box-shadow:0 16px 40px #0008;
   }
-  #contextMenu{min-width:250px;padding:12px;display:none;gap:10px}
+  #contextMenu{min-width:250px;max-width:270px;max-height:calc(100vh - 24px);overflow:auto;padding:12px;display:none;gap:10px}
   #contextMenu.open{display:grid}
+  .tt-set{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+  .tt-row{display:grid;gap:5px;padding:5px 6px;border:1px solid #232c36;border-radius:6px}
+  .tt-head{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px}
+  .tt-dot{width:10px;height:10px;border-radius:50%;border:1px solid #0006;flex:0 0 auto}
+  .tt-inputs{display:flex;gap:5px}
+  .tt-period{width:84px;flex:0 0 auto}
+  .tt-times{flex:1 1 auto;min-width:0}
+  #notifyPanel{
+    position:absolute;left:12px;bottom:12px;z-index:4;
+    width:min(340px,calc(100% - 24px));
+    background:#0f151bf2;
+    border:1px solid #2b3742;border-radius:9px;
+    box-shadow:0 12px 32px #0008;
+    display:flex;flex-direction:column;overflow:hidden;font-size:12px;
+  }
+  #notifyHead{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:6px 8px 6px 11px;border-bottom:1px solid #2b3742;
+    color:var(--muted);font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:11px;
+  }
+  #notifyHead .row{flex:0 0 auto;gap:6px}
+  #notifyHead button{min-height:24px;flex:0 0 auto;padding:2px 9px;font-size:11px;text-align:center}
+  #notifyLog{padding:6px 8px;overflow-y:auto;max-height:34vh;display:flex;flex-direction:column;gap:3px}
+  #notifyPanel.collapsed #notifyLog{display:none}
+  #notifyPanel.collapsed{width:min(220px,calc(100% - 24px))}
+  .note{display:flex;gap:8px;padding:3px 7px;border-radius:5px;border-left:3px solid var(--green);background:#141b22}
+  .note-time{color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;flex:0 0 auto}
+  .note-text{min-width:0;word-break:break-word}
+  .note-info{border-left-color:var(--green)}
+  .note-warn{border-left-color:#ff9f1c;background:#211a0f}
+  .note-alert{border-left-color:var(--red);background:#241318}
   #contextMenu h2,#ioPanel h2{font-size:14px;margin:0}
   .field{display:grid;gap:5px}
   .field span{color:var(--muted);font-size:12px}
@@ -311,6 +342,16 @@
         <button id="ioClose">Close</button>
       </div>
     </section>
+    <section id="notifyPanel" aria-label="Notifications">
+      <div id="notifyHead">
+        <span>Notifications</span>
+        <div class="row">
+          <button id="notifyClear" type="button" title="Clear the log">Clear</button>
+          <button id="notifyToggle" type="button" title="Collapse / expand">▾</button>
+        </div>
+      </div>
+      <div id="notifyLog"></div>
+    </section>
   </main>
 </div>
 <script>
@@ -323,6 +364,8 @@
   const contextMenu = document.getElementById("contextMenu");
   const stats = document.getElementById("stats");
   const hint = document.getElementById("hint");
+  const notifyPanel = document.getElementById("notifyPanel");
+  const notifyLog = document.getElementById("notifyLog");
 
   // A layout has a list of train *types*. A type is identified by a numeric id
   // (ids start at 1); its colour and name are display-only. Spawns, stop filters,
@@ -375,6 +418,11 @@
   const SPAWN_TICK_FRAMES = 14;
   const FRAMES_PER_SECOND = 60;
   const DEFAULT_DWELL_SECONDS = 2;
+  // A timetabled departure within this many seconds of its scheduled slot still counts as
+  // "on time"; later than that is reported as a delay. (Absorbs frame granularity and the
+  // brief signal-reaction pause so a punctual train is not flagged late.)
+  const ONTIME_GRACE_SECONDS = 1.0;
+  const ONTIME_GRACE_FRAMES = ONTIME_GRACE_SECONDS * FRAMES_PER_SECOND;
   const STOP_BROWN = "#8b5a2b";
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
@@ -468,6 +516,7 @@
     nextStationId: 1,
     tick: 0,
     frame: 0,
+    simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second); drives timetables
     paused: false,
     selectedTool: "track",
     trainTypes: defaultTrainTypes(),
@@ -1225,7 +1274,7 @@
     drawElementNames();
     drawStationLabels();
     drawTrains();
-    stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
+    stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
   }
 
@@ -1495,9 +1544,11 @@
   }
   function tileIsCaution(x,y){ const t = getTile(x,y); return !!(t && t.caution); }
   function crashTrains(train, x, y){
+    const wasCrashed = train.crashed;
     train.crashed = true;
     for (const o of state.trains) if (o.id !== train.id && trainOccupies(o,x,y)) o.crashed = true;
     state.message = "CRASH — erase the trains to clear it";
+    if (!wasCrashed) notify("alert", `COLLISION at ${placeLabel(x,y)} — ${trainDesc(train)} hit another train`);
   }
 
   function trainOccupies(train,x,y){
@@ -1513,7 +1564,8 @@
     const ex = exitFor(tile, from, train.type);
     if (ex == null) return false;
     if (tile.kind === "stop" && ex === tile.dir && filterMatches(tile.filter, train.type)){
-      if (train.stopKey !== key(x,y)) return false; // still owes a dwell here
+      if (train.stopKey !== key(x,y)) return false;          // hasn't docked yet
+      if (state.simFrame < train.releaseFrame) return false; // still holding (dwell or timetable slot)
     }
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(x,y,ex);
@@ -1555,6 +1607,95 @@
     return true;
   }
 
+  // ---- Sim clock, timetables and notifications -------------------------------------
+  // The sim advances one simFrame per simStep (60 = one sim-second). Timetables and the
+  // notification clock are expressed in these frames.
+  function formatClock(frame){
+    const s = Math.max(0, Math.floor(frame / FRAMES_PER_SECOND));
+    const m = Math.floor(s / 60);
+    return `${String(m).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
+  }
+  // A human label for a cell: "<station> <element-name>" when known, else its coordinates.
+  function placeLabel(x,y){
+    const t = getTile(x,y);
+    const st = stationContaining(x,y);
+    const parts = [];
+    if (st) parts.push(st.name);
+    if (t && t.name) parts.push(t.name);
+    return parts.length ? parts.join(" ") : `${x},${y}`;
+  }
+  function trainDesc(train){
+    const t = trainTypeById(train.type);
+    const nm = t && t.name ? t.name : `type ${train.type}`;
+    return `Train ${train.id} (${nm})`;
+  }
+  // Push a line into the scrolling notification window. level: info | warn | alert.
+  function notify(level, text){
+    if (!notifyLog) return;
+    const row = document.createElement("div");
+    row.className = "note note-" + level;
+    row.innerHTML = `<span class="note-time">${formatClock(state.simFrame)}</span><span class="note-text">${escapeHtml(text)}</span>`;
+    notifyLog.appendChild(row);
+    while (notifyLog.children.length > 200) notifyLog.removeChild(notifyLog.firstChild);
+    notifyLog.scrollTop = notifyLog.scrollHeight;
+  }
+  // The active timetable for a train type at a stop, or null (→ fall back to plain dwell).
+  // {period} = recurrence in seconds; {times} = departure offsets (seconds) within a period.
+  function stopTimetableFor(tile, typeId){
+    const tt = tile.timetable && tile.timetable[typeId];
+    if (!tt) return null;
+    const period = Number(tt.period);
+    const times = Array.isArray(tt.times) ? tt.times.map(Number).filter(Number.isFinite) : [];
+    if (!(period > 0) || !times.length) return null;
+    return {period, times};
+  }
+  // Earliest scheduled departure frame at or after arriveFrame, given the recurrence.
+  function nextSlotFrame(arriveFrame, period, times){
+    const periodFrames = period * FRAMES_PER_SECOND;
+    const cycleStart = Math.floor(arriveFrame / periodFrames) * periodFrames;
+    let best = Infinity;
+    for (const t of times){
+      const off = (((t % period) + period) % period) * FRAMES_PER_SECOND;
+      let cand = cycleStart + off;
+      if (cand < arriveFrame) cand += periodFrames;
+      if (cand < best) best = cand;
+    }
+    return best === Infinity ? arriveFrame : best;
+  }
+  // Called the first frame a train docks at a stop it must service: records when it may
+  // leave (a timetable slot, or arrival + dwell) and the slot it is held against.
+  function registerStopArrival(train, tile){
+    train.stopKey = key(train.x, train.y);
+    const tt = stopTimetableFor(tile, train.type);
+    if (tt){
+      train.timetabled = true;
+      train.periodFrames = tt.period * FRAMES_PER_SECOND;
+      train.schedDepartFrame = nextSlotFrame(state.simFrame, tt.period, tt.times);
+      train.releaseFrame = train.schedDepartFrame;
+    } else {
+      train.timetabled = false;
+      train.periodFrames = 0;
+      train.schedDepartFrame = state.simFrame;
+      train.releaseFrame = state.simFrame + Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
+    }
+  }
+  // Called when a train actually pulls away from a stop it serviced: classify on time vs
+  // delayed for timetabled stops; a plain departure for other named stops; silent otherwise.
+  function notifyDeparture(train, tile, x, y){
+    const label = placeLabel(x,y);
+    const who = trainDesc(train);
+    if (train.timetabled){
+      const delayFrames = state.simFrame - train.schedDepartFrame;
+      if (delayFrames > ONTIME_GRACE_FRAMES){
+        notify("warn", `${who} departed ${label} ${Math.round(delayFrames / FRAMES_PER_SECOND)}s late`);
+      } else {
+        notify("info", `${who} departed ${label} on time`);
+      }
+    } else if (tile.name){
+      notify("info", `${who} departed ${label}`);
+    }
+  }
+
   function stopDwellSeconds(tile){
     if (tile.dwellSeconds != null){
       const seconds = Number(tile.dwellSeconds);
@@ -1578,11 +1719,19 @@
     if (tile.kind === "stop" && ex === tile.dir && filterMatches(tile.filter, train.type)){
       const stopKey = key(train.x,train.y);
       if (train.stopKey !== stopKey){
-        train.wait = Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
-        train.stopKey = stopKey;
+        registerStopArrival(train, tile);
         train.speed = 0;
         return;
       }
+      if (train.timetabled){
+        // Held past a whole schedule period without leaving → that departure is missed.
+        while (state.simFrame >= train.schedDepartFrame + train.periodFrames){
+          notify("alert", `MISSED departure: ${trainDesc(train)} at ${placeLabel(train.x,train.y)} (was due ${formatClock(train.schedDepartFrame)})`);
+          train.schedDepartFrame += train.periodFrames;
+          train.releaseFrame = train.schedDepartFrame;
+        }
+      }
+      if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
     }
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(train.x, train.y, ex);
@@ -1604,6 +1753,7 @@
       crashTrains(train, nx, ny);                    // normal track: meeting another train is a crash
       train.speed = 0; return;
     }
+    if (train.stopKey === key(train.x, train.y) && tile.kind === "stop") notifyDeparture(train, tile, train.x, train.y);
     delete train.stopKey;
     train.reactedMain = null; // leaving this tile; the next main needs its own reaction
     train.prevX = train.x;
@@ -1636,6 +1786,7 @@
   }
 
   function simStep(){
+    state.simFrame++;
     spawnTrains();
     updateSignals();
     for (const train of state.trains) moveTrain(train);
@@ -1849,6 +2000,27 @@
       `<label class="chip" style="--c:${t.color}"><input type="checkbox" name="${name}" value="${t.id}" ${set.includes(t.id) ? "checked" : ""}><span class="dot"></span>${typeOptLabel(t)}</label>`
     ).join("") + `</div>`;
   }
+  // Per-type timetable editor for a stop pop-up. One row per served type (filter set, or
+  // every type when the filter is "any"): a recurrence period and the departure offsets.
+  // Leaving a row blank means that type just dwells (no schedule).
+  function timetableEditor(tile){
+    const served = filterIds(tile.filter);
+    const ids = served.length ? served : state.trainTypes.map(t => t.id);
+    const tt = tile.timetable || {};
+    let rows = "";
+    for (const id of ids){
+      const t = trainTypeById(id); if (!t) continue;
+      const e = tt[id] || {};
+      const period = e.period != null ? e.period : "";
+      const times = Array.isArray(e.times) ? e.times.join(", ") : "";
+      rows += `<div class="tt-row"><div class="tt-head"><span class="tt-dot" style="background:${t.color}"></span>${typeOptLabel(t)}</div>` +
+        `<div class="tt-inputs">` +
+        `<input class="tt-period" name="tt_period_${id}" type="number" min="0" step="1" placeholder="period s" value="${period}">` +
+        `<input class="tt-times" name="tt_times_${id}" type="text" placeholder="times s, e.g. 10, 50" value="${escapeHtml(times)}">` +
+        `</div></div>`;
+    }
+    return `<div class="field"><span>Timetable — recurrence period &amp; departure times (s within the period), per type</span><div class="tt-set">${rows}</div></div>`;
+  }
   const DIR_ARROWS = ["↑","↗","→","↘","↓","↙","←","↖"]; // N NE E SE S SW W NW
   function dirArrow(value){ const a = DIR_ARROWS[Number(value)]; return a || String(value); }
   function dirOptions(value){
@@ -1905,7 +2077,8 @@
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<div class="field"><span>Type filter (none = any)</span>${filterCheckboxes("filter", tile.filter)}</div>`;
-      body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
+      body += `<label class="field"><span>Dwell seconds (used when no timetable applies)</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
+      body += timetableEditor(tile);
     }
     if (tile.kind === "switch"){
       const filters = tile.filters || {};
@@ -2010,7 +2183,19 @@
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
     if (data.get("type")) tile.type = Number(data.get("type"));
     if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) tile.name = v; else delete tile.name; }
-    if (tile.kind === "stop") tile.filter = data.getAll("filter").map(Number);
+    if (tile.kind === "stop"){
+      tile.filter = data.getAll("filter").map(Number);
+      const tt = {};
+      for (const t of state.trainTypes){
+        const p = data.get(`tt_period_${t.id}`);
+        const tm = data.get(`tt_times_${t.id}`);
+        if (p == null && tm == null) continue; // type not shown in this pop-up
+        const period = Number(p);
+        const times = String(tm || "").split(/[\s,]+/).map(Number).filter(Number.isFinite);
+        if (period > 0 && times.length) tt[t.id] = {period, times};
+      }
+      if (Object.keys(tt).length) tile.timetable = tt; else delete tile.timetable;
+    }
     if (data.get("dwellSeconds")){
       tile.dwellSeconds = Number(data.get("dwellSeconds"));
       delete tile.dwell;
@@ -2240,6 +2425,11 @@
     });
     document.getElementById("exportBtn").addEventListener("click", () => openIO("export"));
     document.getElementById("importBtn").addEventListener("click", () => openIO("import"));
+    document.getElementById("notifyClear").addEventListener("click", () => { notifyLog.innerHTML = ""; });
+    document.getElementById("notifyToggle").addEventListener("click", () => {
+      const collapsed = notifyPanel.classList.toggle("collapsed");
+      document.getElementById("notifyToggle").textContent = collapsed ? "▸" : "▾";
+    });
   }
 
   const ioPanel = document.getElementById("ioPanel");
@@ -2283,7 +2473,19 @@
       tile.type = LEGACY_COLOR_IDS[tile.color] || 1;
       delete tile.color;
     }
-    if (tile.kind === "stop") tile.filter = filterIds(tile.filter);
+    if (tile.kind === "stop"){
+      tile.filter = filterIds(tile.filter);
+      if (tile.timetable){
+        const clean = {};
+        for (const k in tile.timetable){
+          const e = tile.timetable[k];
+          const period = Number(e && e.period);
+          const times = Array.isArray(e && e.times) ? e.times.map(Number).filter(Number.isFinite) : [];
+          if (period > 0 && times.length) clean[k] = {period, times};
+        }
+        if (Object.keys(clean).length) tile.timetable = clean; else delete tile.timetable;
+      }
+    }
     if (tile.kind === "switch" && tile.filters){
       for (const k in tile.filters) tile.filters[k] = filterIds(tile.filters[k]);
     }
@@ -2309,6 +2511,8 @@
     state.nextTrainId = 1;
     state.tick = 0;
     state.frame = 0;
+    state.simFrame = 0;
+    if (notifyLog) notifyLog.innerHTML = "";
     if (data.view) state.view = {...state.view, ...data.view};
     refreshColorUI();
     refreshStationsUI();
@@ -2362,6 +2566,7 @@
   loadBrowserSave();
   updateSignals();
   resize();
+  notify("info", "Simulation ready — departures, delays and collisions are reported here.");
   animation();
 })();
 </script>

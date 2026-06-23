@@ -41,20 +41,35 @@ These are the things to actually build for V2. More speculative ideas
 - **Documentation.** Wrote `DOCS.md`, an all-encompassing explanation of every
   aspect of the game. Keep it up to date with future changes.
 
+### Phase 3 — done
+- **Timetables.** A stop can carry a **timetable for each train type that stops
+  there**. A timetable entry is a **recurrence period** (in seconds) plus a list
+  of **departure times** (seconds within the period). Example: a stop "Foo City
+  2E" can give train type *Express* a period of 60 s and departure times `10, 50`
+  so it lets that type depart at each minute's `:10` and `:50`. Stops with no
+  timetable for a train's type fall back to the simple **dwell-seconds** pause.
+  - A **sim clock** (`state.simFrame`, 60 frames = one sim-second, shown in the
+    status line as `mm:ss`) advances one frame per sim step and pauses with the
+    simulation. Timetables are expressed against this clock.
+  - When a train docks at a timetabled stop it is held until its **next
+    scheduled slot at or after arrival**, then released (subject to the normal
+    signal/occupancy checks). Arriving after a slot simply means catching the
+    next slot — that still counts as on time.
+  - Editing: the stop right-click pop-up has a **Timetable** section with one row
+    per served type (period + departure-times text field). Blank = simple dwell.
+    Timetables are saved/loaded inside the tile (still save format v2; additive,
+    so older saves load unchanged) and sanitised on load.
+- **Notification system.** A scrolling **chat-style notification window**
+  (bottom-left of the map, collapsible, with a Clear button) reports operational
+  events with the sim-clock time:
+  - **info** (green) — a train departs a stop **on time** (and a plain
+    "departed" line for departures from a *named* but un-timetabled stop).
+  - **warning** (orange) — a train departs a timetabled stop **late** (held past
+    its slot by more than a one-second grace), with the delay in seconds.
+  - **alert** (red) — a **collision**, or a **missed departure** (a train held at
+    a timetabled stop right through a whole schedule period without leaving).
+
 ## To do for V2
-
-### Timetables
-- ~~Stops may have names.~~ (done in Phase 2 — element naming)
-
-- Stops may have a timetable for each train type which stops there. The
-  timetable has a recurrence (modulo how many minutes or seconds) and
-  departure times (within that modulus, at what times it should let a train
-  depart). For example, a stop can be called "Foo City 2E" for the Eastward
-  departure from platform 2 of Foo City, and for a given train type it could
-  have a modulus of 1 minute, and departure times 10s and 50s to let a train
-  go at each minute :10 and :50.
-
-- Stops might cause a train of some type to reverse there.
 
 ### Local AI station masters
 A locally running model (e.g. via ollama) can act as a **station master** for a
@@ -69,13 +84,38 @@ station:
 - The game exposes a clean state/action interface (read positions/aspects/
   switch states + timetable; set switch positions, set signal aspects) that the
   AI drives. Actions still respect the interlocking/safety rules.
+- **Reversals belong here, not in the timetable.** Making a train reverse at a
+  stop (head ↔ tail, run-around, change of direction) is a *shunting* operation
+  driven by the **station-master / shunting-engineer / train-driver AIs**, not a
+  property of a stop's timetable. The timetable only schedules *departures*.
+
+### UX TODO — fold station placement into the right-click pop-up
+The sponsor would like station placement moved **out of its own palette/tool**
+and **into a right-click pop-up**, so stations are created the same way
+everything else is configured.
+
+Open design question (a station is a *rectangle*, not a single tile, so a tile's
+right-click menu can't define one directly). Recommended approach:
+- **Retire the dedicated "Station" tool.** Keep the **Select** tool's rubber-band
+  rectangle as the way to mark out an area, then add a **"Create station from
+  selection"** action to a right-click pop-up shown while a selection exists
+  (and offer rename/remove of the station the clicked tile falls in). This keeps
+  the geometric (rectangular) membership model intact while removing the separate
+  palette, matching the intent of "configure it from the right-click menu."
+- Alternative (bigger change): switch from rectangular regions to **per-tile
+  station membership** — right-click a tile → "Add to station X / new station".
+  More flexible shapes, but it abandons the simple rect model and needs new
+  rendering and a station picker. Decide before building.
+
+Deferred deliberately (the sponsor offered "do this now or mark as a todo"); the
+rectangle-vs-per-tile decision is worth a quick confirmation before implementing.
 
 ## Later / more speculative (V3+)
 
 ### Night and day cycle in timetables
 It would be nice to be able to store trains for night/off-peak times and let
 them come in for the day/peak. This would require stops which
-stop/reverse/release trains on a more complicated schedule than just modulo a
+stop/release trains on a more complicated schedule than just modulo a
 time interval.
 
 This needs to be worked out for V3.
@@ -89,7 +129,10 @@ editing the timetable in a graphical format.
 This needs to be worked out for V3.
 
 ### Shunting
-This should be figured out for V3 or V4.
+This should be figured out for V3 or V4. **Train reversal** (a train changing
+direction at a terminal — decouple, run the loco round, recouple at the other
+end) lives here: it is a shunting manoeuvre orchestrated by the station-master /
+shunting-engineer AIs, not a timetable feature.
 
 ### Train driver AIs
 Once shunting exists, individual trains could have **driver AIs** that receive
