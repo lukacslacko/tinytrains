@@ -155,7 +155,7 @@
   }
   button{cursor:pointer;text-align:left}
   button:disabled{opacity:.4;cursor:not-allowed}
-  #contextMenu button[data-action]{text-align:center}
+  #contextMenu button[data-action]{text-align:center;font-size:16px;line-height:1}
   button:hover,select:hover{border-color:#4a5664}
   button.active{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent) inset}
   button.danger.active{border-color:var(--danger)}
@@ -1663,8 +1663,10 @@
     const any = allowAny ? `<option value="">Any color</option>` : "";
     return any + COLOR_NAMES.map(c => `<option value="${c}" ${value === c ? "selected" : ""}>${c}</option>`).join("");
   }
+  const DIR_ARROWS = ["↑","↗","→","↘","↓","↙","←","↖"]; // N NE E SE S SW W NW
+  function dirArrow(value){ const a = DIR_ARROWS[Number(value)]; return a || String(value); }
   function dirOptions(value){
-    return DIRS.map((d,i) => `<option value="${i}" ${Number(value) === i ? "selected" : ""}>${d.name}</option>`).join("");
+    return DIRS.map((d,i) => `<option value="${i}" ${Number(value) === i ? "selected" : ""}>${dirArrow(i)}</option>`).join("");
   }
   function dirName(value){ return DIRS[Number(value)] ? DIRS[Number(value)].name : String(value); }
   function shapeOptions(route){
@@ -1681,7 +1683,7 @@
     }
     if (tile.kind === "track"){
       body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
-        tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${DIRS[d].name}</button>`).join("") +
+        tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
         `</div></div>`;
     }
     if (tile.kind === "track" || tile.kind === "signal"){
@@ -1689,7 +1691,7 @@
       body += `<div class="field"><span>Block signals (toggle each way)</span><div class="row">` +
         tile.route.map(d => {
           const on = sig.includes(d);
-          return `<button type="button" data-action="${on ? "unsignal" : "signal"}" data-dir="${d}">${on ? "−" : "+"} ${DIRS[d].name}</button>`;
+          return `<button type="button" data-action="${on ? "unsignal" : "signal"}" data-dir="${d}">${on ? "−" : "+"} ${dirArrow(d)}</button>`;
         }).join("") +
         `</div></div>`;
     }
@@ -1698,7 +1700,7 @@
       body += `<div class="field"><span>Distant signals (toggle each way)</span><div class="row">` +
         tile.route.map(d => {
           const on = dis.includes(d);
-          return `<button type="button" data-action="${on ? "undistant" : "distant"}" data-dir="${d}">${on ? "−" : "+"} ${DIRS[d].name}</button>`;
+          return `<button type="button" data-action="${on ? "undistant" : "distant"}" data-dir="${d}">${on ? "−" : "+"} ${dirArrow(d)}</button>`;
         }).join("") +
         `</div></div>`;
     }
@@ -1713,8 +1715,8 @@
     }
     if (tile.kind === "switch"){
       const filters = tile.filters || {};
-      body += `<label class="field"><span>${dirName(tile.branches[0])} filter</span><select name="filter0">${colorOptions(filters[String(tile.branches[0])],true)}</select></label>`;
-      body += `<label class="field"><span>${dirName(tile.branches[1])} filter</span><select name="filter1">${colorOptions(filters[String(tile.branches[1])],true)}</select></label>`;
+      body += `<label class="field"><span>${dirArrow(tile.branches[0])} filter</span><select name="filter0">${colorOptions(filters[String(tile.branches[0])],true)}</select></label>`;
+      body += `<label class="field"><span>${dirArrow(tile.branches[1])} filter</span><select name="filter1">${colorOptions(filters[String(tile.branches[1])],true)}</select></label>`;
     }
     body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
     contextMenu.innerHTML = body;
