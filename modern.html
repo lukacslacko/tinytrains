@@ -325,6 +325,11 @@
   // On caution tiles trains crawl, ready to stop, and meet others safely. On normal
   // tiles meeting another train is a crash.
   const CAUTION_SPEED = 0.008;
+  // Multi-part trains: an engine plus cars, each a length in tile units, joined by a small
+  // gap. Bodies trail the head along its path; block occupancy follows the whole body.
+  const DEFAULT_CARS = [0.6, 0.5, 0.5];
+  const CAR_GAP = 0.12;
+  const CAR_WIDTH = 0.42;
   // Short pause after a held train's main signal turns green, so the clear is visible
   // before the train pulls away.
   const SIGNAL_REACTION_SECONDS = 0.5;
@@ -869,28 +874,142 @@
     ctx.restore();
   }
 
+  // ---- Multi-part train bodies ------------------------------------------------------
+  function centerW(x,y){ return {x:x+0.5, y:y+0.5}; }
+  function endpointW(x,y,d){ return {x:x+DIRS[d].px, y:y+DIRS[d].py}; }
+  function lerpW(a,b,t){ return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t}; }
+  function headWorld(train){
+    if (!trainMoving(train)) return centerW(train.x, train.y);
+    const start = centerW(train.prevX, train.prevY);
+    const joint = endpointW(train.prevX, train.prevY, train.moveDir);
+    const end = centerW(train.x, train.y);
+    return train.progress < .5 ? lerpW(start, joint, train.progress*2) : lerpW(joint, end, (train.progress-.5)*2);
+  }
+  function trainCars(train){ return train.cars && train.cars.length ? train.cars : DEFAULT_CARS; }
+  function trainTotalLength(train){
+    const cars = trainCars(train);
+    return cars.reduce((a,c)=>a+c,0) + (cars.length-1)*CAR_GAP;
+  }
+  // Prepend the head's world position to the trail and trim it to the body length.
+  function updateTrail(train){
+    if (!train.trail) train.trail = [];
+    const h = headWorld(train);
+    const t0 = train.trail[0];
+    if (!t0 || Math.hypot(h.x-t0.x, h.y-t0.y) > 0.004) train.trail.unshift(h);
+    const keep = trainTotalLength(train) + 0.6;
+    let acc = 0, cut = train.trail.length;
+    for (let i=0; i<train.trail.length-1; i++){
+      acc += Math.hypot(train.trail[i+1].x-train.trail[i].x, train.trail[i+1].y-train.trail[i].y);
+      if (acc > keep){ cut = i+2; break; }
+    }
+    if (cut < train.trail.length) train.trail.length = cut;
+  }
+  function seedTrail(train, dir){
+    // straight back-fill so a freshly spawned train shows its body immediately
+    const h = headWorld(train);
+    const back = DIRS[dir];
+    const n = Math.ceil((trainTotalLength(train)+0.6) / 0.1);
+    train.trail = [];
+    for (let i=0; i<=n; i++) train.trail.push({x:h.x - back.dx*0.1*i, y:h.y - back.dy*0.1*i});
+  }
+  function computeBodyTiles(train){
+    const set = new Set();
+    const trail = train.trail;
+    if (!trail || trail.length < 1){
+      set.add(key(train.x,train.y));
+      if (trainMoving(train)) set.add(key(train.prevX,train.prevY));
+      return set;
+    }
+    const total = trainTotalLength(train);
+    const add = pt => set.add(key(Math.floor(pt.x), Math.floor(pt.y)));
+    add(trail[0]);
+    let acc = 0;
+    for (let i=0; i<trail.length-1 && acc<total; i++){
+      const a = trail[i], b = trail[i+1];
+      const seg = Math.hypot(b.x-a.x, b.y-a.y);
+      const steps = Math.max(1, Math.ceil(seg/0.2));
+      for (let s=1; s<=steps; s++){
+        if (acc + seg*(s/steps) > total) break;
+        add(lerpW(a,b,s/steps));
+      }
+      acc += seg;
+    }
+    return set;
+  }
+  // collect trail points between distances d0..d1 behind the head (inclusive endpoints)
+  function trailSpan(trail, d0, d1){
+    const pts = [];
+    let acc = 0, started = false;
+    const at = dist => { // point at a given distance back
+      let a2 = 0;
+      for (let i=0; i<trail.length-1; i++){
+        const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
+        if (a2 + seg >= dist) return lerpW(trail[i], trail[i+1], seg ? (dist-a2)/seg : 0);
+        a2 += seg;
+      }
+      return trail[trail.length-1];
+    };
+    if (!trail.length) return pts;
+    pts.push(at(d0));
+    for (let i=0; i<trail.length-1; i++){
+      const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
+      if (acc+seg > d0 && acc+seg < d1) pts.push(trail[i+1]);
+      acc += seg;
+      if (acc >= d1) break;
+    }
+    pts.push(at(d1));
+    return pts;
+  }
+
   function drawTrains(){
     const blinkOn = Math.floor(performance.now() / 250) % 2 === 0;
+    const s = tileSize();
     for (const train of state.trains){
-      const c = trainPoint(train);
-      const r = Math.max(6, tileSize() * .16);
-      if (train.crashed){
-        ctx.fillStyle = blinkOn ? "#ff2a2a" : "#2a0606";
-        ctx.beginPath(); ctx.arc(c.x,c.y,r+4,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle = blinkOn ? "#fff" : "#ff2a2a";
-        ctx.lineWidth = Math.max(2, tileSize()*.05);
-        ctx.beginPath(); ctx.arc(c.x,c.y,r+4,0,Math.PI*2); ctx.stroke();
-        continue;
+      const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
+      const cars = trainCars(train);
+      const headColor = train.crashed ? (blinkOn ? "#ff2a2a" : "#2a0606") : COLORS[train.color];
+      let dist = 0;
+      cars.forEach((len, idx) => {
+        const pts = trailSpan(trail, dist, dist+len).map(worldPtToScreen);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        // dark outline then body
+        ctx.strokeStyle = "#06090d";
+        ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
+        strokePolyline(pts);
+        ctx.strokeStyle = train.crashed ? headColor : (idx === 0 ? COLORS[train.color] : "#7c8898");
+        ctx.lineWidth = CAR_WIDTH * s;
+        strokePolyline(pts);
+        if (train.crashed){
+          ctx.strokeStyle = blinkOn ? "#fff" : "#ff2a2a";
+          ctx.lineWidth = Math.max(2, s*.04);
+          strokePolyline(pts);
+        }
+        dist += len + CAR_GAP;
+      });
+      // engine front highlight
+      if (!train.crashed){
+        const hp = worldPtToScreen(trail[0]);
+        ctx.fillStyle = "#fff"; ctx.globalAlpha = .85;
+        ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.06), 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
       }
-      ctx.fillStyle = "#06090d";
-      ctx.beginPath(); ctx.arc(c.x,c.y,r+3,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle = COLORS[train.color];
-      ctx.beginPath(); ctx.arc(c.x,c.y,r,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.globalAlpha = .75;
-      ctx.beginPath(); ctx.arc(c.x-r*.3,c.y-r*.3,r*.28,0,Math.PI*2); ctx.fill();
-      ctx.globalAlpha = 1;
     }
+  }
+  function worldPtToScreen(pt){
+    // pt is in tile units (tile centre = x+0.5). worldToScreen maps tile index to its corner.
+    const s = tileSize();
+    return {x: stage.clientWidth/2 + state.view.x + pt.x*s, y: stage.clientHeight/2 + state.view.y + pt.y*s};
+  }
+  function strokePolyline(pts){
+    if (pts.length < 2){
+      if (pts.length === 1){ ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth/2, 0, Math.PI*2); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); }
+      return;
+    }
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
   }
 
   function drawSelectionOverlay(){
@@ -1134,7 +1253,8 @@
     if (!tiles) return false;
     for (const t of state.trains){
       if (t.id === ignoreId) continue;
-      if (tiles.has(key(t.x,t.y)) || (trainMoving(t) && tiles.has(key(t.prevX,t.prevY)))) return true;
+      const bt = t._tiles || computeBodyTiles(t);
+      for (const tk of bt) if (tiles.has(tk)) return true;
     }
     return false;
   }
@@ -1147,8 +1267,12 @@
     return false;
   }
 
+  // Recomputes blocks and re-derives occupancy from live train bodies every call (and it is
+  // called on every tile edit). Because occupancy is recounted from real positions rather
+  // than a stored counter, changing the signalling never leaves "virtual" trains in a block.
   function updateSignals(){
     const sys = buildSignalSystem();
+    for (const t of state.trains) t._tiles = computeBodyTiles(t);
     // release holds once the train has left the block's protected tiles and entry approach
     for (const t of state.trains){
       if (!t.holds) t.holds = [];
@@ -1217,6 +1341,7 @@
   }
 
   function trainOccupies(train,x,y){
+    if (train._tiles) return train._tiles.has(key(x,y));
     return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
   }
 
@@ -1341,7 +1466,10 @@
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
-      state.trains.push({id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null});
+      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
+      seedTrail(train, tile.dir);
+      train._tiles = computeBodyTiles(train);
+      state.trains.push(train);
       spent.push({x, y, route:cloneRoute(tile.route)});
     }
     for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
@@ -1351,6 +1479,7 @@
     spawnTrains();
     updateSignals();
     for (const train of state.trains) moveTrain(train);
+    for (const train of state.trains) updateTrail(train);
     // Re-evaluate holders/grants against the post-move positions before drawing. Without
     // this, a block that a train just vacated reads as momentarily free for one frame
     // (the waiting train is granted only next frame), flickering every main green.

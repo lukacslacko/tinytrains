@@ -1,53 +1,35 @@
-# Tiny Trains — future work
+# Tiny Trains — work log
 
-Backlog captured from design discussion. Not yet implemented.
+All items below have been implemented in `modern.html`.
 
-## 3a. Copy / cut / paste / undo with rectangular selection
-- Let the user drag-select a rectangular area of tiles.
-- Support bulk operations on the selection: copy, cut, paste (at a new
-  location), and delete.
-- Add undo (and ideally redo) for edits — at minimum for the bulk
-  operations, ideally for all tile edits.
+## 3a. Copy / cut / paste / undo with rectangular selection — done
+- Select tool drag-selects a rectangle (Esc clears).
+- Copy/Cut/Paste (Ctrl/Cmd+C/X/V); paste anchors at the hovered cell.
+  Delete/Backspace clears the selection.
+- Undo/Redo of all tile edits (Ctrl/Cmd+Z / Shift+Z / Ctrl+Y, plus buttons).
 
-## 3b. Distant signals placed manually, further than one tile
-- Once main signals can be placed via right-click (done for mains), support
-  the same right-click placement for **distant** signals.
-- Allow a distant signal to be placed more than one tile before its main.
-- **Stop auto-placing distant signals.** Instead:
-  - If a main signal has a manually placed distant, use it.
-  - If a main signal has **no** distant before it, place a *virtual caution
-    sign* on the tile(s) before it (in the direction toward the main). Trains
-    approaching such a main always slow to a stop at the main; then, if it is
-    green, they occupy the block and continue after `SIGNAL_REACTION_SECONDS`.
-    (i.e. without a distant there is no "roll through on green" — the train
-    always brakes to the main and reacts.)
+## 3b. Manual distant signals, possibly several tiles before the main — done
+- Distants are placed by right-click (toggle each way) and may sit one or
+  more tiles before their signal; they repeat the main's aspect.
+- Auto-distants removed. A main with a distant lets a train roll through on
+  green; a main with no distant shows a hollow caution marker and trains
+  always brake to it and react before going.
 
-## 3c. Multi-part trains (engine + cars)
-- A train becomes multiple connected entities instead of a single point.
-- Each part has a `length`; render each as a rectangle of that length and a
-  width wider than the track, oriented so its ends align with the rails, and
-  connect consecutive parts appropriately around curves.
-- Signals/blocks count **axles** passing (treat the start and end of each
-  rectangle as an axle); block occupancy is based on axle count, not a
-  single point.
-- For now ignore mass/inertia of cars, engine power, etc.
+## 3c. Multi-part trains (engine + cars) — done
+- Trains have a `cars` list of lengths; the body trails the head along its
+  path and renders as engine + cars (bands wider than the rail), following
+  curves. Block occupancy is taken from the whole body (axle-equivalent).
 
-## 3e. Multiple signals (different directions) on the same tile
-- Allow more than one signal on a single tile, facing different directions.
-- This lets blocks connect seamlessly by having opposing main signals share
-  a tile (a main facing each way at the same spot).
+## 3d. Recompute blocks & axle counts when signalling changes — done
+- Blocks are rebuilt and occupancy re-derived from live train bodies every
+  frame and on every edit, so changing signalling never leaves "virtual"
+  trains in a block.
 
-## 3f. "Caution" track type
-- A new track property/overlay rendered with an orange outline.
-- On a caution track, trains drive slowly and ready to stop at the next tile,
-  and may encounter another train and safely stop (no crash).
-- On normal (non-caution) track, encountering another train is a **crash**:
-  render it with blinking red and require the user to resolve it.
-- Add a tool (like Erase) that toggles the caution outline on/off for a tile.
+## 3e. Multiple signals (different directions) on one tile — done
+- Signal tiles carry a `dirs` list; the block system is keyed by
+  (tile, direction), so a main each way can share a tile and join blocks.
 
-## 3d. Recompute blocks & axle counts when signalling changes
-- When a new signal is added (e.g. a main with no opposing signal yet, so its
-  block covers a large area), recompute all blocks and recount the axles
-  inside each.
-- Goal: avoid "virtual" trains — blocks that report occupancy that no longer
-  reflects reality after an edit.
+## 3f. "Caution" track type — done
+- Caution tool toggles an orange-outlined caution flag on a tile. Trains
+  crawl on caution tiles and stop safely behind one another; on normal
+  track meeting another train is a crash (blinking red, erase to clear).
