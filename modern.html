@@ -331,6 +331,11 @@
           <button id="exportBtn">Export JSON</button>
           <button id="importBtn">Import JSON</button>
         </div>
+        <div class="row">
+          <select id="presetSelect" title="Replace the layout with a pre-made one">
+            <option value="">Pre-made layouts&hellip;</option>
+          </select>
+        </div>
       </section>
     </div>
     <div class="status">
@@ -2580,6 +2585,1598 @@
       draw();
     }
   });
+
+  // ---- Pre-made layouts (offered in the Save / Load dropdown) ----
+  // Each entry's `data` is a full layout object in the same shape serialize()
+  // emits; selecting one runs it through deserialize(), replacing everything.
+  const PREMADE_LAYOUTS = [
+    {
+      name: "Miskolc",
+      data: {
+        "version": 2,
+        "trainTypes": [
+          {
+            "id": 1,
+            "color": "#f05264",
+            "name": "1",
+            "period": 60
+          },
+          {
+            "id": 2,
+            "color": "#58a8ff",
+            "name": "2",
+            "period": 60
+          }
+        ],
+        "stations": [
+          {
+            "id": 1,
+            "name": "Tiszai",
+            "rect": {
+              "x0": -26,
+              "y0": -4,
+              "x1": -17,
+              "y1": 3
+            }
+          },
+          {
+            "id": 2,
+            "name": "Strand",
+            "rect": {
+              "x0": -15,
+              "y0": -4,
+              "x1": -8,
+              "y1": 3
+            }
+          },
+          {
+            "id": 3,
+            "name": "Marx",
+            "rect": {
+              "x0": -7,
+              "y0": -4,
+              "x1": 6,
+              "y1": 3
+            }
+          },
+          {
+            "id": 4,
+            "name": "Vasgyar",
+            "rect": {
+              "x0": -7,
+              "y0": -8,
+              "x1": 6,
+              "y1": -5
+            }
+          },
+          {
+            "id": 5,
+            "name": "Diosgyor",
+            "rect": {
+              "x0": 7,
+              "y0": -4,
+              "x1": 14,
+              "y1": 3
+            }
+          }
+        ],
+        "tiles": [
+          {
+            "x": -17,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -16,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -15,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -14,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -13,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -12,
+            "y": -1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    10
+                  ]
+                },
+                "2": {
+                  "times": [
+                    30
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -11,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -10,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -17,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -16,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -15,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -14,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -13,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -12,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -11,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -10,
+            "y": 0,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    15
+                  ]
+                },
+                "2": {
+                  "times": [
+                    45
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -18,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": -19,
+            "y": -2,
+            "tile": {
+              "kind": "switch",
+              "stem": 3,
+              "branches": [
+                7,
+                6
+              ],
+              "defaultBranch": 7,
+              "filters": {
+                "6": [
+                  2
+                ],
+                "7": [
+                  1
+                ]
+              },
+              "caution": true
+            }
+          },
+          {
+            "x": -18,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                2,
+                5
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -19,
+            "y": 1,
+            "tile": {
+              "kind": "switch",
+              "stem": 1,
+              "branches": [
+                5,
+                6
+              ],
+              "defaultBranch": 5,
+              "filters": {
+                "5": [],
+                "6": []
+              },
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": 1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [
+                2
+              ],
+              "dwellSeconds": 2,
+              "caution": true,
+              "timetable": {
+                "2": {
+                  "times": [
+                    30
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -21,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": 2,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "caution": true,
+              "timetable": {
+                "1": {
+                  "times": [
+                    0
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -22,
+            "y": 2,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "type": 1,
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": 1,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "type": 2,
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -9,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -8,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2,
+                6
+              ]
+            }
+          },
+          {
+            "x": -7,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -6,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -9,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -8,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -7,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -6,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -5,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -1,
+            "y": 0,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    25
+                  ]
+                },
+                "2": {
+                  "times": [
+                    55
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [
+                  2
+                ],
+                "2": [
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "x": 3,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 2,
+              "branches": [
+                6,
+                5
+              ],
+              "defaultBranch": 6,
+              "filters": {
+                "5": [],
+                "6": [
+                  1,
+                  2
+                ]
+              }
+            }
+          },
+          {
+            "x": 4,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [
+                  2
+                ],
+                "2": [
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "x": -5,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [],
+                "2": []
+              }
+            }
+          },
+          {
+            "x": -4,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": -1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    0
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -1,
+            "y": -1,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "type": 1
+            }
+          },
+          {
+            "x": 0,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 1,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -2,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                5
+              ],
+              "dirs": [
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -3,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -4,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -5,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -4,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -5,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -6,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 4,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -6,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -1,
+            "y": -7,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                2
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "2": {
+                  "times": [
+                    15
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 0,
+            "y": -7,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "type": 2
+            }
+          },
+          {
+            "x": 1,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 3,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          },
+          {
+            "x": 9,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                1
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 9,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": -2,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    45
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 11,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 11,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 13,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ]
+            }
+          },
+          {
+            "x": 14,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": 14,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 13,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          }
+        ],
+        "view": {
+          "x": 186.71111968913888,
+          "y": 25.697164446741127,
+          "zoom": 0.7737384925921285
+        }
+      }
+    }
+  ];
+  (function setupPresetMenu(){
+    const sel = document.getElementById("presetSelect");
+    if (!sel) return;
+    PREMADE_LAYOUTS.forEach((layout, i) => {
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = layout.name;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => {
+      const layout = PREMADE_LAYOUTS[Number(sel.value)];
+      sel.value = ""; // back to the "Pre-made layouts…" placeholder, so it can be picked again
+      if (!layout) return;
+      if (!confirm(`Replace the current layout with the pre-made "${layout.name}"? This cannot be undone.`)) return;
+      try {
+        deserialize(JSON.stringify(layout.data));
+        state.message = `Loaded "${layout.name}"`;
+      } catch (err) {
+        state.message = "Load failed: " + err.message;
+      }
+      draw();
+    });
+  })();
 
   function serialize(){
     return JSON.stringify({
