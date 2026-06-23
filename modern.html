@@ -1708,6 +1708,12 @@
     contextMenu.dataset.x = x;
     contextMenu.dataset.y = y;
     let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
+    const trainsHere = state.trains.filter(t => trainOccupies(t,x,y));
+    if (trainsHere.length){
+      body += `<div class="field"><span>Train${trainsHere.length > 1 ? "s" : ""} here</span><div class="row">` +
+        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? ` (${trainsHere.length})` : ""}</button>` +
+        `</div></div>`;
+    }
     if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "spawn"){
       body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
     }
@@ -1718,11 +1724,13 @@
     }
     if (tile.kind === "track" || tile.kind === "signal"){
       const sig = tile.kind === "signal" ? signalDirs(tile) : [];
+      const allOn = tile.route.length >= 2 && tile.route.every(d => sig.includes(d));
       body += `<div class="field"><span>Block signals (toggle each way)</span><div class="row">` +
         tile.route.map(d => {
           const on = sig.includes(d);
           return `<button type="button" data-action="${on ? "unsignal" : "signal"}" data-dir="${d}">${on ? "−" : "+"} ${dirArrow(d)}</button>`;
         }).join("") +
+        (tile.route.length >= 2 ? `<button type="button" data-action="${allOn ? "unsignalboth" : "signalboth"}" title="Main signals in both route directions at once">${allOn ? "− both" : "+ both"}</button>` : "") +
         `</div></div>`;
     }
     if (tile.kind === "track" || tile.kind === "distant"){
@@ -1805,6 +1813,24 @@
       if (dirs.length) setTile(x,y,{kind:"distant", route, dirs, caution: tile.caution});
       else setTile(x,y,{kind:"track", route, caution: tile.caution});
       state.message = `Removed distant facing ${DIRS[dir].name}`;
+    } else if (action === "signalboth"){
+      pushHistory();
+      const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
+      for (const d of route) if (!dirs.includes(d)) dirs.push(d);
+      setTile(x,y,{kind:"signal", route, dirs, caution: tile.caution});
+      state.message = `Signals both ways`;
+    } else if (action === "unsignalboth"){
+      if (tile.kind !== "signal"){ closeContext(); return; }
+      pushHistory();
+      const dirs = signalDirs(tile).filter(d => !route.includes(d));
+      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, caution: tile.caution});
+      else setTile(x,y,{kind:"track", route, caution: tile.caution});
+      state.message = `Removed signals both ways`;
+    } else if (action === "removetrain"){
+      const before = state.trains.length;
+      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
+      const removed = before - state.trains.length;
+      state.message = removed > 1 ? `Removed ${removed} trains` : (removed ? `Removed train` : `No train here`);
     }
     closeContext();
     updateSignals();
