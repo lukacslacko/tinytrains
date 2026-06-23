@@ -504,6 +504,11 @@
   function readKey(k){ const [x,y] = k.split(",").map(Number); return {x,y}; }
   function opposite(d){ return (d + 4) % 8; }
   function cloneRoute(route){ return route.slice(); }
+  // A signal tile can carry main signals in several directions (e.g. one each way so two
+  // blocks meet on one tile). signalDirs() reads the list, falling back to the legacy
+  // single `dir`. A "main" is identified by tile position plus its direction.
+  function signalDirs(tile){ return tile && tile.dirs ? tile.dirs : (tile && tile.dir != null ? [tile.dir] : []); }
+  function mkMain(x,y,dir){ return `${x},${y},${dir}`; }
   function routesFor(tile){
     if (!tile) return [];
     if (tile.kind === "track") return [tile.route];
@@ -810,9 +815,11 @@
       }
     }
     if (tile.kind === "signal"){
-      const green = state.sys ? mainRenderGreen(key(x,y), state.sys) : false;
-      // base (orthogonal to the track) spans ~half the tile (1.3*scale); set to the right of the track
-      drawTriangle(x,y,tile.dir,green ? "#16a34a" : "#ff2a2a",.385,"#0b0e12",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
+      // one triangle per direction this tile signals, each to the right of its own facing
+      for (const dir of signalDirs(tile)){
+        const green = state.sys ? mainRenderGreen(mkMain(x,y,dir), state.sys) : false;
+        drawTriangle(x,y,dir,green ? "#16a34a" : "#ff2a2a",.385,"#0b0e12",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
+      }
     }
   }
 
@@ -1026,38 +1033,42 @@
   // waits its turn. A train may hold two adjacent blocks while straddling the main between
   // them. buildSignalSystem() recomputes the static topology each tick.
   function buildSignalSystem(){
-    const blockOfMain = new Map();    // mainKey -> blockId
+    const blockOfMain = new Map();    // mainKey "x,y,dir" -> blockId
     const dirOfMain = new Map();      // mainKey -> protected direction
     const distantOfMain = new Map();  // mainKey -> distant tile key (one tile before)
+    const tileOfMain = new Map();     // mainKey -> the signal tile key "x,y"
     const blockTiles = new Map();     // blockId -> Set of tile keys
     const mainsOfBlock = new Map();   // blockId -> [mainKey]
     for (const [k,tile] of state.tiles){
       if (tile.kind !== "signal") continue;
       const {x,y} = readKey(k);
-      const tiles = scanProtectedBlock(x + DIRS[tile.dir].dx, y + DIRS[tile.dir].dy, opposite(tile.dir), null).tiles;
-      const id = [...tiles].sort().join("|");
-      blockOfMain.set(k, id);
-      dirOfMain.set(k, tile.dir);
-      distantOfMain.set(k, key(x - DIRS[tile.dir].dx, y - DIRS[tile.dir].dy));
-      if (!blockTiles.has(id)) blockTiles.set(id, tiles);
-      if (!mainsOfBlock.has(id)) mainsOfBlock.set(id, []);
-      mainsOfBlock.get(id).push(k);
+      for (const dir of signalDirs(tile)){
+        const mk = mkMain(x,y,dir);
+        const tiles = scanProtectedBlock(x + DIRS[dir].dx, y + DIRS[dir].dy, opposite(dir), null).tiles;
+        const id = [...tiles].sort().join("|");
+        blockOfMain.set(mk, id);
+        dirOfMain.set(mk, dir);
+        tileOfMain.set(mk, k);
+        distantOfMain.set(mk, key(x - DIRS[dir].dx, y - DIRS[dir].dy));
+        if (!blockTiles.has(id)) blockTiles.set(id, tiles);
+        if (!mainsOfBlock.has(id)) mainsOfBlock.set(id, []);
+        mainsOfBlock.get(id).push(mk);
+      }
     }
-    return {blockOfMain, dirOfMain, distantOfMain, blockTiles, mainsOfBlock, holder:new Map()};
+    return {blockOfMain, dirOfMain, distantOfMain, tileOfMain, blockTiles, mainsOfBlock, holder:new Map()};
   }
 
-  // The block+main a train is entering: it must be on the main tile itself. Because a move
-  // sets train.x/y to the destination, this fires while the train is visually on the distant
-  // (one tile back), so it reserves the block exactly as it passes the distant signal.
+  // The block+main a train is entering: it is on a signal tile and its exit matches one of
+  // that signal's directions. Because a move sets train.x/y to the destination, this fires
+  // while the train is visually on the distant (one tile back), reserving the block as it
+  // passes the distant.
   function approachInfo(train, sys){
     const tile = getTile(train.x, train.y);
-    if (!tile) return null;
+    if (!tile || tile.kind !== "signal") return null;
     const ex = exitFor(tile, train.from, train.color);
     if (ex == null) return null;
-    const here = key(train.x, train.y);
-    if (tile.kind === "signal" && ex === tile.dir && sys.blockOfMain.has(here)){
-      return {blockId: sys.blockOfMain.get(here), mainKey: here};
-    }
+    const mk = mkMain(train.x, train.y, ex);
+    if (sys.blockOfMain.has(mk)) return {blockId: sys.blockOfMain.get(mk), mainKey: mk};
     return null;
   }
 
@@ -1078,7 +1089,7 @@
     const tiles = sys.blockTiles.get(h.blockId);
     if (!tiles) return false;
     const here = key(train.x, train.y);
-    return tiles.has(here) || here === h.entryMainKey || here === h.entryDistantKey;
+    return tiles.has(here) || here === h.entryMainTile || here === h.entryDistantTile;
   }
 
   function updateSignals(){
@@ -1104,7 +1115,7 @@
       list.sort((a,b) => (a.train.wantSince - b.train.wantSince) || (a.train.id - b.train.id));
       const win = list[0];
       if (blockOccupiedByOther(blockId, sys, win.train.id)) continue; // physically obstructed
-      win.train.holds.push({blockId, entryMainKey: win.mainKey, entryDistantKey: sys.distantOfMain.get(win.mainKey)});
+      win.train.holds.push({blockId, entryMainKey: win.mainKey, entryMainTile: sys.tileOfMain.get(win.mainKey), entryDistantTile: sys.distantOfMain.get(win.mainKey)});
       win.train.wantSince = null;
       sys.holder.set(blockId, win.train.id);
     }
@@ -1176,7 +1187,7 @@
     if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
       if (train.stopKey !== key(x,y)) return false; // still owes a dwell here
     }
-    if (tile.kind === "signal" && ex === tile.dir && !mainIsGreenFor(train, key(x,y))) return false;
+    if (tile.kind === "signal" && signalDirs(tile).includes(ex) && !mainIsGreenFor(train, mkMain(x,y,ex))) return false;
     const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
     const nt = getTile(nx,ny);
     if (!nt || !tileAccepts(nt, opposite(ex))) return false;
@@ -1239,13 +1250,13 @@
         return;
       }
     }
-    if (tile.kind === "signal" && ex === tile.dir){
-      const here = key(train.x,train.y);
-      if (!mainIsGreenFor(train, here)){
-        train.heldSignal = here; // remember we are stopped at this red main
+    if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
+      const mk = mkMain(train.x, train.y, ex);
+      if (!mainIsGreenFor(train, mk)){
+        train.heldSignal = mk; // remember we are stopped at this red main
         train.speed = 0; return;
       }
-      if (train.heldSignal === here){
+      if (train.heldSignal === mk){
         // the main just cleared while we waited: pause briefly so the green is visible first
         train.heldSignal = null;
         train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
@@ -1353,22 +1364,15 @@
       state.selectedShape = findTrackShapeIndex(tile.route);
     } else if (kind === "crossPlus" || kind === "crossX"){
       state.selectedTool = kind;
-    } else if (kind === "spawn"){
-      state.selectedTool = "spawn";
-      const i = findDirShapeIndex(SPAWN_SHAPES, tile.route, tile.dir);
-      if (i >= 0) state.selectedSpawnShape = i;
-      if (tile.color){
-        state.selectedColor = tile.color;
-        refreshColorUI();
-      }
+    } else if (kind === "spawn" || kind === "signal"){
+      // spawns and signals are placed by right-click, not a tool: pick the underlying track
+      state.selectedTool = "track";
+      state.selectedShape = findTrackShapeIndex(tile.route);
+      if (tile.color){ state.selectedColor = tile.color; refreshColorUI(); }
     } else if (kind === "stop"){
       state.selectedTool = "stop";
       const i = findDirShapeIndex(STOP_SHAPES, tile.route, tile.dir);
       if (i >= 0) state.selectedStopShape = i;
-    } else if (kind === "signal"){
-      state.selectedTool = "signal";
-      const i = findDirShapeIndex(SIGNAL_SHAPES, tile.route, tile.dir);
-      if (i >= 0) state.selectedSignalShape = i;
     } else if (kind === "switch"){
       state.selectedTool = "switch";
       const i = findSwitchShapeIndex(tile);
@@ -1501,16 +1505,22 @@
     contextMenu.dataset.x = x;
     contextMenu.dataset.y = y;
     let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
-    if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn"){
+    if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "spawn"){
       body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
     }
     if (tile.kind === "track"){
-      const dirs = tile.route.slice();
       body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
-        dirs.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${DIRS[d].name}</button>`).join("") +
+        tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${DIRS[d].name}</button>`).join("") +
         `</div></div>`;
-      body += `<div class="field"><span>Add block signal facing</span><div class="row">` +
-        dirs.map(d => `<button type="button" data-action="signal" data-dir="${d}"${canPlaceSignalAt(x,y,d) ? "" : " disabled"}>${DIRS[d].name}</button>`).join("") +
+    }
+    if (tile.kind === "track" || tile.kind === "signal"){
+      const sig = tile.kind === "signal" ? signalDirs(tile) : [];
+      body += `<div class="field"><span>Block signals (toggle each way)</span><div class="row">` +
+        tile.route.map(d => {
+          const on = sig.includes(d);
+          const can = on || canPlaceSignalAt(x,y,d);
+          return `<button type="button" data-action="${on ? "unsignal" : "signal"}" data-dir="${d}"${can ? "" : " disabled"}>${on ? "−" : "+"} ${DIRS[d].name}</button>`;
+        }).join("") +
         `</div></div>`;
     }
     if (tile.kind === "spawn"){
@@ -1521,9 +1531,6 @@
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Color filter</span><select name="filter">${colorOptions(tile.filter,true)}</select></label>`;
       body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
-    }
-    if (tile.kind === "signal"){
-      body += `<label class="field"><span>Protected direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
     }
     if (tile.kind === "switch"){
       const filters = tile.filters || {};
@@ -1554,17 +1561,27 @@
     const y = Number(contextMenu.dataset.y);
     const dir = Number(t.dataset.dir);
     const tile = getTile(x,y);
-    if (!tile || tile.kind !== "track"){ closeContext(); return; }
-    const route = cloneRoute(tile.route);
+    if (!tile){ closeContext(); return; }
+    const route = cloneRoute(tile.route || []);
     if (action === "spawn"){
+      if (tile.kind !== "track"){ closeContext(); return; }
       pushHistory();
       setTile(x,y,{kind:"spawn", route, dir, color: state.selectedColor, caution: tile.caution});
       state.message = `Spawn heading ${DIRS[dir].name}`;
     } else if (action === "signal"){
       if (!canPlaceSignalAt(x,y,dir)){ state.message = "No clean track to host a distant that way"; return; }
       pushHistory();
-      setTile(x,y,{kind:"signal", route, dir, caution: tile.caution});
+      const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
+      if (!dirs.includes(dir)) dirs.push(dir);
+      setTile(x,y,{kind:"signal", route, dirs, caution: tile.caution});
       state.message = `Signal facing ${DIRS[dir].name}`;
+    } else if (action === "unsignal"){
+      if (tile.kind !== "signal"){ closeContext(); return; }
+      pushHistory();
+      const dirs = signalDirs(tile).filter(d => d !== dir);
+      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, caution: tile.caution});
+      else setTile(x,y,{kind:"track", route, caution: tile.caution});
+      state.message = `Removed signal facing ${DIRS[dir].name}`;
     }
     closeContext();
     updateSignals();
@@ -1578,7 +1595,6 @@
     const data = new FormData(contextMenu);
     if (!tile) return;
     pushHistory();
-    const prevDir = tile.dir;
     const routeShape = data.get("routeShape");
     if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
@@ -1593,10 +1609,6 @@
       tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
       tile.filters[String(tile.branches[1])] = data.get("filter1") || null;
       if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
-    }
-    if (tile.kind === "signal" && !canPlaceSignalAt(x,y,tile.dir)){
-      tile.dir = prevDir; // keep a valid distant: revert a direction with no clean approach
-      state.message = "Signal needs a clean track (straight or curved) leading into it for its distant";
     }
     closeContext();
     updateSignals();
