@@ -854,17 +854,19 @@
     if (!state.hover) return;
     const tile = getTile(state.hover.x,state.hover.y);
     if (!tile || tile.kind !== "signal") return;
-    const block = collectProtectedBlock(state.hover.x,state.hover.y,tile,null);
     ctx.save();
-    for (const k of block.tiles){
-      const {x,y} = readKey(k);
-      const p = worldToScreen(x,y);
-      const s = tileSize();
-      ctx.fillStyle = block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)";
-      ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
-      ctx.strokeStyle = block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)";
-      ctx.lineWidth = Math.max(1, s * .035);
-      ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+    for (const dir of signalDirs(tile)){
+      const block = collectProtectedBlock(state.hover.x,state.hover.y,dir,null);
+      for (const k of block.tiles){
+        const {x,y} = readKey(k);
+        const p = worldToScreen(x,y);
+        const s = tileSize();
+        ctx.fillStyle = block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)";
+        ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
+        ctx.strokeStyle = block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)";
+        ctx.lineWidth = Math.max(1, s * .035);
+        ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+      }
     }
     const p = worldToScreen(state.hover.x,state.hover.y);
     const s = tileSize();
@@ -1121,10 +1123,10 @@
     return exits;
   }
 
-  function collectProtectedBlock(x,y,tile,ignoreId){
-    const nx = x + DIRS[tile.dir].dx;
-    const ny = y + DIRS[tile.dir].dy;
-    return scanProtectedBlock(nx, ny, opposite(tile.dir), ignoreId);
+  function collectProtectedBlock(x,y,dir,ignoreId){
+    const nx = x + DIRS[dir].dx;
+    const ny = y + DIRS[dir].dy;
+    return scanProtectedBlock(nx, ny, opposite(dir), ignoreId);
   }
 
   function scanProtectedBlock(x,y,from,ignoreId){
@@ -1489,9 +1491,14 @@
     draw();
   }
 
+  let loggedSimError = false;
   function animation(){
-    if (!state.paused){
-      simStep();
+    try {
+      if (!state.paused) simStep();
+    } catch (err){
+      // never let a single bad frame freeze the loop; surface it once
+      if (!loggedSimError){ console.error("simStep failed:", err); loggedSimError = true; }
+      state.message = "Error: " + (err && err.message ? err.message : err);
     }
     requestAnimationFrame(animation);
   }
