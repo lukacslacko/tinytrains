@@ -167,6 +167,18 @@
     border:2px solid #0000;
   }
   .swatch.active{border-color:var(--ink);box-shadow:0 0 0 1px #000 inset}
+  #colorButtons{flex-direction:column;align-items:stretch;gap:0}
+  .type-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .type-row .swatch{width:26px;height:26px;min-height:26px;flex:0 0 auto;color:#06090d;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
+  .type-row input[type=color]{width:30px;height:26px;padding:0;flex:0 0 auto;border:none;background:none;cursor:pointer}
+  .type-row .type-name{flex:1 1 auto;min-width:0;height:26px}
+  .type-row .type-del{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;color:var(--danger)}
+  .type-add{margin-top:3px}
+  .filter-set{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+  .filter-set .chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;border:1px solid #2a3340;cursor:pointer;font-size:12px;user-select:none}
+  .filter-set .chip input{display:none}
+  .filter-set .chip .dot{width:11px;height:11px;border-radius:50%;background:var(--c);border:1px solid #0006}
+  .filter-set .chip:has(input:checked){border-color:var(--ink);background:#1d2530}
   .status{
     flex:0 0 auto;
     padding:10px 12px;
@@ -262,8 +274,8 @@
       <section class="group">
         <div class="label">Spawns &amp; Signals</div>
         <p class="help">Right-click a track tile to spawn a train, add a block signal, or add a distant signal &mdash; each facing either way. A signal protects the block ahead (connected track up to the next signal or dead end); mains are green when the block is clear, red when taken. Place a <strong>distant</strong> one or more tiles before a signal so a train can roll through on green; a signal with no distant shows a hollow caution marker and trains always brake to it and pause briefly before going. Caution tiles (orange outline) make trains crawl and stop safely; on normal track a meeting is a crash.</p>
-        <div class="label">Spawn Color</div>
-        <p class="help">New spawned trains use this color.</p>
+        <div class="label">Train types</div>
+        <p class="help">A layout has a list of train <strong>types</strong>, each a numeric id with a display colour and optional name. Spawns and filters refer to a type by id, so recolouring a type never changes routing. Click a swatch to use that type for new spawns; edit the colour or name inline; use + to add a type and &times; to remove an unused one.</p>
         <div class="color-row" id="colorButtons"></div>
       </section>
       <section class="group">
@@ -307,14 +319,33 @@
   const stats = document.getElementById("stats");
   const hint = document.getElementById("hint");
 
-  const COLORS = {
-    red: "#f05264",
-    blue: "#58a8ff",
-    yellow: "#f1ca57",
-    green: "#43d17b",
-    violet: "#b58cff"
-  };
-  const COLOR_NAMES = Object.keys(COLORS);
+  // A layout has a list of train *types*. A type is identified by a numeric id
+  // (ids start at 1); its colour and name are display-only. Spawns, stop filters,
+  // switch branch filters (and later timetables) refer to a type by id, never by
+  // colour — so a type's colour can change without affecting any routing logic.
+  const DEFAULT_TYPE_COLORS = ["#f05264","#58a8ff","#f1ca57","#43d17b","#b58cff"];
+  const DEFAULT_TYPE_NAMES  = ["red","blue","yellow","green","violet"];
+  // Old saves stored colour-name strings; map them to the default ids on load.
+  const LEGACY_COLOR_IDS = {red:1, blue:2, yellow:3, green:4, violet:5};
+  const UNKNOWN_TYPE_COLOR = "#9aa6b2";
+  function defaultTrainTypes(){
+    return DEFAULT_TYPE_COLORS.map((color,i) => ({id:i+1, color, name:DEFAULT_TYPE_NAMES[i]}));
+  }
+  function trainTypeById(id){
+    for (const t of state.trainTypes) if (t.id === id) return t;
+    return null;
+  }
+  function typeColor(id){ const t = trainTypeById(id); return t ? t.color : UNKNOWN_TYPE_COLOR; }
+  function nextTypeId(){ let m = 0; for (const t of state.trainTypes) if (t.id > m) m = t.id; return m + 1; }
+  // Normalise a filter value (id array | legacy colour-name string | null) to an id array.
+  function filterIds(val){
+    if (Array.isArray(val)) return val.filter(n => Number.isFinite(n));
+    if (typeof val === "string" && val) return LEGACY_COLOR_IDS[val] ? [LEGACY_COLOR_IDS[val]] : [];
+    return [];
+  }
+  // A filter matches a type id when the set is empty ("any") or contains the id.
+  function filterMatches(val, typeId){ const ids = filterIds(val); return ids.length === 0 || ids.includes(typeId); }
+  function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
   // Movement is now speed-based: trains accelerate up to MAX_SPEED and brake along a
   // sqrt curve so they coast to a stop exactly on the tile they must halt at. DECEL is
   // tuned so a train at full speed can stop within one tile (the distant-to-main gap).
@@ -431,7 +462,8 @@
     frame: 0,
     paused: false,
     selectedTool: "track",
-    selectedColor: "red",
+    trainTypes: defaultTrainTypes(),
+    selectedType: 1,
     selectedShape: 0,
     selectedSpawnShape: 0,
     selectedStopShape: 0,
@@ -537,7 +569,7 @@
       stem: shape.stem,
       branches: shape.branches.slice(),
       defaultBranch: shape.defaultBranch,
-      filters: Object.fromEntries(shape.branches.map(branch => [String(branch), null]))
+      filters: Object.fromEntries(shape.branches.map(branch => [String(branch), []]))
     };
   }
   function makeTile(tool){
@@ -548,11 +580,11 @@
     if (tool === "switch") return defaultSwitch();
     if (tool === "spawn"){
       const shape = SPAWN_SHAPES[state.selectedSpawnShape];
-      return {kind:"spawn", route:cloneRoute(shape.route), dir:shape.dir, color:state.selectedColor};
+      return {kind:"spawn", route:cloneRoute(shape.route), dir:shape.dir, type:state.selectedType};
     }
     if (tool === "stop"){
       const shape = STOP_SHAPES[state.selectedStopShape];
-      return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, filter:null, dwellSeconds:DEFAULT_DWELL_SECONDS};
+      return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, filter:[], dwellSeconds:DEFAULT_DWELL_SECONDS};
     }
     if (tool === "signal"){
       const shape = SIGNAL_SHAPES[state.selectedSignalShape];
@@ -695,7 +727,7 @@
       drawPreviewRoute(pctx,w,h,[1,5],false);
     } else if (kind === "spawn"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewTriangle(pctx,w,h,shape.dir,COLORS[state.selectedColor] || "#f05264",.18);
+      drawPreviewTriangle(pctx,w,h,shape.dir,typeColor(state.selectedType),.18);
     } else if (kind === "stop"){
       drawPreviewRoute(pctx,w,h,shape.route,false);
       drawPreviewStopMarker(pctx,w,h,shape.dir);
@@ -812,25 +844,39 @@
   function drawTileRoutes(x,y,tile){
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
   }
+  // Draw a small cluster of coloured dots (one per filter type id) centred at cx,cy.
+  function drawFilterCluster(cx,cy,ids,r){
+    if (!ids || !ids.length) return;
+    const gap = r * 2.2;
+    const start = -(ids.length - 1) / 2 * gap;
+    for (let i = 0; i < ids.length; i++){
+      ctx.beginPath();
+      ctx.arc(cx + start + i * gap, cy, r, 0, Math.PI*2);
+      ctx.fillStyle = typeColor(ids[i]);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, r*.3);
+      ctx.strokeStyle = "#06090d";
+      ctx.stroke();
+    }
+  }
   function drawTileMarkers(x,y,tile){
     const s = tileSize();
     if (tile.kind === "switch"){
       for (const b of tile.branches){
-        const filter = tile.filters[String(b)];
-        if (!filter) continue;
+        const ids = filterIds(tile.filters[String(b)]);
+        if (!ids.length) continue;
         const pt = lerpPoint(centerPoint(x,y), endpointPoint(x,y,b), .5);
-        ctx.fillStyle = COLORS[filter];
-        ctx.beginPath(); ctx.arc(pt.x,pt.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
+        drawFilterCluster(pt.x,pt.y,ids,Math.max(3,s*.07));
       }
       return;
     }
-    if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
+    if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,typeColor(tile.type),.2);
     if (tile.kind === "stop"){
       drawStopMarker(x,y,tile.dir);
-      if (tile.filter){
+      const ids = filterIds(tile.filter);
+      if (ids.length){
         const c = centerPoint(x,y);
-        ctx.fillStyle = COLORS[tile.filter];
-        ctx.beginPath(); ctx.arc(c.x,c.y,Math.max(3,s*.07),0,Math.PI*2); ctx.fill();
+        drawFilterCluster(c.x,c.y,ids,Math.max(3,s*.06));
       }
     }
     if (tile.kind === "signal"){
@@ -988,7 +1034,7 @@
     for (const train of state.trains){
       const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
       const cars = trainCars(train);
-      const headColor = train.crashed ? (blinkOn ? "#ff2a2a" : "#2a0606") : COLORS[train.color];
+      const headColor = train.crashed ? (blinkOn ? "#ff2a2a" : "#2a0606") : typeColor(train.type);
       let dist = 0;
       cars.forEach((len, idx) => {
         const pts = trailSpan(trail, dist, dist+len).map(worldPtToScreen);
@@ -998,7 +1044,7 @@
         ctx.strokeStyle = "#06090d";
         ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
         strokePolyline(pts);
-        ctx.strokeStyle = train.crashed ? headColor : (idx === 0 ? COLORS[train.color] : "#7c8898");
+        ctx.strokeStyle = train.crashed ? headColor : (idx === 0 ? typeColor(train.type) : "#7c8898");
         ctx.lineWidth = CAR_WIDTH * s;
         strokePolyline(pts);
         if (train.crashed){
@@ -1109,13 +1155,15 @@
     return lerpPoint(joint, end, (train.progress - .5) * 2);
   }
 
-  function exitFor(tile, from, color){
+  function exitFor(tile, from, typeId){
     if (!tile) return null;
     if (tile.kind === "switch"){
       if (from === tile.stem){
-        const exact = tile.branches.find(b => tile.filters[String(b)] === color);
+        // A branch whose filter set names this type wins; else the first "open"
+        // branch (empty set = any); else the default branch.
+        const exact = tile.branches.find(b => { const ids = filterIds(tile.filters[String(b)]); return ids.length && ids.includes(typeId); });
         if (exact !== undefined) return exact;
-        const open = tile.branches.find(b => !tile.filters[String(b)]);
+        const open = tile.branches.find(b => filterIds(tile.filters[String(b)]).length === 0);
         return open !== undefined ? open : tile.defaultBranch;
       }
       if (tile.branches.includes(from)) return tile.stem;
@@ -1260,7 +1308,7 @@
     }
     const tile = getTile(train.x, train.y);
     if (!tile) return null;
-    const ex = exitFor(tile, train.from, train.color);
+    const ex = exitFor(tile, train.from, train.type);
     if (ex == null) return null;
     if (tile.kind === "signal"){
       const mk = mkMain(train.x, train.y, ex);
@@ -1375,9 +1423,9 @@
   function canLeave(train, x, y, from){
     const tile = getTile(x,y);
     if (!tile) return false;
-    const ex = exitFor(tile, from, train.color);
+    const ex = exitFor(tile, from, train.type);
     if (ex == null) return false;
-    if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
+    if (tile.kind === "stop" && ex === tile.dir && filterMatches(tile.filter, train.type)){
       if (train.stopKey !== key(x,y)) return false; // still owes a dwell here
     }
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
@@ -1438,9 +1486,9 @@
     if (trainMoving(train)){ advanceWithSpeed(train); return; }
     if (train.wait > 0){ train.wait--; train.speed = 0; return; }
     const tile = getTile(train.x,train.y);
-    const ex = exitFor(tile, train.from, train.color);
+    const ex = exitFor(tile, train.from, train.type);
     if (ex == null){ train.speed = 0; return; }
-    if (tile.kind === "stop" && ex === tile.dir && (!tile.filter || tile.filter === train.color)){
+    if (tile.kind === "stop" && ex === tile.dir && filterMatches(tile.filter, train.type)){
       const stopKey = key(train.x,train.y);
       if (train.stopKey !== stopKey){
         train.wait = Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
@@ -1491,7 +1539,7 @@
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
-      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, color:tile.color, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
+      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, type:tile.type, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
       seedTrail(train, tile.dir);
       train._tiles = computeBodyTiles(train);
       state.trains.push(train);
@@ -1569,7 +1617,7 @@
       // spawns, signals and distants are placed by right-click, not a tool: pick the track
       state.selectedTool = "track";
       state.selectedShape = findTrackShapeIndex(tile.route);
-      if (tile.color){ state.selectedColor = tile.color; refreshColorUI(); }
+      if (tile.type){ state.selectedType = tile.type; refreshColorUI(); }
     } else if (kind === "stop"){
       state.selectedTool = "stop";
       const i = findDirShapeIndex(STOP_SHAPES, tile.route, tile.dir);
@@ -1689,9 +1737,18 @@
     openContext(w.x,w.y,tile,event.clientX,event.clientY);
   });
 
-  function colorOptions(value, allowAny){
-    const any = allowAny ? `<option value="">Any color</option>` : "";
-    return any + COLOR_NAMES.map(c => `<option value="${c}" ${value === c ? "selected" : ""}>${c}</option>`).join("");
+  function typeOptLabel(t){ return t.name ? `${escapeHtml(t.name)} (#${t.id})` : `Type ${t.id}`; }
+  // A single-choice <select> of train types (used for a spawn's type).
+  function typeSelectOptions(value){
+    return state.trainTypes.map(t => `<option value="${t.id}" ${Number(value) === t.id ? "selected" : ""}>${typeOptLabel(t)}</option>`).join("");
+  }
+  // A multi-select chip row of train types (used for stop/switch filters). No chip
+  // checked means "any type".
+  function filterCheckboxes(name, value){
+    const set = filterIds(value);
+    return `<div class="filter-set">` + state.trainTypes.map(t =>
+      `<label class="chip" style="--c:${t.color}"><input type="checkbox" name="${name}" value="${t.id}" ${set.includes(t.id) ? "checked" : ""}><span class="dot"></span>${typeOptLabel(t)}</label>`
+    ).join("") + `</div>`;
   }
   const DIR_ARROWS = ["↑","↗","→","↘","↓","↙","←","↖"]; // N NE E SE S SW W NW
   function dirArrow(value){ const a = DIR_ARROWS[Number(value)]; return a || String(value); }
@@ -1744,17 +1801,17 @@
     }
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
-      body += `<label class="field"><span>Color</span><select name="color">${colorOptions(tile.color,false)}</select></label>`;
+      body += `<label class="field"><span>Train type</span><select name="type">${typeSelectOptions(tile.type)}</select></label>`;
     }
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
-      body += `<label class="field"><span>Color filter</span><select name="filter">${colorOptions(tile.filter,true)}</select></label>`;
+      body += `<div class="field"><span>Type filter (none = any)</span>${filterCheckboxes("filter", tile.filter)}</div>`;
       body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
     }
     if (tile.kind === "switch"){
       const filters = tile.filters || {};
-      body += `<label class="field"><span>${dirArrow(tile.branches[0])} filter</span><select name="filter0">${colorOptions(filters[String(tile.branches[0])],true)}</select></label>`;
-      body += `<label class="field"><span>${dirArrow(tile.branches[1])} filter</span><select name="filter1">${colorOptions(filters[String(tile.branches[1])],true)}</select></label>`;
+      body += `<div class="field"><span>${dirArrow(tile.branches[0])} branch (none = any)</span>${filterCheckboxes("filter0", filters[String(tile.branches[0])])}</div>`;
+      body += `<div class="field"><span>${dirArrow(tile.branches[1])} branch (none = any)</span>${filterCheckboxes("filter1", filters[String(tile.branches[1])])}</div>`;
     }
     body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
     contextMenu.innerHTML = body;
@@ -1785,7 +1842,7 @@
     if (action === "spawn"){
       if (tile.kind !== "track"){ closeContext(); return; }
       pushHistory();
-      setTile(x,y,{kind:"spawn", route, dir, color: state.selectedColor, caution: tile.caution});
+      setTile(x,y,{kind:"spawn", route, dir, type: state.selectedType, caution: tile.caution});
       state.message = `Spawn heading ${DIRS[dir].name}`;
     } else if (action === "signal"){
       pushHistory();
@@ -1847,16 +1904,16 @@
     const routeShape = data.get("routeShape");
     if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
-    if (data.get("color")) tile.color = data.get("color");
-    if (data.get("filter") != null) tile.filter = data.get("filter") || null;
+    if (data.get("type")) tile.type = Number(data.get("type"));
+    if (tile.kind === "stop") tile.filter = data.getAll("filter").map(Number);
     if (data.get("dwellSeconds")){
       tile.dwellSeconds = Number(data.get("dwellSeconds"));
       delete tile.dwell;
     }
     if (tile.kind === "switch"){
       tile.filters = {};
-      tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
-      tile.filters[String(tile.branches[1])] = data.get("filter1") || null;
+      tile.filters[String(tile.branches[0])] = data.getAll("filter0").map(Number);
+      tile.filters[String(tile.branches[1])] = data.getAll("filter1").map(Number);
       if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
     }
     closeContext();
@@ -1975,22 +2032,66 @@
     });
     syncSelection();
     const colorButtons = document.getElementById("colorButtons");
-    refreshColorUI = () => {
-      for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === state.selectedColor);
-    };
-    for (const name of COLOR_NAMES){
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "swatch" + (name === state.selectedColor ? " active" : "");
-      btn.style.background = COLORS[name];
-      btn.title = name;
-      btn.dataset.color = name;
-      btn.addEventListener("click", () => {
-        state.selectedColor = name;
-        refreshColorUI();
-      });
-      colorButtons.appendChild(btn);
+    // Is a train type referenced anywhere (so removing it would dangle a reference)?
+    function typeInUse(id){
+      for (const [,tile] of state.tiles){
+        if (tile.kind === "spawn" && tile.type === id) return true;
+        if (tile.kind === "stop" && filterIds(tile.filter).includes(id)) return true;
+        if (tile.kind === "switch" && tile.filters){
+          for (const k in tile.filters) if (filterIds(tile.filters[k]).includes(id)) return true;
+        }
+      }
+      for (const tr of state.trains) if (tr.type === id) return true;
+      return false;
     }
+    function addTrainType(){
+      const id = nextTypeId();
+      state.trainTypes.push({id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:""});
+      state.selectedType = id;
+      buildTypeEditor();
+      draw();
+    }
+    function removeTrainType(id){
+      if (state.trainTypes.length <= 1){ state.message = "Keep at least one train type"; draw(); return; }
+      if (typeInUse(id)){ state.message = `Type #${id} is in use — can't remove`; draw(); return; }
+      state.trainTypes = state.trainTypes.filter(t => t.id !== id);
+      if (state.selectedType === id) state.selectedType = state.trainTypes[0].id;
+      buildTypeEditor();
+      draw();
+    }
+    // Build the train-types editor: one row per type (swatch=select-for-spawn,
+    // colour picker, name field, delete) plus an "add type" button.
+    function buildTypeEditor(){
+      colorButtons.innerHTML = "";
+      for (const t of state.trainTypes){
+        const row = document.createElement("div");
+        row.className = "type-row";
+        const swatch = document.createElement("button");
+        swatch.type = "button";
+        swatch.className = "swatch" + (t.id === state.selectedType ? " active" : "");
+        swatch.style.background = t.color;
+        swatch.title = "Use this type for new spawns";
+        swatch.textContent = String(t.id);
+        swatch.addEventListener("click", () => { state.selectedType = t.id; buildTypeEditor(); draw(); });
+        const col = document.createElement("input");
+        col.type = "color"; col.value = t.color; col.title = "Display colour";
+        col.addEventListener("input", () => { t.color = col.value; swatch.style.background = col.value; draw(); });
+        const nm = document.createElement("input");
+        nm.type = "text"; nm.className = "type-name"; nm.value = t.name || ""; nm.placeholder = "name"; nm.maxLength = 16;
+        nm.addEventListener("change", () => { t.name = nm.value.trim(); });
+        const del = document.createElement("button");
+        del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove type";
+        del.addEventListener("click", () => removeTrainType(t.id));
+        row.append(swatch, col, nm, del);
+        colorButtons.appendChild(row);
+      }
+      const add = document.createElement("button");
+      add.type = "button"; add.className = "type-add"; add.textContent = "+ Add type";
+      add.addEventListener("click", addTrainType);
+      colorButtons.appendChild(add);
+    }
+    refreshColorUI = buildTypeEditor;
+    buildTypeEditor();
     updatePauseButton();
     document.getElementById("pauseBtn").addEventListener("click", togglePause);
     document.getElementById("stepBtn").addEventListener("click", simStep);
@@ -2036,24 +2137,43 @@
 
   function serialize(){
     return JSON.stringify({
-      version: 1,
+      version: 2,
+      trainTypes: state.trainTypes,
       tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
       view: state.view
     }, null, 2);
   }
+  // Bring a tile up to the current model: v1 saves keyed spawns/filters on colour
+  // name strings; v2 keys on numeric train-type ids (filters are id arrays).
+  function migrateTile(tile){
+    if (tile.kind === "spawn" && tile.type == null && tile.color != null){
+      tile.type = LEGACY_COLOR_IDS[tile.color] || 1;
+      delete tile.color;
+    }
+    if (tile.kind === "stop") tile.filter = filterIds(tile.filter);
+    if (tile.kind === "switch" && tile.filters){
+      for (const k in tile.filters) tile.filters[k] = filterIds(tile.filters[k]);
+    }
+    return tile;
+  }
   function deserialize(text){
     const data = JSON.parse(text);
     if (!data || !Array.isArray(data.tiles)) throw new Error("Missing tiles array");
+    state.trainTypes = (Array.isArray(data.trainTypes) && data.trainTypes.length)
+      ? data.trainTypes.map(t => ({id: t.id, color: t.color || UNKNOWN_TYPE_COLOR, name: t.name || ""}))
+      : defaultTrainTypes();
     state.tiles = new Map();
     for (const item of data.tiles){
       if (!Number.isFinite(item.x) || !Number.isFinite(item.y) || !item.tile) continue;
-      setTile(item.x,item.y,item.tile);
+      setTile(item.x,item.y, migrateTile(item.tile));
     }
+    if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.trains = [];
     state.nextTrainId = 1;
     state.tick = 0;
     state.frame = 0;
     if (data.view) state.view = {...state.view, ...data.view};
+    refreshColorUI();
     updateSignals();
   }
 

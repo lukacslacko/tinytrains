@@ -3,33 +3,32 @@
 These are the things to actually build for V2. More speculative ideas
 (currently parked for V3+) are collected at the bottom.
 
+## Done so far in V2
+
+### Phase 0 — done
+- **Remove a train via right-click.** Right-clicking a tile a train sits on
+  shows a "Remove train" button that deletes just that train (or all trains on
+  the tile), without erasing the track.
+- **One-click block boundary (signals both ways).** The track/signal right-click
+  pop-up has a "+ both" / "− both" button that places (or clears) main signals
+  in all route directions at once.
+
+### Phase 1 — done
+- **Train types instead of hard-coded colours.** Each layout now has a list of
+  **train types**, each identified by a numeric id (starting at 1) with a
+  display-only colour and an optional name. Spawns, stop filters and switch
+  branch filters all refer to a type **by id**, so a type's colour or name can
+  change without affecting any routing. The train-type list is saved/loaded
+  (save format bumped to v2; old v1 saves with colour-name strings migrate to
+  ids on load). The left panel has an inline train-types editor (select a type
+  for new spawns, recolour/rename, add, remove unused).
+- **Multi-colour filters.** Stop filters and each switch branch filter now hold
+  a **set of type ids** instead of a single colour. An empty set means "any"; a
+  filter matches a train when its type id is in the set. The right-click pop-up
+  uses multi-select chips for these filters; markers render one coloured dot per
+  selected type.
+
 ## To do for V2
-
-### Multi-colour filters
-Filters on stops and switches can have **multiple colours/train types**
-selected at once, instead of a single colour or "any". A filter matches a
-train when its type is in the selected set (an empty set still means "any").
-Applies to switch branch filters and stop colour filters.
-
-### Train types instead of hard-coded colours
-Train colours should not be hard-coded. Instead, each layout has a list of
-**train types**:
-- A train type is primarily identified by a numeric id, starting at 1.
-- Each train type can also be given a colour, used only for rendering.
-- Spawns, filters, timetables, etc. refer to train types by id (the colour
-  is just a display attribute that can be changed without affecting logic).
-- The layout's train-type list is part of what is saved/loaded.
-
-### Remove a train via right-click
-The user should be able to **right-click on a train** and remove just that
-train, without having to erase the track tile it is sitting on. (Today the
-only way to remove a train is to erase its tile.)
-
-### One-click block boundary (signals both ways)
-In the track tile right-click pop-up, add a single button that places
-**main signals in both route directions at once**. This makes setting up a
-block boundary (a signal each way on one tile) a one-click action instead of
-toggling each direction separately.
 
 ### Documentation
 Write an all-encompassing documentation explaining all aspects of the game.
