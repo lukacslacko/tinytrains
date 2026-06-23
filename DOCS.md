@@ -121,6 +121,11 @@ The pop-up adapts to the tile kind. Common controls:
 
 - **Route** — change the shape of a track/stop/spawn tile.
 - **Spawn a train heading …** (track tiles) — turn the tile into a spawn.
+- **Add a stop facing …** (track tiles) — turn the tile into a **stop** for
+  trains travelling that way (one button per route direction), without switching
+  to the Stop palette tool. The new stop starts with no filter (stops any type)
+  and the default dwell; right-click it again to set its filter, dwell, timetable
+  and name.
 - **Block signals (toggle each way)** — add/remove a main signal per direction,
   or **`+ both` / `− both`** to place/clear mains in *all* route directions at
   once (one-click block boundary).
@@ -358,12 +363,11 @@ mechanical dwell points don't flood the log. The window keeps the most recent
 
 Done so far in V2: one-click block boundary, remove-train-by-right-click, train
 types by id, multi-colour filters, stations + element naming, **timetables + the
-sim clock**, the **notification window**, and this document.
+sim clock**, the **notification window**, **add-a-stop from the track pop-up**,
+and this document.
 
 Still planned (see `V2_FEATURES.md`): **local AI station masters** (a clean
 state/action interface a scripted or LLM-driven master can drive, with the
 interlocking still enforcing safety) — **train reversal / shunting lives here**,
-not in the timetable. A small **UX TODO** is also open: fold station placement
-into a right-click pop-up instead of its own tool/palette. Speculative V3+:
-night/day timetables, a graphical timetable editor, shunting, and per-train
-driver AIs.
+not in the timetable. Speculative V3+: night/day timetables, a graphical
+timetable editor, shunting, and per-train driver AIs.

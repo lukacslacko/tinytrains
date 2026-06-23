@@ -2049,6 +2049,9 @@
       body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
         `</div></div>`;
+      body += `<div class="field"><span>Add a stop facing</span><div class="row">` +
+        tile.route.map(d => `<button type="button" data-action="addstop" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
+        `</div></div>`;
     }
     if (tile.kind === "track" || tile.kind === "signal"){
       const sig = tile.kind === "signal" ? signalDirs(tile) : [];
@@ -2121,6 +2124,11 @@
       pushHistory();
       setTile(x,y,{kind:"spawn", route, dir, type: state.selectedType, caution: tile.caution});
       state.message = `Spawn heading ${DIRS[dir].name}`;
+    } else if (action === "addstop"){
+      if (tile.kind !== "track"){ closeContext(); return; }
+      pushHistory();
+      setTile(x,y,{kind:"stop", route, dir, filter:[], dwellSeconds:DEFAULT_DWELL_SECONDS, caution: tile.caution});
+      state.message = `Stop facing ${DIRS[dir].name}`;
     } else if (action === "signal"){
       pushHistory();
       const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];

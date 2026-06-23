@@ -69,6 +69,15 @@ These are the things to actually build for V2. More speculative ideas
   - **alert** (red) — a **collision**, or a **missed departure** (a train held at
     a timetabled stop right through a whole schedule period without leaving).
 
+### Phase 3 follow-up — done
+- **Add a stop from the right-click pop-up.** The track-tile right-click pop-up
+  now has an **"Add a stop facing"** row — one button per route direction (the
+  same pattern as "Spawn a train heading"). Clicking a button converts the track
+  tile into a **stop** for trains travelling that way (empty filter = any type,
+  default dwell seconds), preserving the tile's route and caution. Right-click
+  the new stop again to set its filter, dwell, timetable and name. This means a
+  stop can be created without switching to the Stop palette tool.
+
 ## To do for V2
 
 ### Local AI station masters
@@ -88,27 +97,6 @@ station:
   stop (head ↔ tail, run-around, change of direction) is a *shunting* operation
   driven by the **station-master / shunting-engineer / train-driver AIs**, not a
   property of a stop's timetable. The timetable only schedules *departures*.
-
-### UX TODO — fold station placement into the right-click pop-up
-The sponsor would like station placement moved **out of its own palette/tool**
-and **into a right-click pop-up**, so stations are created the same way
-everything else is configured.
-
-Open design question (a station is a *rectangle*, not a single tile, so a tile's
-right-click menu can't define one directly). Recommended approach:
-- **Retire the dedicated "Station" tool.** Keep the **Select** tool's rubber-band
-  rectangle as the way to mark out an area, then add a **"Create station from
-  selection"** action to a right-click pop-up shown while a selection exists
-  (and offer rename/remove of the station the clicked tile falls in). This keeps
-  the geometric (rectangular) membership model intact while removing the separate
-  palette, matching the intent of "configure it from the right-click menu."
-- Alternative (bigger change): switch from rectangular regions to **per-tile
-  station membership** — right-click a tile → "Add to station X / new station".
-  More flexible shapes, but it abandons the simple rect model and needs new
-  rendering and a station picker. Decide before building.
-
-Deferred deliberately (the sponsor offered "do this now or mark as a todo"); the
-rectangle-vs-per-tile decision is worth a quick confirmation before implementing.
 
 ## Later / more speculative (V3+)
 
