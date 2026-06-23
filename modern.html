@@ -154,6 +154,8 @@
     padding:7px 9px;
   }
   button{cursor:pointer;text-align:left}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  #contextMenu button[data-action]{text-align:center}
   button:hover,select:hover{border-color:#4a5664}
   button.active{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent) inset}
   button.danger.active{border-color:var(--danger)}
@@ -242,22 +244,9 @@
         </div>
       </details>
       <details class="palette">
-        <summary>Spawns</summary>
-        <div class="palette-body">
-          <div class="shape-grid" id="spawnPalette"></div>
-        </div>
-      </details>
-      <details class="palette">
         <summary>Stops</summary>
         <div class="palette-body">
           <div class="shape-grid" id="stopPalette"></div>
-        </div>
-      </details>
-      <details class="palette">
-        <summary>Signals</summary>
-        <div class="palette-body">
-          <p class="help">A signal protects the block of track in its arrow direction &mdash; the run of connected track (through tracks and switches) up to the next signal or a dead end. A small <strong>distant</strong> marker is shown automatically on the clean track (straight or curved) one tile before each signal: green when the block is free, orange when it is taken. Mains stay green while their block is clear. A train passing a green distant reserves the block and rolls through on a green main; one passing an orange distant brakes and waits at the red main, then proceeds once the block clears. Only one train holds a block at a time; waiting trains are served in turn. A signal can only be placed where its distant fits (not after a switch).</p>
-          <div class="shape-grid" id="signalPalette"></div>
         </div>
       </details>
       <details class="palette">
@@ -267,8 +256,10 @@
         </div>
       </details>
       <section class="group">
+        <div class="label">Spawns &amp; Signals</div>
+        <p class="help">Right-click a track tile to spawn a train along it, or to add a block signal facing either way. A signal protects the block ahead &mdash; the connected track up to the next signal or a dead end &mdash; with an automatic distant marker on the tile before it (green = clear, orange = taken). Mains stay green while their block is clear; a train waits at a red main and pulls away shortly after it clears. A signal direction is disabled when there is no clean track to host its distant.</p>
         <div class="label">Spawn Color</div>
-        <p class="help">New spawn tiles use this train color.</p>
+        <p class="help">New spawned trains use this color.</p>
         <div class="color-row" id="colorButtons"></div>
       </section>
       <section class="group">
@@ -742,7 +733,7 @@
     if (tile.kind === "signal"){
       const green = state.sys ? mainRenderGreen(key(x,y), state.sys) : false;
       // base (orthogonal to the track) spans ~half the tile (1.3*scale); centered so it stays in-tile
-      drawTriangle(x,y,tile.dir,green ? "#16a34a" : "#ff2a2a",.385,null,null,0);
+      drawTriangle(x,y,tile.dir,green ? "#16a34a" : "#ff2a2a",.385,"#0b0e12",Math.max(1.5, tileSize()*.03),0);
     }
   }
 
@@ -1352,6 +1343,15 @@
     if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn"){
       body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
     }
+    if (tile.kind === "track"){
+      const dirs = tile.route.slice();
+      body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
+        dirs.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${DIRS[d].name}</button>`).join("") +
+        `</div></div>`;
+      body += `<div class="field"><span>Add block signal facing</span><div class="row">` +
+        dirs.map(d => `<button type="button" data-action="signal" data-dir="${d}"${canPlaceSignalAt(x,y,d) ? "" : " disabled"}>${DIRS[d].name}</button>`).join("") +
+        `</div></div>`;
+    }
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Color</span><select name="color">${colorOptions(tile.color,false)}</select></label>`;
@@ -1378,12 +1378,33 @@
   }
   function closeContext(){ contextMenu.classList.remove("open"); }
   contextMenu.addEventListener("click", event => {
-    if (event.target.name === "delete"){
+    const t = event.target;
+    if (t.name === "delete"){
       removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
       closeContext();
       updateSignals();
       draw();
+      return;
     }
+    const action = t.dataset && t.dataset.action;
+    if (!action) return;
+    const x = Number(contextMenu.dataset.x);
+    const y = Number(contextMenu.dataset.y);
+    const dir = Number(t.dataset.dir);
+    const tile = getTile(x,y);
+    if (!tile || tile.kind !== "track"){ closeContext(); return; }
+    const route = cloneRoute(tile.route);
+    if (action === "spawn"){
+      setTile(x,y,{kind:"spawn", route, dir, color: state.selectedColor});
+      state.message = `Spawn heading ${DIRS[dir].name}`;
+    } else if (action === "signal"){
+      if (!canPlaceSignalAt(x,y,dir)){ state.message = "No clean track to host a distant that way"; return; }
+      setTile(x,y,{kind:"signal", route, dir});
+      state.message = `Signal facing ${DIRS[dir].name}`;
+    }
+    closeContext();
+    updateSignals();
+    draw();
   });
   contextMenu.addEventListener("submit", event => {
     event.preventDefault();
@@ -1434,17 +1455,13 @@
   function setupControls(){
     const toolButtons = document.getElementById("toolButtons");
     const trackPalette = document.getElementById("trackPalette");
-    const spawnPalette = document.getElementById("spawnPalette");
     const stopPalette = document.getElementById("stopPalette");
-    const signalPalette = document.getElementById("signalPalette");
     const switchPalette = document.getElementById("switchPalette");
     function syncSelection(){
       for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
       for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
       for (const b of trackPalette.querySelectorAll("button[data-crossing]")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
-      for (const b of spawnPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "spawn" && Number(b.dataset.shape) === state.selectedSpawnShape);
       for (const b of stopPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "stop" && Number(b.dataset.shape) === state.selectedStopShape);
-      for (const b of signalPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "signal" && Number(b.dataset.shape) === state.selectedSignalShape);
       for (const b of switchPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "switch" && Number(b.dataset.shape) === state.selectedSwitchShape);
       draw();
     }
@@ -1496,23 +1513,6 @@
       });
       trackPalette.appendChild(btn);
     });
-    SPAWN_SHAPES.forEach((shape,i) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shape-button";
-      btn.dataset.shape = i;
-      btn.title = shape.label;
-      addShapePreview(btn, shape, "spawn");
-      const label = document.createElement("span");
-      label.textContent = `Spawn ${DIRS[shape.dir].name}`;
-      btn.appendChild(label);
-      btn.addEventListener("click", () => {
-        state.selectedTool = "spawn";
-        state.selectedSpawnShape = i;
-        syncSelection();
-      });
-      spawnPalette.appendChild(btn);
-    });
     STOP_SHAPES.forEach((shape,i) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1529,23 +1529,6 @@
         syncSelection();
       });
       stopPalette.appendChild(btn);
-    });
-    SIGNAL_SHAPES.forEach((shape,i) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "shape-button";
-      btn.dataset.shape = i;
-      btn.title = shape.label;
-      addShapePreview(btn, shape, "signal");
-      const label = document.createElement("span");
-      label.textContent = `Signal ${DIRS[shape.dir].name}`;
-      btn.appendChild(label);
-      btn.addEventListener("click", () => {
-        state.selectedTool = "signal";
-        state.selectedSignalShape = i;
-        syncSelection();
-      });
-      signalPalette.appendChild(btn);
     });
     SWITCH_SHAPES.forEach((shape,i) => {
       const btn = document.createElement("button");
@@ -1565,17 +1548,9 @@
       switchPalette.appendChild(btn);
     });
     syncSelection();
-    function refreshSpawnPalettePreviews(){
-      for (const btn of spawnPalette.querySelectorAll("button")){
-        const preview = btn.querySelector("canvas");
-        if (preview) preview.remove();
-        addShapePreview(btn, SPAWN_SHAPES[Number(btn.dataset.shape)], "spawn");
-      }
-    }
     const colorButtons = document.getElementById("colorButtons");
     refreshColorUI = () => {
       for (const b of colorButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.color === state.selectedColor);
-      refreshSpawnPalettePreviews();
     };
     for (const name of COLOR_NAMES){
       const btn = document.createElement("button");
