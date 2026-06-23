@@ -167,7 +167,12 @@
     border:2px solid #0000;
   }
   .swatch.active{border-color:var(--ink);box-shadow:0 0 0 1px #000 inset}
-  #colorButtons{flex-direction:column;align-items:stretch;gap:0}
+  /* Vertical list of type rows. It must NOT inherit .color-row's flex-wrap:wrap — a wrapping
+     column flex container takes a min-content width equal to its widest row's max-content, so
+     it would refuse to shrink and push the whole left panel into horizontal scroll. nowrap +
+     min-width:0 lets it shrink to the panel, so the name input (flex:1 1 auto, min-width:0)
+     gives up width instead of overflowing. */
+  #colorButtons{flex-direction:column;align-items:stretch;gap:0;flex-wrap:nowrap;min-width:0}
   .type-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
   .type-row .swatch{width:26px;height:26px;min-height:26px;flex:0 0 auto;color:#06090d;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
   .type-row input[type=color]{width:30px;height:26px;padding:0;flex:0 0 auto;border:none;background:none;cursor:pointer}
@@ -543,7 +548,7 @@
   const history = { undo: [], redo: [] };
   let clipboard = null;
   function tilesToString(){ return JSON.stringify([...state.tiles]); }
-  function applyTilesString(s){ state.tiles = new Map(JSON.parse(s)); updateSignals(); }
+  function applyTilesString(s){ state.tiles = new Map(JSON.parse(s)); clearStopSchedules(); updateSignals(); }
   function pushHistory(){
     history.undo.push(tilesToString());
     if (history.undo.length > 200) history.undo.shift();
@@ -1656,18 +1661,69 @@
     if (!(period > 0) || !times.length) return null;
     return {period, times};
   }
-  // Earliest scheduled departure frame at or after arriveFrame, given the recurrence.
-  function nextSlotFrame(arriveFrame, period, times){
+  // The departure slots bracketing `frame`: prev = the latest slot at or before it, next = the
+  // earliest slot strictly after it. Slots recur every period, so both are always finite.
+  function slotsAround(frame, period, times){
     const periodFrames = period * FRAMES_PER_SECOND;
-    const cycleStart = Math.floor(arriveFrame / periodFrames) * periodFrames;
-    let best = Infinity;
+    const cycleStart = Math.floor(frame / periodFrames) * periodFrames;
+    let prev = -Infinity, next = Infinity;
     for (const t of times){
       const off = (((t % period) + period) % period) * FRAMES_PER_SECOND;
-      let cand = cycleStart + off;
-      if (cand < arriveFrame) cand += periodFrames;
-      if (cand < best) best = cand;
+      // The same slot recurs every period; the bracketing slots lie within the adjacent cycles.
+      for (const base of [cycleStart - periodFrames, cycleStart, cycleStart + periodFrames]){
+        const cand = base + off;
+        if (cand <= frame){ if (cand > prev) prev = cand; }
+        else if (cand < next){ next = cand; }
+      }
     }
-    return best === Infinity ? arriveFrame : best;
+    return {prev, next};
+  }
+  // ---- Per-stop timetable state ----------------------------------------------------------
+  // A stop runs its schedule STATEFULLY, not per-arriving-train: for each train type it serves
+  // it remembers the slot it is currently sitting on (curSlot) and the latest slot a train was
+  // actually released for (servedSlot). That memory is what lets it HOLD a second train that
+  // shows up after one already left for the current slot (it waits out the rest of the slot
+  // and leaves on time), and lets it notice a slot that no train ever turned up for. This is
+  // transient sim state, keyed by tile + type — deliberately NOT part of the saved layout.
+  const stopSchedules = new Map();
+  function clearStopSchedules(){ stopSchedules.clear(); }
+  function stopSchedule(x, y, typeId, tt){
+    const k = key(x,y) + "|" + typeId;
+    let s = stopSchedules.get(k);
+    if (!s){
+      const {prev} = slotsAround(state.simFrame, tt.period, tt.times);
+      s = {curSlot: prev, servedSlot: -Infinity, active: false};
+      stopSchedules.set(k, s);
+    }
+    return s;
+  }
+  // Walk every served stop's slot pointer up to the current sim time, raising a "missed
+  // departure" the instant a departure time arrives with no train having left for the slot
+  // before it. Only fires once the stop is on a live rotation (a train has used it for that
+  // type), so a freshly-placed or never-served timetable stays silent rather than nagging.
+  function tickStopSchedules(){
+    for (const [mk, tile] of state.tiles){
+      if (tile.kind !== "stop" || !tile.timetable) continue;
+      const {x, y} = readKey(mk);
+      for (const typeKey in tile.timetable){
+        const typeId = Number(typeKey);
+        const tt = stopTimetableFor(tile, typeId);
+        if (!tt) continue;
+        const sched = stopSchedule(x, y, typeId, tt);
+        let guard = 0;
+        while (++guard <= 4096){
+          const {next} = slotsAround(sched.curSlot, tt.period, tt.times);
+          if (state.simFrame < next) break;
+          const ending = sched.curSlot;
+          sched.curSlot = next;
+          if (sched.active && sched.servedSlot < ending){
+            const ty = trainTypeById(typeId);
+            const tyName = ty && ty.name ? ty.name : `type ${typeId}`;
+            notify("alert", `MISSED departure: no ${tyName} train at ${placeLabel(x,y)} (was due ${formatClock(ending)})`);
+          }
+        }
+      }
+    }
   }
   // Called the first frame a train docks at a stop it must service: records when it may
   // leave (a timetable slot, or arrival + dwell) and the slot it is held against.
@@ -1677,8 +1733,26 @@
     if (tt){
       train.timetabled = true;
       train.periodFrames = tt.period * FRAMES_PER_SECOND;
-      train.schedDepartFrame = nextSlotFrame(state.simFrame, tt.period, tt.times);
-      train.releaseFrame = train.schedDepartFrame;
+      const sched = stopSchedule(train.x, train.y, train.type, tt);
+      sched.active = true; // this stop+type is now a live, served rotation
+      const {prev, next} = slotsAround(state.simFrame, tt.period, tt.times);
+      if (sched.curSlot < prev) sched.curSlot = prev;
+      // A slot before frame 0 (the clock's start) was never a real departure opportunity, so the
+      // first train must wait for the first genuine slot rather than be flagged "late" against a
+      // phantom pre-start slot. Once the clock has run, prev is always a real slot (>= 0).
+      if (prev >= 0 && sched.servedSlot < prev){
+        // The current departure slot has not been filled yet → this train takes it and leaves
+        // at once. notifyDeparture reports how late it is (on time within the grace window).
+        train.schedDepartFrame = prev;
+        train.releaseFrame = state.simFrame;
+        sched.servedSlot = prev;
+      } else {
+        // A train already left for the current slot → HOLD this one until the next slot so it
+        // departs on time, instead of chasing the slot it just missed and leaving late.
+        train.schedDepartFrame = next;
+        train.releaseFrame = next;
+        sched.servedSlot = next;
+      }
     } else {
       train.timetabled = false;
       train.periodFrames = 0;
@@ -1731,12 +1805,16 @@
         return;
       }
       if (train.timetabled){
-        // Held past a whole schedule period without leaving → that departure is missed.
+        // A docked train that could not leave for a whole period misses that slot; roll its
+        // target to the next one. Keep the stop scheduler in step so its empty-slot watcher
+        // (tickStopSchedules) does not also flag the slot this train is still holding.
         while (state.simFrame >= train.schedDepartFrame + train.periodFrames){
-          notify("alert", `MISSED departure: ${trainDesc(train)} at ${placeLabel(train.x,train.y)} (was due ${formatClock(train.schedDepartFrame)})`);
+          notify("alert", `MISSED departure: ${trainDesc(train)} held at ${placeLabel(train.x,train.y)} (was due ${formatClock(train.schedDepartFrame)})`);
           train.schedDepartFrame += train.periodFrames;
           train.releaseFrame = train.schedDepartFrame;
         }
+        const sc = stopSchedules.get(key(train.x,train.y) + "|" + train.type);
+        if (sc && sc.servedSlot < train.schedDepartFrame){ sc.servedSlot = train.schedDepartFrame; if (sc.curSlot < train.schedDepartFrame) sc.curSlot = train.schedDepartFrame; }
       }
       if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
     }
@@ -1794,6 +1872,7 @@
 
   function simStep(){
     state.simFrame++;
+    tickStopSchedules();
     spawnTrains();
     updateSignals();
     for (const train of state.trains) moveTrain(train);
@@ -1804,13 +1883,40 @@
     updateSignals();
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
-    draw();
   }
 
+  // FIXED-TIMESTEP loop. One simStep == 1/60 s of SIM time, no matter the display's refresh
+  // rate. requestAnimationFrame fires at the monitor's rate (60 Hz, 120 Hz ProMotion, 144 Hz…),
+  // so we bank the real elapsed time and run as many fixed steps as it covers, then draw once.
+  // Previously the sim advanced one step per rAF callback, so the entire simulation — the
+  // clock included — ran at the refresh rate: a 120 Hz screen ran everything at exactly 2×
+  // real time. Pinning steps to wall-clock time keeps the clock and train speeds correct on
+  // every display.
+  const SIM_STEP_MS = 1000 / FRAMES_PER_SECOND;
+  const MAX_CATCHUP_STEPS = 5; // cap steps per frame so a long stall can't spiral
+  let simAccumulatorMs = 0;
+  let lastFrameMs = null;
   let loggedSimError = false;
-  function animation(){
+  function animation(now){
+    if (now == null) now = performance.now();
     try {
-      if (!state.paused) simStep();
+      if (lastFrameMs == null) lastFrameMs = now;
+      let elapsed = now - lastFrameMs;
+      lastFrameMs = now;
+      if (state.paused){
+        simAccumulatorMs = 0; // don't bank time while paused; resume cleanly
+      } else {
+        if (elapsed > 250) elapsed = 250; // clamp background-tab / hitch gaps
+        simAccumulatorMs += elapsed;
+        let steps = 0;
+        while (simAccumulatorMs >= SIM_STEP_MS && steps < MAX_CATCHUP_STEPS){
+          simStep();
+          simAccumulatorMs -= SIM_STEP_MS;
+          steps++;
+        }
+        if (steps >= MAX_CATCHUP_STEPS) simAccumulatorMs = 0; // drop a backlog we can't catch up
+      }
+      draw();
     } catch (err){
       // never let a single bad frame freeze the loop; surface it once
       if (!loggedSimError){ console.error("simStep failed:", err); loggedSimError = true; }
@@ -2544,6 +2650,7 @@
     state.tick = 0;
     state.frame = 0;
     state.simFrame = 0;
+    clearStopSchedules();
     if (notifyLog) notifyLog.innerHTML = "";
     if (data.view) state.view = {...state.view, ...data.view};
     refreshColorUI();
@@ -2577,7 +2684,7 @@
     if (mod && (event.key === "v" || event.key === "V")){ event.preventDefault(); pasteClipboard(); return; }
     if ((event.key === "Delete" || event.key === "Backspace") && state.selection){ event.preventDefault(); deleteSelection(); return; }
     if (event.code === "Space"){ event.preventDefault(); togglePause(); }
-    if (event.key === "s") simStep();
+    if (event.key === "s"){ simStep(); draw(); } // manual single-step (simStep no longer self-draws)
     if (event.key === "Escape"){
       closeContext();
       ioPanel.classList.remove("open");

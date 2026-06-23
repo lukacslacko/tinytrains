@@ -87,6 +87,18 @@ These are the things to actually build for V2. More speculative ideas
   automatically (still save format v2).
 - **Caution fix.** Spawning a train from a **caution** spawn tile no longer clears
   the caution when the tile reverts to plain track — the caution flag is preserved.
+- **Stateful stop dispatching.** A timetabled stop now runs its schedule as a
+  per-type **state machine** (current slot + whether a train was released for it),
+  instead of each arriving train independently picking its nearest slot. It
+  releases **one train per departure slot**: a train waiting at the slot leaves on
+  time; a train arriving mid-slot while the slot is still open leaves immediately
+  and is reported late; but once a train has gone for the current slot, the **next
+  train is held until the following departure time** (it no longer leaves "very
+  late" by chasing the already-filled slot). A slot that **no train turns up for**
+  is reported as a **missed departure** at the next departure time — but only once a
+  stop has served at least one train of that type, so unused timetables stay quiet.
+  Scheduler state is transient sim data (keyed by tile + type), reset with the clock
+  and never saved.
 
 ## To do for V2
 

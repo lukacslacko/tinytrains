@@ -299,10 +299,12 @@ Nothing built on an old save breaks.
 
 ### The sim clock
 
-The simulation runs a **clock**, shown as `mm:ss` in the status line. It advances
-one frame per simulation step (60 frames = one sim-second) and **pauses with the
-simulation** (the Step button advances it one frame). Timetables are scheduled
-against this clock; it resets to `00:00` when a layout is loaded.
+The simulation runs a **clock**, shown as `mm:ss` in the status line. The sim uses
+a **fixed timestep** of 60 simulation steps per second (`60 frames = one sim-second`),
+run from a real-time accumulator so the clock tracks **wall-clock time on any display**,
+regardless of the monitor's refresh rate (60 Hz, 120 Hz ProMotion, 144 Hz…). It
+**pauses with the simulation** (the Step button advances it one frame). Timetables are
+scheduled against this clock; it resets to `00:00` when a layout is loaded.
 
 ### Timetables
 
@@ -322,17 +324,35 @@ at stop "Foo City 2E" (the eastbound departure from platform 2) give *Express*
 departure times `10, 50`. The clock then lets an *Express* depart at each minute's
 `:10` and `:50`.
 
-**Semantics.**
+**Semantics.** A timetabled stop runs its schedule **statefully**, like a real
+platform dispatcher: it tracks the current time and, **per train type**, remembers
+the slot it is sitting on and whether it has already released a train for that
+slot. It releases **at most one train per departure slot**.
 
-- When a train docks at a timetabled stop, it is held until the **next scheduled
-  slot at or after it arrived**, then released (still subject to the normal
-  signal/occupancy checks ahead). Arriving *after* a slot just means it catches
-  the next slot — that still counts as on time.
-- A train that is **held past its slot** (e.g. a red signal ahead) and finally
-  leaves late is reported as **delayed** (§13).
-- A train held right through a **whole period** without leaving has **missed**
-  that departure entirely — reported as an alert (§13) — and is re-targeted at
-  the following slot.
+- At each **departure time** the stop dispatches **one** train:
+  - If a matching train is **waiting** at the platform, it is released and reported
+    **on time** (still subject to the normal signal/occupancy checks ahead).
+  - If none is waiting, the stop **starts waiting** for one.
+- A train that **arrives during a slot** (after the departure time, before the
+  next one) and finds the slot still **open** is released **immediately** and
+  reported **delayed** by how many seconds late it is (within a one-second grace
+  it still counts as on time).
+- Once the stop has **released a train for the current slot**, any **further train**
+  that arrives is **held until the next departure time**, where it leaves **on
+  time** — it does *not* chase the slot that was already filled and leave late.
+  *(This is the fix for: a train arrives a little late, leaves; a second train turns
+  up mid-period and used to leave "very late" instead of waiting out its turn.)*
+- If **no train turns up** for a slot, then at the **next departure time** the stop
+  reports a **missed departure** (§13) and moves on to the new slot. A stop only
+  starts reporting misses **once it has served at least one train** of that type, so
+  a freshly-placed or never-served timetable stays quiet.
+- A train that is **held past its slot** by a red signal/occupancy ahead and finally
+  pulls away is reported **delayed**; if it is stuck right through a **whole period**
+  it has **missed** that departure (alert, §13) and is re-targeted at the next slot.
+- **At the start of the clock** (`00:00`) a stop has no past departure to be late
+  for, so the first train to dock simply **waits for the first scheduled slot** and
+  leaves **on time** — e.g. a train that reaches a `:10` stop at `:04` waits the six
+  seconds rather than being reported as a minute late against the previous period.
 - A type with **no** departure times at this stop, **or no period** on the type,
   falls back to the **dwell** pause. Leave the times blank (or the type's period
   blank/`0`) to mean "just dwell".
@@ -362,7 +382,7 @@ with the sim-clock time and coloured by severity:
 |-------|--------|------------|
 | **info** | green | a train departs a timetabled stop **on time**; also a plain "departed" line when leaving a **named** (but un-timetabled) stop. |
 | **warning** | orange | a train departs a timetabled stop **late** (held past its slot beyond a one-second grace) — the line shows the delay in seconds. |
-| **alert** | red | a **collision**, or a **missed departure** (a train held at a timetabled stop through a whole schedule period). |
+| **alert** | red | a **collision**, or a **missed departure** — either no train turned up for a slot by the next departure time, or a docked train was held right through a whole schedule period without leaving. |
 
 Departures from **unnamed, un-timetabled** stops are silent, so plain
 mechanical dwell points don't flood the log. The window keeps the most recent
