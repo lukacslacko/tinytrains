@@ -256,7 +256,7 @@
       <details class="palette">
         <summary>Signals</summary>
         <div class="palette-body">
-          <p class="help">A signal protects the block of track in its arrow direction &mdash; the run of connected track (through tracks and switches) up to the next signal or a dead end. A small <strong>distant</strong> marker is shown automatically one clean straight tile before each signal: green when the block is free, orange when it is taken. A train passing a green distant reserves the block and rolls through on a green main; one passing an orange distant brakes and waits at the red main, then proceeds once the block clears. Only one train holds a block at a time; waiting trains are served in turn.</p>
+          <p class="help">A signal protects the block of track in its arrow direction &mdash; the run of connected track (through tracks and switches) up to the next signal or a dead end. A small <strong>distant</strong> marker is shown automatically on the clean track (straight or curved) one tile before each signal: green when the block is free, orange when it is taken. Mains stay green while their block is clear. A train passing a green distant reserves the block and rolls through on a green main; one passing an orange distant brakes and waits at the red main, then proceeds once the block clears. Only one train holds a block at a time; waiting trains are served in turn. A signal can only be placed where its distant fits (not after a switch).</p>
           <div class="shape-grid" id="signalPalette"></div>
         </div>
       </details>
@@ -812,10 +812,11 @@
     } else {
       const tile = makeTile(state.selectedTool);
       if (!tile){ ctx.restore(); return; }
+      const invalid = tile.kind === "signal" && !canPlaceSignalAt(x,y,tile.dir);
       ctx.globalAlpha = .52;
       drawTile(x,y,tile);
       ctx.globalAlpha = .9;
-      ctx.strokeStyle = "#64d7c4";
+      ctx.strokeStyle = invalid ? "#ff6b76" : "#64d7c4";
       ctx.lineWidth = Math.max(1, s * .035);
       ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
     }
@@ -945,8 +946,9 @@
     return {blockOfMain, dirOfMain, distantOfMain, blockTiles, mainsOfBlock, holder:new Map()};
   }
 
-  // The block+main a train is about to enter: either it is on the main itself, or one
-  // clean straight tile before it (the distant). Returns null otherwise.
+  // The block+main a train is entering: it must be on the main tile itself. Because a move
+  // sets train.x/y to the destination, this fires while the train is visually on the distant
+  // (one tile back), so it reserves the block exactly as it passes the distant signal.
   function approachInfo(train, sys){
     const tile = getTile(train.x, train.y);
     if (!tile) return null;
@@ -955,10 +957,6 @@
     const here = key(train.x, train.y);
     if (tile.kind === "signal" && ex === tile.dir && sys.blockOfMain.has(here)){
       return {blockId: sys.blockOfMain.get(here), mainKey: here};
-    }
-    const nk = key(train.x + DIRS[ex].dx, train.y + DIRS[ex].dy);
-    if (sys.blockOfMain.has(nk) && sys.dirOfMain.get(nk) === ex){
-      return {blockId: sys.blockOfMain.get(nk), mainKey: nk};
     }
     return null;
   }
@@ -1013,13 +1011,20 @@
     state.sys = sys;
   }
 
-  // A main is "green" for a train that holds its block via that main. For rendering it is
-  // shown green only while that holder has not yet entered the protected tiles.
+  // A main is "green" for a train that holds its block via that main.
   function mainIsGreenFor(train, mainKey){
     return !!(train.holds && train.holds.some(h => h.entryMainKey === mainKey));
   }
+  // A block is free when no train holds it and none is physically inside it.
+  function blockFree(id, sys){
+    return !sys.holder.has(id) && !blockOccupiedByOther(id, sys, null);
+  }
+  // Mains are default-green: green whenever the block ahead is clear, and also for the train
+  // holding the block via this main while it is still approaching. Red only when the block is
+  // taken by someone else, so trains are never led at speed onto a red signal without warning.
   function mainRenderGreen(mainKey, sys){
     const id = sys.blockOfMain.get(mainKey);
+    if (blockFree(id, sys)) return true;
     const tiles = sys.blockTiles.get(id);
     for (const t of state.trains){
       if (!t.holds) continue;
@@ -1029,20 +1034,22 @@
     }
     return false;
   }
-  // A distant is green when its block is free and unclaimed; orange when held or queued.
+  // A distant repeats the block state ahead: green when free, orange when taken.
   function distantRenderGreen(mainKey, sys){
-    const id = sys.blockOfMain.get(mainKey);
-    if (sys.holder.has(id) || blockOccupiedByOther(id, sys, null)) return false;
-    for (const t of state.trains) if (t.wantSince != null && t._ap && t._ap.blockId === id) return false;
-    return true;
+    return blockFree(sys.blockOfMain.get(mainKey), sys);
   }
-  // A distant only renders where the tile before the main is a clean straight through track.
+  // A distant renders on the clean track (straight or curved) leading into a main, but not on
+  // switches, crossings, stops or other signals.
+  function isDistantTrack(tile, dir){
+    return !!tile && tile.kind === "track" && tile.route.length === 2 && tile.route.includes(dir);
+  }
   function distantDrawable(mainKey, sys){
-    const dir = sys.dirOfMain.get(mainKey);
     const {x,y} = readKey(sys.distantOfMain.get(mainKey));
-    const dt = getTile(x,y);
-    return !!dt && dt.kind === "track" && dt.route.length === 2 &&
-      dt.route.includes(dir) && dt.route.includes(opposite(dir));
+    return isDistantTrack(getTile(x,y), sys.dirOfMain.get(mainKey));
+  }
+  // A signal may only be placed where its distant can sit on a clean track one tile before it.
+  function canPlaceSignalAt(x, y, dir){
+    return isDistantTrack(getTile(x - DIRS[dir].dx, y - DIRS[dir].dy), dir);
   }
 
   function occupied(x,y,ignoreId){
@@ -1181,6 +1188,11 @@
     } else {
       const tile = makeTile(state.selectedTool);
       if (!tile) return;
+      if (tile.kind === "signal" && !canPlaceSignalAt(x,y,tile.dir)){
+        state.message = "Signal needs a clean track (straight or curved) leading into it for its distant";
+        draw();
+        return;
+      }
       setTile(x,y,tile);
     }
     updateSignals();
@@ -1367,6 +1379,7 @@
     const tile = getTile(x,y);
     const data = new FormData(contextMenu);
     if (!tile) return;
+    const prevDir = tile.dir;
     const routeShape = data.get("routeShape");
     if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
@@ -1381,6 +1394,10 @@
       tile.filters[String(tile.branches[0])] = data.get("filter0") || null;
       tile.filters[String(tile.branches[1])] = data.get("filter1") || null;
       if (!tile.branches.includes(tile.defaultBranch)) tile.defaultBranch = tile.branches[0];
+    }
+    if (tile.kind === "signal" && !canPlaceSignalAt(x,y,tile.dir)){
+      tile.dir = prevDir; // keep a valid distant: revert a direction with no clean approach
+      state.message = "Signal needs a clean track (straight or curved) leading into it for its distant";
     }
     closeContext();
     updateSignals();
