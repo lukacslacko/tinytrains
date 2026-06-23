@@ -322,6 +322,9 @@
   const ACCEL = 0.0008;
   const DECEL = 0.0002;
   const MIN_SPEED = 0.0016;
+  // On caution tiles trains crawl, ready to stop, and meet others safely. On normal
+  // tiles meeting another train is a crash.
+  const CAUTION_SPEED = 0.008;
   // Short pause after a held train's main signal turns green, so the clear is visible
   // before the train pulls away.
   const SIGNAL_REACTION_SECONDS = 0.5;
@@ -852,9 +855,18 @@
   }
 
   function drawTrains(){
+    const blinkOn = Math.floor(performance.now() / 250) % 2 === 0;
     for (const train of state.trains){
       const c = trainPoint(train);
       const r = Math.max(6, tileSize() * .16);
+      if (train.crashed){
+        ctx.fillStyle = blinkOn ? "#ff2a2a" : "#2a0606";
+        ctx.beginPath(); ctx.arc(c.x,c.y,r+4,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = blinkOn ? "#fff" : "#ff2a2a";
+        ctx.lineWidth = Math.max(2, tileSize()*.05);
+        ctx.beginPath(); ctx.arc(c.x,c.y,r+4,0,Math.PI*2); ctx.stroke();
+        continue;
+      }
       ctx.fillStyle = "#06090d";
       ctx.beginPath(); ctx.arc(c.x,c.y,r+3,0,Math.PI*2); ctx.fill();
       ctx.fillStyle = COLORS[train.color];
@@ -1143,6 +1155,12 @@
   function occupied(x,y,ignoreId){
     return state.trains.some(t => t.id !== ignoreId && trainOccupies(t,x,y));
   }
+  function tileIsCaution(x,y){ const t = getTile(x,y); return !!(t && t.caution); }
+  function crashTrains(train, x, y){
+    train.crashed = true;
+    for (const o of state.trains) if (o.id !== train.id && trainOccupies(o,x,y)) o.crashed = true;
+    state.message = "CRASH — erase the trains to clear it";
+  }
 
   function trainOccupies(train,x,y){
     return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
@@ -1161,7 +1179,10 @@
     if (tile.kind === "signal" && ex === tile.dir && !mainIsGreenFor(train, key(x,y))) return false;
     const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
     const nt = getTile(nx,ny);
-    if (!nt || !tileAccepts(nt, opposite(ex)) || occupied(nx,ny,train.id)) return false;
+    if (!nt || !tileAccepts(nt, opposite(ex))) return false;
+    // Brake for an occupied tile ahead only when driving cautiously; on normal track a
+    // train does not slow for others (meeting one is a crash, handled in moveTrain).
+    if (occupied(nx,ny,train.id) && tile.caution) return false;
     return true;
   }
 
@@ -1173,7 +1194,7 @@
     const seg = Math.hypot(d.dx,d.dy) || 1;
     const halt = !canLeave(train, train.x, train.y, train.from);
     const remaining = (1 - train.progress) * seg;
-    let target = MAX_SPEED;
+    let target = tileIsCaution(train.x, train.y) ? CAUTION_SPEED : MAX_SPEED;
     if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
     if (train.speed < target) train.speed = Math.min(target, train.speed + ACCEL);
     else train.speed = target;
@@ -1203,6 +1224,7 @@
 
   function moveTrain(train){
     if (train.speed == null) train.speed = 0;
+    if (train.crashed){ train.speed = 0; return; }
     if (trainMoving(train)){ advanceWithSpeed(train); return; }
     if (train.wait > 0){ train.wait--; train.speed = 0; return; }
     const tile = getTile(train.x,train.y);
@@ -1234,7 +1256,12 @@
     const ny = train.y + DIRS[ex].dy;
     const nf = opposite(ex);
     const nextTile = getTile(nx,ny);
-    if (!nextTile || !tileAccepts(nextTile,nf) || occupied(nx,ny,train.id)){ train.speed = 0; return; }
+    if (!nextTile || !tileAccepts(nextTile,nf)){ train.speed = 0; return; }
+    if (occupied(nx,ny,train.id)){
+      if (tile.caution){ train.speed = 0; return; } // caution track: stop safely behind the train ahead
+      crashTrains(train, nx, ny);                    // normal track: meeting another train is a crash
+      train.speed = 0; return;
+    }
     delete train.stopKey;
     train.prevX = train.x;
     train.prevY = train.y;
