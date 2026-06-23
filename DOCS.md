@@ -143,23 +143,25 @@ The pop-up adapts to the tile kind. Common controls:
 
 Colours are **not** hard-coded. A layout owns a list of **train types**:
 
-- Each type has a **numeric id** (starting at `1`), a **display colour**, and an
-  optional **name**.
+- Each type has a **numeric id** (starting at `1`), a **display colour**, an
+  optional **name**, and a **timetable period** (seconds; see §12).
 - Spawns, stop filters and switch branch filters all refer to a type **by id** —
   so changing a type's colour or name **never** changes any routing.
 - The type list is saved and loaded with the layout.
 
 **Editor** (sidebar, "Train types"): each row is a type — click its swatch to use
-that type for new spawns, edit its colour inline, rename it, and remove it with
-`×` (only allowed when no spawn/filter/train still references it). `+ Add type`
-appends a new id. There is always at least one type.
+that type for new spawns, edit its colour inline, rename it, set its **period s**
+(the timetable recurrence; blank/`0` = no schedule), and remove it with `×` (only
+allowed when no spawn/filter/train still references it). `+ Add type` appends a
+new id. There is always at least one type.
 
 ---
 
 ## 6. Spawns and trains
 
 A **spawn** tile emits one train heading in its set direction, then immediately
-becomes plain track (so the line stays clear). The emitted train carries the
+becomes plain track (so the line stays clear); if the spawn sat on **caution**
+track, the caution is kept on the reverted tile. The emitted train carries the
 spawn's **train type** (which drives colour and routing). Trains are multi-part
 (an engine plus trailing cars) and follow their route smoothly, bodies trailing
 through curves. A train only spawns when the cell ahead is free.
@@ -305,15 +307,20 @@ against this clock; it resets to `00:00` when a layout is loaded.
 ### Timetables
 
 Beyond the simple dwell, a stop can carry a **timetable for each train type that
-stops there**. A timetable entry has:
+stops there**. The schedule is split between the train type and the stop:
 
-- a **recurrence period** — in seconds (the schedule repeats every period); and
-- a list of **departure times** — seconds **within** the period at which a train
-  of that type is allowed to leave.
+- the **recurrence period** — in seconds — belongs to the **train type** (set in
+  the Trains panel, §5; the schedule repeats every period); and
+- the list of **departure times** — seconds **within** the period at which a train
+  of that type may leave — belongs to the **stop**.
 
-**Example.** A stop "Foo City 2E" (the eastbound departure from platform 2) gives
-train type *Express* a period of `60` and departure times `10, 50`. The clock
-then lets an *Express* depart at each minute's `:10` and `:50`.
+This way a type's period is set once and every stop that schedules it reuses it;
+the stop only supplies the times.
+
+**Example.** Give train type *Express* a period of `60` in the Trains panel, then
+at stop "Foo City 2E" (the eastbound departure from platform 2) give *Express*
+departure times `10, 50`. The clock then lets an *Express* depart at each minute's
+`:10` and `:50`.
 
 **Semantics.**
 
@@ -326,13 +333,17 @@ then lets an *Express* depart at each minute's `:10` and `:50`.
 - A train held right through a **whole period** without leaving has **missed**
   that departure entirely — reported as an alert (§13) — and is re-targeted at
   the following slot.
-- A type with **no** timetable entry at this stop falls back to the **dwell**
-  pause. Leave a type's period/times blank to mean "just dwell".
+- A type with **no** departure times at this stop, **or no period** on the type,
+  falls back to the **dwell** pause. Leave the times blank (or the type's period
+  blank/`0`) to mean "just dwell".
 
-**Editing.** Right-click a stop → the **Timetable** section shows one row per
-served type (the stop's filter types, or every type when the filter is "any"),
-each with a **period (s)** field and a **departure times (s)** field (comma- or
-space-separated). Timetables are saved inside the tile.
+**Editing.** Set the type's **period** in the Trains panel (§5). Then right-click
+a stop → the **Timetable** section shows one row per served type (the stop's
+filter types, or every type when the filter is "any"), each with a **departure
+times (s)** field (comma- or space-separated) and a reminder of that type's
+period. Times are saved inside the tile; the period is saved on the type. (Older
+saves that stored the period on the stop still load: their period is lifted onto
+the train type automatically.)
 
 > **Reversing is *not* a timetable feature.** A train changing direction at a
 > terminal is a **shunting** manoeuvre for the future station-master / shunting
@@ -363,8 +374,8 @@ mechanical dwell points don't flood the log. The window keeps the most recent
 
 Done so far in V2: one-click block boundary, remove-train-by-right-click, train
 types by id, multi-colour filters, stations + element naming, **timetables + the
-sim clock**, the **notification window**, **add-a-stop from the track pop-up**,
-and this document.
+sim clock** (with the recurrence **period set per train type**), the
+**notification window**, **add-a-stop from the track pop-up**, and this document.
 
 Still planned (see `V2_FEATURES.md`): **local AI station masters** (a clean
 state/action interface a scripted or LLM-driven master can drive, with the

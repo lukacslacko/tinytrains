@@ -172,6 +172,7 @@
   .type-row .swatch{width:26px;height:26px;min-height:26px;flex:0 0 auto;color:#06090d;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
   .type-row input[type=color]{width:30px;height:26px;padding:0;flex:0 0 auto;border:none;background:none;cursor:pointer}
   .type-row .type-name{flex:1 1 auto;min-width:0;height:26px}
+  .type-row .type-period{flex:0 0 auto;width:54px;height:26px}
   .type-row .type-del{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;color:var(--danger)}
   .type-add{margin-top:3px}
   .filter-set{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
@@ -210,6 +211,7 @@
   .tt-inputs{display:flex;gap:5px}
   .tt-period{width:84px;flex:0 0 auto}
   .tt-times{flex:1 1 auto;min-width:0}
+  .tt-per{opacity:.85}
   #notifyPanel{
     position:absolute;left:12px;bottom:12px;z-index:4;
     width:min(340px,calc(100% - 24px));
@@ -306,7 +308,7 @@
         <div class="label">Spawns &amp; Signals</div>
         <p class="help">Right-click a track tile to spawn a train, add a block signal, or add a distant signal &mdash; each facing either way. A signal protects the block ahead (connected track up to the next signal or dead end); mains are green when the block is clear, red when taken. Place a <strong>distant</strong> one or more tiles before a signal so a train can roll through on green; a signal with no distant shows a hollow caution marker and trains always brake to it and pause briefly before going. Caution tiles (orange outline) make trains crawl and stop safely; on normal track a meeting is a crash.</p>
         <div class="label">Train types</div>
-        <p class="help">A layout has a list of train <strong>types</strong>, each a numeric id with a display colour and optional name. Spawns and filters refer to a type by id, so recolouring a type never changes routing. Click a swatch to use that type for new spawns; edit the colour or name inline; use + to add a type and &times; to remove an unused one.</p>
+        <p class="help">A layout has a list of train <strong>types</strong>, each a numeric id with a display colour and optional name. Spawns and filters refer to a type by id, so recolouring a type never changes routing. Click a swatch to use that type for new spawns; edit the colour or name inline; use + to add a type and &times; to remove an unused one. The <strong>period s</strong> field is the type's timetable recurrence period in seconds (blank/0 = no schedule); a stop then only needs the departure times within that period.</p>
         <div class="color-row" id="colorButtons"></div>
       </section>
       <section class="group">
@@ -377,8 +379,11 @@
   const LEGACY_COLOR_IDS = {red:1, blue:2, yellow:3, green:4, violet:5};
   const UNKNOWN_TYPE_COLOR = "#9aa6b2";
   function defaultTrainTypes(){
-    return DEFAULT_TYPE_COLORS.map((color,i) => ({id:i+1, color, name:DEFAULT_TYPE_NAMES[i]}));
+    return DEFAULT_TYPE_COLORS.map((color,i) => ({id:i+1, color, name:DEFAULT_TYPE_NAMES[i], period:0}));
   }
+  // A train type's timetable recurrence period in seconds (0 = no schedule). Set in the
+  // left "Trains" panel; stops only supply the departure times within this period.
+  function typePeriod(id){ const t = trainTypeById(id); return t && Number(t.period) > 0 ? Number(t.period) : 0; }
   function trainTypeById(id){
     for (const t of state.trainTypes) if (t.id === id) return t;
     return null;
@@ -1640,11 +1645,13 @@
     notifyLog.scrollTop = notifyLog.scrollHeight;
   }
   // The active timetable for a train type at a stop, or null (→ fall back to plain dwell).
-  // {period} = recurrence in seconds; {times} = departure offsets (seconds) within a period.
+  // The recurrence period now lives on the train type (set in the Trains panel); the stop
+  // supplies only the departure offsets (seconds within the period). A legacy per-stop
+  // period (older saves) is honoured as a fallback when the type has none.
   function stopTimetableFor(tile, typeId){
     const tt = tile.timetable && tile.timetable[typeId];
     if (!tt) return null;
-    const period = Number(tt.period);
+    const period = typePeriod(typeId) || Number(tt.period);
     const times = Array.isArray(tt.times) ? tt.times.map(Number).filter(Number.isFinite) : [];
     if (!(period > 0) || !times.length) return null;
     return {period, times};
@@ -1780,9 +1787,9 @@
       seedTrail(train, tile.dir);
       train._tiles = computeBodyTiles(train);
       state.trains.push(train);
-      spent.push({x, y, route:cloneRoute(tile.route)});
+      spent.push({x, y, route:cloneRoute(tile.route), caution: tile.caution});
     }
-    for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
+    for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route, caution: tile.caution});
   }
 
   function simStep(){
@@ -2001,8 +2008,8 @@
     ).join("") + `</div>`;
   }
   // Per-type timetable editor for a stop pop-up. One row per served type (filter set, or
-  // every type when the filter is "any"): a recurrence period and the departure offsets.
-  // Leaving a row blank means that type just dwells (no schedule).
+  // every type when the filter is "any"): just the departure offsets (the recurrence
+  // period belongs to the train type, set in the Trains panel). Blank row = plain dwell.
   function timetableEditor(tile){
     const served = filterIds(tile.filter);
     const ids = served.length ? served : state.trainTypes.map(t => t.id);
@@ -2011,15 +2018,15 @@
     for (const id of ids){
       const t = trainTypeById(id); if (!t) continue;
       const e = tt[id] || {};
-      const period = e.period != null ? e.period : "";
       const times = Array.isArray(e.times) ? e.times.join(", ") : "";
-      rows += `<div class="tt-row"><div class="tt-head"><span class="tt-dot" style="background:${t.color}"></span>${typeOptLabel(t)}</div>` +
+      const per = typePeriod(id);
+      const perHint = per > 0 ? `every ${per}s` : `no period — set one in Trains`;
+      rows += `<div class="tt-row"><div class="tt-head"><span class="tt-dot" style="background:${t.color}"></span>${typeOptLabel(t)} <span class="tt-per">(${perHint})</span></div>` +
         `<div class="tt-inputs">` +
-        `<input class="tt-period" name="tt_period_${id}" type="number" min="0" step="1" placeholder="period s" value="${period}">` +
         `<input class="tt-times" name="tt_times_${id}" type="text" placeholder="times s, e.g. 10, 50" value="${escapeHtml(times)}">` +
         `</div></div>`;
     }
-    return `<div class="field"><span>Timetable — recurrence period &amp; departure times (s within the period), per type</span><div class="tt-set">${rows}</div></div>`;
+    return `<div class="field"><span>Timetable — departure times (s within the type's period)</span><div class="tt-set">${rows}</div></div>`;
   }
   const DIR_ARROWS = ["↑","↗","→","↘","↓","↙","←","↖"]; // N NE E SE S SW W NW
   function dirArrow(value){ const a = DIR_ARROWS[Number(value)]; return a || String(value); }
@@ -2195,12 +2202,10 @@
       tile.filter = data.getAll("filter").map(Number);
       const tt = {};
       for (const t of state.trainTypes){
-        const p = data.get(`tt_period_${t.id}`);
         const tm = data.get(`tt_times_${t.id}`);
-        if (p == null && tm == null) continue; // type not shown in this pop-up
-        const period = Number(p);
-        const times = String(tm || "").split(/[\s,]+/).map(Number).filter(Number.isFinite);
-        if (period > 0 && times.length) tt[t.id] = {period, times};
+        if (tm == null) continue; // type not shown in this pop-up
+        const times = String(tm).split(/[\s,]+/).map(Number).filter(Number.isFinite);
+        if (times.length) tt[t.id] = {times};
       }
       if (Object.keys(tt).length) tile.timetable = tt; else delete tile.timetable;
     }
@@ -2345,7 +2350,7 @@
     }
     function addTrainType(){
       const id = nextTypeId();
-      state.trainTypes.push({id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:""});
+      state.trainTypes.push({id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:"", period:0});
       state.selectedType = id;
       buildTypeEditor();
       draw();
@@ -2378,10 +2383,15 @@
         const nm = document.createElement("input");
         nm.type = "text"; nm.className = "type-name"; nm.value = t.name || ""; nm.placeholder = "name"; nm.maxLength = 16;
         nm.addEventListener("change", () => { t.name = nm.value.trim(); });
+        const per = document.createElement("input");
+        per.type = "number"; per.className = "type-period"; per.min = "0"; per.step = "1";
+        per.value = Number(t.period) > 0 ? t.period : "";
+        per.placeholder = "period s"; per.title = "Timetable recurrence period in seconds (blank/0 = no schedule)";
+        per.addEventListener("change", () => { t.period = Number(per.value) > 0 ? Number(per.value) : 0; });
         const del = document.createElement("button");
         del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove type";
         del.addEventListener("click", () => removeTrainType(t.id));
-        row.append(swatch, col, nm, del);
+        row.append(swatch, col, nm, per, del);
         colorButtons.appendChild(row);
       }
       const add = document.createElement("button");
@@ -2487,9 +2497,12 @@
         const clean = {};
         for (const k in tile.timetable){
           const e = tile.timetable[k];
-          const period = Number(e && e.period);
           const times = Array.isArray(e && e.times) ? e.times.map(Number).filter(Number.isFinite) : [];
-          if (period > 0 && times.length) clean[k] = {period, times};
+          if (!times.length) continue;
+          const entry = {times};
+          const p = Number(e && e.period); // legacy per-stop period → kept for the lift in deserialize
+          if (p > 0) entry.period = p;
+          clean[k] = entry;
         }
         if (Object.keys(clean).length) tile.timetable = clean; else delete tile.timetable;
       }
@@ -2503,12 +2516,23 @@
     const data = JSON.parse(text);
     if (!data || !Array.isArray(data.tiles)) throw new Error("Missing tiles array");
     state.trainTypes = (Array.isArray(data.trainTypes) && data.trainTypes.length)
-      ? data.trainTypes.map(t => ({id: t.id, color: t.color || UNKNOWN_TYPE_COLOR, name: t.name || ""}))
+      ? data.trainTypes.map(t => ({id: t.id, color: t.color || UNKNOWN_TYPE_COLOR, name: t.name || "", period: Number(t.period) > 0 ? Number(t.period) : 0}))
       : defaultTrainTypes();
     state.tiles = new Map();
     for (const item of data.tiles){
       if (!Number.isFinite(item.x) || !Number.isFinite(item.y) || !item.tile) continue;
       setTile(item.x,item.y, migrateTile(item.tile));
+    }
+    // Lift any legacy per-stop timetable periods onto their train type (pre-period saves),
+    // so an older layout's schedule still shows and runs under the new per-type period.
+    for (const [,tile] of state.tiles){
+      if (tile.kind !== "stop" || !tile.timetable) continue;
+      for (const k in tile.timetable){
+        const p = Number(tile.timetable[k].period);
+        if (!(p > 0)) continue;
+        const t = trainTypeById(Number(k));
+        if (t && !(Number(t.period) > 0)) t.period = p;
+      }
     }
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.stations = (Array.isArray(data.stations) ? data.stations : [])

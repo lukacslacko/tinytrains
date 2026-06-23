@@ -56,9 +56,10 @@ These are the things to actually build for V2. More speculative ideas
     signal/occupancy checks). Arriving after a slot simply means catching the
     next slot — that still counts as on time.
   - Editing: the stop right-click pop-up has a **Timetable** section with one row
-    per served type (period + departure-times text field). Blank = simple dwell.
-    Timetables are saved/loaded inside the tile (still save format v2; additive,
-    so older saves load unchanged) and sanitised on load.
+    per served type (departure-times text field; the **period now lives on the
+    train type** — see the follow-up below). Blank = simple dwell. Timetables are
+    saved/loaded inside the tile (still save format v2; additive, so older saves
+    load unchanged) and sanitised on load.
 - **Notification system.** A scrolling **chat-style notification window**
   (bottom-left of the map, collapsible, with a Clear button) reports operational
   events with the sim-clock time:
@@ -77,6 +78,15 @@ These are the things to actually build for V2. More speculative ideas
   default dwell seconds), preserving the tile's route and caution. Right-click
   the new stop again to set its filter, dwell, timetable and name. This means a
   stop can be created without switching to the Stop palette tool.
+- **Timetable period moved onto the train type.** The recurrence **period** is now
+  a property of the **train type**, set in the left "Trains" panel (a `period s`
+  field per type; blank/`0` = no schedule). A stop's timetable then only supplies
+  the **departure times** for each served type, reusing that type's period. The
+  stop pop-up shows the type's period as a reminder. Old saves that stored the
+  period on the stop still load — their period is lifted onto the train type
+  automatically (still save format v2).
+- **Caution fix.** Spawning a train from a **caution** spawn tile no longer clears
+  the caution when the tile reverts to plain track — the caution flag is preserved.
 
 ## To do for V2
 
