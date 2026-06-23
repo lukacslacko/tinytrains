@@ -1222,21 +1222,21 @@
     return {blockOfMain, dirOfMain, tileOfMain, blockTiles, mainsOfBlock, distantCommit, mainsWithDistant, holder:new Map()};
   }
 
-  // The block+main a train is entering: it is on a signal tile and its exit matches one of
-  // that signal's directions. Because a move sets train.x/y to the destination, this fires
-  // while the train is visually on the distant (one tile back), reserving the block as it
-  // passes the distant.
+  // The block+main a train is reserving.
   function approachInfo(train, sys){
+    // A distant reserves the block only as the train moves OFF it (prev tile is the distant),
+    // so the distant stays green until the train has actually passed it — not a tile early.
+    if (trainMoving(train) && train.prevX != null){
+      const pt = getTile(train.prevX, train.prevY);
+      if (pt && pt.kind === "distant"){
+        const dc = sys.distantCommit.get(mkMain(train.prevX, train.prevY, train.moveDir));
+        if (dc) return {blockId: dc.blockId, mainKey: dc.mainKey, mainTile: dc.mainTile, approach: dc.approach, rollThrough: true};
+      }
+    }
     const tile = getTile(train.x, train.y);
     if (!tile) return null;
     const ex = exitFor(tile, train.from, train.color);
     if (ex == null) return null;
-    if (tile.kind === "distant"){
-      // passing a distant reserves the block of the main ahead → the train may roll through
-      const dc = sys.distantCommit.get(mkMain(train.x, train.y, ex));
-      if (dc) return {blockId: dc.blockId, mainKey: dc.mainKey, mainTile: dc.mainTile, approach: dc.approach, rollThrough: true};
-      return null;
-    }
     if (tile.kind === "signal"){
       const mk = mkMain(train.x, train.y, ex);
       if (sys.blockOfMain.has(mk)) return {blockId: sys.blockOfMain.get(mk), mainKey: mk, mainTile: sys.tileOfMain.get(mk), rollThrough: false};
