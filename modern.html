@@ -747,6 +747,28 @@
     ctx.stroke();
   }
 
+  // Caution stripe: drawn UNDER the white rail, wider, so a black then a yellow band runs
+  // parallel on each side of the track line (not around the tile square).
+  function drawRouteStripe(x,y,route,color,width){
+    const c = centerPoint(x,y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const d of route){
+      const e = endpointPoint(x,y,d);
+      ctx.moveTo(c.x,c.y);
+      ctx.lineTo(e.x,e.y);
+    }
+    ctx.stroke();
+  }
+  function drawCautionUnderlay(x,y,route){
+    const W = Math.max(3, tileSize() * .085);
+    drawRouteStripe(x,y,route, DISTANT_ORANGE, W + tileSize() * .18); // yellow band (outermost)
+    drawRouteStripe(x,y,route, "#06090d", W + tileSize() * .09);      // black band (inside the yellow)
+  }
+
   function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
     const c = centerPoint(x,y);
     const e = endpointPoint(x,y,d);
@@ -786,9 +808,7 @@
     ctx.fillStyle = "#121820";
     ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
     if (tile.caution){
-      ctx.strokeStyle = DISTANT_ORANGE;
-      ctx.lineWidth = Math.max(1.5, s * .05);
-      ctx.strokeRect(p.x + s*.06, p.y + s*.06, s - s*.12, s - s*.12);
+      for (const route of routesFor(tile)) drawCautionUnderlay(x,y,route);
     }
     if (tile.kind === "switch"){
       drawRoute(x,y,[tile.stem, tile.branches[0]], false);
