@@ -763,12 +763,6 @@
     }
     ctx.stroke();
   }
-  function drawCautionUnderlay(x,y,route){
-    const W = Math.max(3, tileSize() * .085);
-    drawRouteStripe(x,y,route, DISTANT_ORANGE, W + tileSize() * .18); // yellow band (outermost)
-    drawRouteStripe(x,y,route, "#06090d", W + tileSize() * .09);      // black band (inside the yellow)
-  }
-
   function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
     const c = centerPoint(x,y);
     const e = endpointPoint(x,y,d);
@@ -802,57 +796,63 @@
     drawTriangle(x,y,d,STOP_BROWN,.385,"#ffffff",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
   }
 
-  function drawTile(x,y,tile){
-    const p = worldToScreen(x,y);
-    const s = tileSize();
+  // Tile drawing is split into phases so the whole board can be drawn in layered passes
+  // (all backgrounds, then all yellow caution bands, then all black, then all white rails,
+  // then all markers). That keeps caution stripes continuous across tile boundaries instead
+  // of a later tile's background erasing an earlier tile's wider stripe.
+  function cautionWidths(){ const W = Math.max(3, tileSize() * .085); return {yellow: W + tileSize() * .18, black: W + tileSize() * .09}; }
+  function drawTileBg(x,y){
+    const p = worldToScreen(x,y), s = tileSize();
     ctx.fillStyle = "#121820";
     ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
-    if (tile.caution){
-      for (const route of routesFor(tile)) drawCautionUnderlay(x,y,route);
-    }
+  }
+  function drawTileCaution(x,y,tile,color,width){
+    for (const route of routesFor(tile)) drawRouteStripe(x,y,route,color,width);
+  }
+  function drawTileRoutes(x,y,tile){
+    for (const route of routesFor(tile)) drawRoute(x,y,route,false);
+  }
+  function drawTileMarkers(x,y,tile){
+    const s = tileSize();
     if (tile.kind === "switch"){
-      drawRoute(x,y,[tile.stem, tile.branches[0]], false);
-      drawRoute(x,y,[tile.stem, tile.branches[1]], false);
       for (const b of tile.branches){
         const filter = tile.filters[String(b)];
         if (!filter) continue;
-        const c = centerPoint(x,y);
-        const e = endpointPoint(x,y,b);
-        const p = lerpPoint(c,e,.5);
+        const pt = lerpPoint(centerPoint(x,y), endpointPoint(x,y,b), .5);
         ctx.fillStyle = COLORS[filter];
-        ctx.beginPath(); ctx.arc(p.x,p.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(pt.x,pt.y,Math.max(4,s*.09),0,Math.PI*2); ctx.fill();
       }
       return;
     }
-    for (const route of routesFor(tile)) drawRoute(x,y,route,false);
-    if (tile.kind === "spawn"){
-      drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
-    }
+    if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,COLORS[tile.color],.2);
     if (tile.kind === "stop"){
       drawStopMarker(x,y,tile.dir);
       if (tile.filter){
         const c = centerPoint(x,y);
         ctx.fillStyle = COLORS[tile.filter];
-        ctx.beginPath();
-        ctx.arc(c.x,c.y,Math.max(3,s*.07),0,Math.PI*2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(c.x,c.y,Math.max(3,s*.07),0,Math.PI*2); ctx.fill();
       }
     }
     if (tile.kind === "signal"){
-      // one triangle per direction this tile signals, each to the right of its own facing
       for (const dir of signalDirs(tile)){
         const green = state.sys ? mainRenderGreen(mkMain(x,y,dir), state.sys) : false;
         drawTriangle(x,y,dir,green ? "#16a34a" : "#ff2a2a",.385,"#0b0e12",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
       }
     }
     if (tile.kind === "distant"){
-      // a placed distant repeats the aspect of the main it faces (green free / orange taken)
       for (const dir of signalDirs(tile)){
         const dc = state.sys && state.sys.distantCommit.get(mkMain(x,y,dir));
         const color = dc ? (blockFree(dc.blockId, state.sys) ? "#16a34a" : DISTANT_ORANGE) : "#6b7785";
         drawTriangle(x,y,dir,color,.27,"#0b0e12",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
       }
     }
+  }
+  // Full single-tile render (used for the placement ghost).
+  function drawTile(x,y,tile){
+    drawTileBg(x,y);
+    if (tile.caution){ const cw = cautionWidths(); drawTileCaution(x,y,tile,DISTANT_ORANGE,cw.yellow); drawTileCaution(x,y,tile,"#06090d",cw.black); }
+    drawTileRoutes(x,y,tile);
+    drawTileMarkers(x,y,tile);
   }
 
   // A main with no placed distant gets a virtual caution marker (hollow orange triangle) on
@@ -1079,10 +1079,14 @@
 
   function draw(){
     drawGrid();
-    for (const [k,tile] of state.tiles){
-      const {x,y} = readKey(k);
-      drawTile(x,y,tile);
-    }
+    // Layered passes so caution stripes and rails join cleanly across tile boundaries.
+    const cw = cautionWidths();
+    const tiles = [...state.tiles];
+    for (const [k] of tiles){ const {x,y} = readKey(k); drawTileBg(x,y); }
+    for (const [k,t] of tiles){ if (t.caution){ const {x,y} = readKey(k); drawTileCaution(x,y,t,DISTANT_ORANGE,cw.yellow); } }
+    for (const [k,t] of tiles){ if (t.caution){ const {x,y} = readKey(k); drawTileCaution(x,y,t,"#06090d",cw.black); } }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
     drawProtectedHighlight();
     drawVirtualCautions();
     drawSelectionOverlay();

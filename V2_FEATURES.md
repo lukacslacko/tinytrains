@@ -48,6 +48,32 @@ Keep it up to date with all future changes.
 
 - Stops might cause a train of some type to reverse there.
 
+### Stations
+Group signals and switches (and stops) into named **stations**:
+- Draw a station boundary (a region) to define a station; give it a name.
+- Station tiles are drawn with a bit of background colour to show their extent.
+- Elements inside a station can be named:
+  - Stops named like platforms/tracks with a direction, e.g. `1E` for the
+    eastward stop of track 1.
+  - Switches named `1`, `2`, …
+  - Signals named `A`, `B`, …
+- These names are how a (human or AI) station master refers to the station's
+  infrastructure.
+
+### Local AI station masters
+A locally running model (e.g. via ollama) can act as a **station master** for a
+station:
+- It has access to the trains' positions and the states and connectivity of the
+  station's stops, signals and switches (by their station-local names), and knows
+  the timetables.
+- It can be given station-specific instructions in natural language, e.g. for a
+  small end-of-line station: "receive trains on the empty track" — the AI then
+  sets the switches accordingly and only clears the inbound train's signal once
+  the switches are set.
+- The game exposes a clean state/action interface (read positions/aspects/
+  switch states + timetable; set switch positions, set signal aspects) that the
+  AI drives. Actions still respect the interlocking/safety rules.
+
 ## Later / more speculative (V3+)
 
 ### Night and day cycle in timetables
@@ -68,3 +94,11 @@ This needs to be worked out for V3.
 
 ### Shunting
 This should be figured out for V3 or V4.
+
+### Train driver AIs
+Once shunting exists, individual trains could have **driver AIs** that receive
+shunting instructions from the station-master AI and execute them. For example,
+at a two-track terminal: when the train arrives, decouple the locomotive, run it
+to the end of the track, change the switch, run around the cars on the other
+track, then reverse and couple to the cars from the other end — so the train can
+leave in the opposite direction. Depends on shunting, so V3/V4.
