@@ -32,6 +32,19 @@ Backlog captured from design discussion. Not yet implemented.
   single point.
 - For now ignore mass/inertia of cars, engine power, etc.
 
+## 3e. Multiple signals (different directions) on the same tile
+- Allow more than one signal on a single tile, facing different directions.
+- This lets blocks connect seamlessly by having opposing main signals share
+  a tile (a main facing each way at the same spot).
+
+## 3f. "Caution" track type
+- A new track property/overlay rendered with an orange outline.
+- On a caution track, trains drive slowly and ready to stop at the next tile,
+  and may encounter another train and safely stop (no crash).
+- On normal (non-caution) track, encountering another train is a **crash**:
+  render it with blinking red and require the user to resolve it.
+- Add a tool (like Erase) that toggles the caution outline on/off for a tile.
+
 ## 3d. Recompute blocks & axle counts when signalling changes
 - When a new signal is added (e.g. a main with no opposing signal yet, so its
   block covers a large area), recompute all blocks and recount the axles
