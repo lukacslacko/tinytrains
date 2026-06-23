@@ -28,14 +28,23 @@ These are the things to actually build for V2. More speculative ideas
   uses multi-select chips for these filters; markers render one coloured dot per
   selected type.
 
+### Phase 2 — done
+- **Stations.** A new **Station** tool drags out a named rectangular region,
+  drawn with a faint tint + border and its name at the top-left. Membership is
+  geometric (a stop/switch/signal belongs to the station whose rect contains its
+  tile). The sidebar has a Stations list to rename/remove. Stops, switches and
+  signals can be **named** (right-click → Name; the pop-up shows which station
+  they fall in) with station-local labels like `1E`, `2W`, `A`, `2`; named
+  elements draw their label on the tile. Stations are saved/loaded.
+- **Named stops** (the trivial part of Timetables) — covered by the element
+  naming above.
+- **Documentation.** Wrote `DOCS.md`, an all-encompassing explanation of every
+  aspect of the game. Keep it up to date with future changes.
+
 ## To do for V2
 
-### Documentation
-Write an all-encompassing documentation explaining all aspects of the game.
-Keep it up to date with all future changes.
-
 ### Timetables
-- Stops may have names.
+- ~~Stops may have names.~~ (done in Phase 2 — element naming)
 
 - Stops may have a timetable for each train type which stops there. The
   timetable has a recurrence (modulo how many minutes or seconds) and
@@ -46,18 +55,6 @@ Keep it up to date with all future changes.
   go at each minute :10 and :50.
 
 - Stops might cause a train of some type to reverse there.
-
-### Stations
-Group signals and switches (and stops) into named **stations**:
-- Draw a station boundary (a region) to define a station; give it a name.
-- Station tiles are drawn with a bit of background colour to show their extent.
-- Elements inside a station can be named:
-  - Stops named like platforms/tracks with a direction, e.g. `1E` for the
-    eastward stop of track 1.
-  - Switches named `1`, `2`, …
-  - Signals named `A`, `B`, …
-- These names are how a (human or AI) station master refers to the station's
-  infrastructure.
 
 ### Local AI station masters
 A locally running model (e.g. via ollama) can act as a **station master** for a

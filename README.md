@@ -15,8 +15,10 @@ Open [`index.html`](index.html) in any browser, or just double-click it. It now
 links to both versions:
 
 - [`modern.html`](modern.html) — a new tile-based control simulation with a
-  sleek editor, switch color filters, train spawns, stops, signals, draggable
-  pan, mouse-wheel zoom, browser save, and JSON import/export.
+  sleek editor: train types, colour-routed switches, multi-type stop/switch
+  filters, block signals, named stations, train spawns, stops, draggable pan,
+  mouse-wheel zoom, browser save, and JSON import/export. See
+  [`DOCS.md`](DOCS.md) for the full guide.
 - [`classic.html`](classic.html) — the original PICO-8 style port.
 
 The classic view auto-scales to fill the window.
@@ -27,6 +29,7 @@ Classic controls: **Pause** (Space), **Reset** (R), **Speed**.
 
 - `index.html` — version selector.
 - `modern.html` — the new tile-based control simulation.
+- `DOCS.md` — full documentation of the modern builder/simulator.
 - `classic.html` — the finished, self-contained classic game (no dependencies).
 - `train3.p8` — the original PICO-8 cart.
 - `generate.py` — rebuilds `index.html` from the cart: `python3 generate.py`.

@@ -279,6 +279,11 @@
         <div class="color-row" id="colorButtons"></div>
       </section>
       <section class="group">
+        <div class="label">Stations</div>
+        <p class="help">Pick the <strong>Station</strong> tool and drag a rectangle to mark a named region. Name the stops, switches and signals inside it (right-click an element &rarr; Name) using station-local labels like <code>1E</code>, <code>2W</code>, <code>A</code>, <code>2</code> &mdash; these are how a station master refers to the infrastructure. Rename or remove stations below.</p>
+        <div id="stationList"></div>
+      </section>
+      <section class="group">
         <div class="label">Save / Load</div>
         <div class="row">
           <button id="saveBtn">Save Browser</button>
@@ -446,6 +451,7 @@
   const SIGNAL_SHAPES = buildDirectionalShapes("signal");
   const TOOLS = [
     ["select","Select"],
+    ["station","Station"],
     ["caution","Caution"],
     ["erase","Erase"]
   ];
@@ -458,6 +464,8 @@
     tiles: new Map(),
     trains: [],
     nextTrainId: 1,
+    stations: [],      // named regions {id,name,rect}; element names live on tiles
+    nextStationId: 1,
     tick: 0,
     frame: 0,
     paused: false,
@@ -535,6 +543,27 @@
     updateSignals();
     state.message = `Pasted ${clipboard.tiles.length} tiles`;
     draw();
+  }
+
+  // Stations are named rectangular regions. Membership is geometric: a stop,
+  // switch or signal "belongs" to a station when its tile lies inside the rect.
+  // The station-local names of those elements live on the tiles themselves
+  // (tile.name) — a station master enumerates the tiles within its rect.
+  function addStation(rect){
+    const r = normRect(rect);
+    const id = state.nextStationId++;
+    const st = {id, name:`Station ${id}`, rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    state.stations.push(st);
+    return st;
+  }
+  function removeStation(id){ state.stations = state.stations.filter(s => s.id !== id); }
+  // The topmost station whose rect contains (x,y), or null.
+  function stationContaining(x,y){
+    for (let i = state.stations.length-1; i >= 0; i--){
+      const r = normRect(state.stations[i].rect);
+      if (r && x>=r.x0 && x<=r.x1 && y>=r.y0 && y<=r.y1) return state.stations[i];
+    }
+    return null;
   }
 
   function key(x,y){ return `${x},${y}`; }
@@ -1079,6 +1108,61 @@
     ctx.stroke();
   }
 
+  // Translucent tint + border under the tiles, marking a station's extent.
+  function drawStations(){
+    const s = tileSize();
+    for (const st of state.stations){
+      const r = normRect(st.rect); if (!r) continue;
+      const a = worldToScreen(r.x0, r.y0);
+      const w = (r.x1-r.x0+1)*s, h = (r.y1-r.y0+1)*s;
+      ctx.save();
+      ctx.fillStyle = "rgba(120,150,205,.10)";
+      ctx.fillRect(a.x, a.y, w, h);
+      ctx.strokeStyle = "rgba(150,180,235,.5)";
+      ctx.lineWidth = Math.max(1, s*.03);
+      ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+      ctx.restore();
+    }
+  }
+  // Station names (top-left of each region) drawn over the tiles.
+  function drawStationLabels(){
+    const s = tileSize();
+    ctx.save();
+    ctx.font = `600 ${Math.max(10, Math.min(16, s*.34))}px system-ui, sans-serif`;
+    ctx.textBaseline = "top";
+    for (const st of state.stations){
+      const r = normRect(st.rect); if (!r) continue;
+      const a = worldToScreen(r.x0, r.y0);
+      const label = st.name || `Station ${st.id}`;
+      const tw = ctx.measureText(label).width;
+      const bh = Math.max(14, s*.42);
+      ctx.fillStyle = "rgba(22,30,44,.82)";
+      ctx.fillRect(a.x+2, a.y+2, tw+10, bh);
+      ctx.fillStyle = "#cfe0ff";
+      ctx.fillText(label, a.x+7, a.y+2+(bh-Math.max(10,Math.min(16,s*.34)))/2);
+    }
+    ctx.restore();
+  }
+  // Station-local element names (1E, A, 2…) drawn at the bottom-left of their tile.
+  function drawElementNames(){
+    const s = tileSize();
+    if (s < 16) return; // unreadable when zoomed far out
+    ctx.save();
+    ctx.font = `${Math.max(9, Math.min(13, s*.26))}px system-ui, sans-serif`;
+    ctx.textBaseline = "top";
+    for (const [k,t] of state.tiles){
+      if (!t.name) continue;
+      const {x,y} = readKey(k);
+      const p = worldToScreen(x,y);
+      const bh = Math.max(11, s*.3);
+      const tw = ctx.measureText(t.name).width;
+      ctx.fillStyle = "rgba(10,14,20,.72)";
+      ctx.fillRect(p.x+2, p.y+s-bh-2, tw+6, bh);
+      ctx.fillStyle = "#e6edf5";
+      ctx.fillText(t.name, p.x+5, p.y+s-bh-1);
+    }
+    ctx.restore();
+  }
   function drawSelectionOverlay(){
     const r = normRect(state.selecting || state.selection);
     if (!r) return;
@@ -1096,7 +1180,7 @@
   }
 
   function drawPlacementGhost(){
-    if (!state.hover || state.selectedTool === "select") return;
+    if (!state.hover || state.selectedTool === "select" || state.selectedTool === "station") return;
     const {x,y} = state.hover;
     const p = worldToScreen(x,y);
     const s = tileSize();
@@ -1125,6 +1209,7 @@
 
   function draw(){
     drawGrid();
+    drawStations();
     // Layered passes so caution stripes and rails join cleanly across tile boundaries.
     const cw = cautionWidths();
     const tiles = [...state.tiles];
@@ -1137,6 +1222,8 @@
     drawVirtualCautions();
     drawSelectionOverlay();
     drawPlacementGhost();
+    drawElementNames();
+    drawStationLabels();
     drawTrains();
     stats.textContent = `${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
@@ -1654,9 +1741,9 @@
     if (event.button !== 0) return;
     const p = pointerPos(event);
     setHoverFromPoint(p);
-    if (state.selectedTool === "select"){
+    if (state.selectedTool === "select" || state.selectedTool === "station"){
       const w = screenToWorld(p.x,p.y);
-      state.drag = {select:true, sx:p.x, sy:p.y, moved:false};
+      state.drag = {select:true, station: state.selectedTool === "station", sx:p.x, sy:p.y, moved:false};
       state.selecting = {x0:w.x, y0:w.y, x1:w.x, y1:w.y};
       canvas.setPointerCapture(event.pointerId);
       draw();
@@ -1695,6 +1782,18 @@
     if (!state.drag) return;
     const p = pointerPos(event);
     if (state.drag.select){
+      if (state.drag.station){
+        if (state.drag.moved){
+          const st = addStation(normRect(state.selecting));
+          state.message = `Created ${st.name}`;
+          refreshStationsUI();
+        }
+        state.selecting = null;
+        state.drag = null;
+        setHoverFromPoint(p);
+        draw();
+        return;
+      }
       state.selection = state.selecting;
       state.selecting = null;
       state.drag = null;
@@ -1813,6 +1912,11 @@
       body += `<div class="field"><span>${dirArrow(tile.branches[0])} branch (none = any)</span>${filterCheckboxes("filter0", filters[String(tile.branches[0])])}</div>`;
       body += `<div class="field"><span>${dirArrow(tile.branches[1])} branch (none = any)</span>${filterCheckboxes("filter1", filters[String(tile.branches[1])])}</div>`;
     }
+    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal"){
+      const st = stationContaining(Number(x),Number(y));
+      const hint = st ? ` in ${escapeHtml(st.name)}` : "";
+      body += `<label class="field"><span>Name${hint}</span><input name="elname" type="text" maxlength="24" placeholder="e.g. 1E, A, 2" value="${escapeHtml(tile.name || "")}"></label>`;
+    }
     body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
     contextMenu.innerHTML = body;
     const rect = stage.getBoundingClientRect();
@@ -1905,6 +2009,7 @@
     if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
     if (data.get("type")) tile.type = Number(data.get("type"));
+    if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) tile.name = v; else delete tile.name; }
     if (tile.kind === "stop") tile.filter = data.getAll("filter").map(Number);
     if (data.get("dwellSeconds")){
       tile.dwellSeconds = Number(data.get("dwellSeconds"));
@@ -1923,6 +2028,7 @@
 
   let syncControls = () => draw();
   let refreshColorUI = () => {};
+  let refreshStationsUI = () => {};
   function updatePauseButton(){
     document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
   }
@@ -2092,6 +2198,32 @@
     }
     refreshColorUI = buildTypeEditor;
     buildTypeEditor();
+    // Stations list: rename / remove. New stations are drawn with the Station tool.
+    const stationList = document.getElementById("stationList");
+    function buildStationList(){
+      stationList.innerHTML = "";
+      if (!state.stations.length){
+        const empty = document.createElement("p");
+        empty.className = "help"; empty.style.margin = "0";
+        empty.textContent = "No stations yet — drag the Station tool over the map to add one.";
+        stationList.appendChild(empty);
+        return;
+      }
+      for (const st of state.stations){
+        const row = document.createElement("div");
+        row.className = "type-row";
+        const nm = document.createElement("input");
+        nm.type = "text"; nm.className = "type-name"; nm.value = st.name || ""; nm.placeholder = "station name"; nm.maxLength = 32;
+        nm.addEventListener("change", () => { st.name = nm.value.trim() || `Station ${st.id}`; draw(); });
+        const del = document.createElement("button");
+        del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove station";
+        del.addEventListener("click", () => { removeStation(st.id); buildStationList(); draw(); });
+        row.append(nm, del);
+        stationList.appendChild(row);
+      }
+    }
+    refreshStationsUI = buildStationList;
+    buildStationList();
     updatePauseButton();
     document.getElementById("pauseBtn").addEventListener("click", togglePause);
     document.getElementById("stepBtn").addEventListener("click", simStep);
@@ -2139,6 +2271,7 @@
     return JSON.stringify({
       version: 2,
       trainTypes: state.trainTypes,
+      stations: state.stations,
       tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
       view: state.view
     }, null, 2);
@@ -2168,12 +2301,17 @@
       setTile(item.x,item.y, migrateTile(item.tile));
     }
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
+    state.stations = (Array.isArray(data.stations) ? data.stations : [])
+      .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+    state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
     state.tick = 0;
     state.frame = 0;
     if (data.view) state.view = {...state.view, ...data.view};
     refreshColorUI();
+    refreshStationsUI();
     updateSignals();
   }
 
