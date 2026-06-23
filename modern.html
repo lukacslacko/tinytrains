@@ -327,6 +327,9 @@
   const ACCEL = 0.0008;
   const DECEL = 0.0002;
   const MIN_SPEED = 0.0016;
+  // Short pause after a held train's main signal turns green, so the clear is visible
+  // before the train pulls away.
+  const SIGNAL_REACTION_SECONDS = 0.5;
   const DISTANT_ORANGE = "#ff9f1c";
   const SPAWN_TICK_FRAMES = 14;
   const FRAMES_PER_SECOND = 60;
@@ -1129,8 +1132,18 @@
         return;
       }
     }
-    if (tile.kind === "signal" && ex === tile.dir && !mainIsGreenFor(train, key(train.x,train.y))){
-      train.speed = 0; return; // hold at the main signal until this train is granted the block
+    if (tile.kind === "signal" && ex === tile.dir){
+      const here = key(train.x,train.y);
+      if (!mainIsGreenFor(train, here)){
+        train.heldSignal = here; // remember we are stopped at this red main
+        train.speed = 0; return;
+      }
+      if (train.heldSignal === here){
+        // the main just cleared while we waited: pause briefly so the green is visible first
+        train.heldSignal = null;
+        train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
+        train.speed = 0; return;
+      }
     }
     const nx = train.x + DIRS[ex].dx;
     const ny = train.y + DIRS[ex].dy;
