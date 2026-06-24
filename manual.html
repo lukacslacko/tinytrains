@@ -260,7 +260,7 @@
   <aside>
     <div class="brand">
       <h1>Tiny Trains Manual</h1>
-      <p>Build with a shape tool, then switch to <strong>Operate</strong> to throw switches and clear manual signals. Drag to pan, wheel to zoom. Middle-click to pick a tile. Right-click configurable tiles.</p>
+      <p>Build with a shape tool, then switch to <strong>Operate</strong> (or press <kbd>Tab</kbd>) to throw switches and clear manual signals. In Operate, left-click a switch to throw it; a locked switch shows a green padlock. Drag to pan, wheel to zoom. Middle-click to pick a tile. Right-click configurable tiles.</p>
     </div>
     <div class="quick-controls">
       <div class="row">
@@ -408,6 +408,8 @@
   const SIGNAL_RED = "#ff2a2a";
   const SIGNAL_RED_DARK = "#3a0a0a";
   const MANUAL_RING = "#ffd24a"; // manual mains carry a yellow ring to set them apart from automatic ones
+  const INACTIVE_BRANCH = "#39424e"; // the set-against branch of a switch, drawn darker than the live route
+  const LOCK_GREEN = "#43d17b";      // padlock on a switch locked into a cleared route
   function blinkOn(){ return Math.floor(performance.now() / 250) % 2 === 0; }
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
@@ -504,6 +506,7 @@
     simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second)
     paused: false,
     selectedTool: "operate",
+    lastTool: "track",   // the build tool to return to when Tab leaves Operate
     trainTypes: defaultTrainTypes(),
     selectedType: 1,
     selectedShape: 0,
@@ -633,21 +636,18 @@
     return routesFor(tile).some(route => route.includes(enterDir));
   }
   // ---- Switch helpers (manual builder) -------------------------------------------------
-  // A switch has a stem and two branches. `current` is the branch the stem is connected to.
-  // A *manual* switch is fixed at `current` (the other branch is set against and impassable).
-  // A *defaulting* switch rests at `default`; it can still be merged into from either branch
-  // (it yields), and springs back to `default` once the train has cleared it.
+  // A switch has a stem and two branches. `current` is the branch the stem is connected to;
+  // the switch is fixed at it (the other branch is set against and impassable). Throw it in
+  // Operate mode (left-click) or in the right-click pop-up.
   function switchCurrent(tile){ return (tile.current != null) ? tile.current : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]); }
-  function switchDefault(tile){ return (tile.default != null) ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]); }
   function switchOther(tile){ return tile.branches.find(b => b !== switchCurrent(tile)); }
   function switchLocked(x,y){ return state.lockedSwitchKeys.has(key(x,y)); }
   // Whether a train arriving at a switch from direction `enterDir` may traverse it.
   function switchAccepts(tile, enterDir){
     if (!tile || tile.kind !== "switch") return true;
-    if (enterDir === tile.stem) return true;                 // from the stem → exits the live branch
+    if (enterDir === tile.stem) return true;                 // from the stem → exits the set branch
     if (!tile.branches.includes(enterDir)) return false;     // not a port of this switch
-    if (tile.mode === "manual") return enterDir === switchCurrent(tile); // only the live branch connects
-    return true;                                             // defaulting: yields to any branch
+    return enterDir === switchCurrent(tile);                 // only the set branch connects to the stem
   }
   function getTile(x,y){ return state.tiles.get(key(x,y)); }
   function setTile(x,y,tile){ state.tiles.set(key(x,y), tile); }
@@ -659,9 +659,7 @@
       kind: "switch",
       stem: shape.stem,
       branches: shape.branches.slice(),
-      mode: "defaulting",            // "defaulting" (springs back) or "manual" (fixed)
-      default: shape.branches[0],    // resting branch for a defaulting switch
-      current: shape.branches[0]     // branch the stem is currently connected to
+      current: shape.branches[0]     // branch the stem is set to
     };
   }
   function makeTile(tool){
@@ -856,9 +854,9 @@
     }
   }
 
-  function drawRoute(x,y,route,muted){
+  function drawRoute(x,y,route,muted,color){
     const c = centerPoint(x,y);
-    ctx.strokeStyle = muted ? "#71808e" : "#dde6ef";
+    ctx.strokeStyle = color || (muted ? "#71808e" : "#dde6ef");
     ctx.lineWidth = Math.max(3, tileSize() * .085);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -903,6 +901,35 @@
     // same size, offset and side placement as a main signal, but a brown arrow with a white outline
     drawTriangle(x,y,d,STOP_BROWN,.385,"#ffffff",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
   }
+  // A small green padlock at a tile's centre, marking a switch locked into a cleared route.
+  function drawLock(x,y){
+    const c = centerPoint(x,y), s = tileSize();
+    const w = s*0.2, h = s*0.15, bx = c.x - w/2, by = c.y - h/2 + s*0.03;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.arc(c.x, by, w*0.3, Math.PI, Math.PI*2);   // shackle (top semicircle)
+    ctx.lineWidth = Math.max(1.5, s*0.045); ctx.strokeStyle = "#2e9c5b"; ctx.stroke();
+    ctx.fillStyle = LOCK_GREEN; ctx.fillRect(bx, by, w, h);          // body
+    ctx.lineWidth = Math.max(1, s*0.022); ctx.strokeStyle = "#0b0e12"; ctx.strokeRect(bx, by, w, h);
+    ctx.fillStyle = "#0b0e12";                                       // keyhole
+    ctx.beginPath(); ctx.arc(c.x, by + h*0.5, Math.max(1, s*0.024), 0, Math.PI*2); ctx.fill();
+  }
+  // Red flash overlay on refused-operation tiles; expires by wall clock (works while paused).
+  function drawFlash(){
+    if (!state.flash) return;
+    if (performance.now() > state.flash.until){ state.flash = null; return; }
+    const s = tileSize();
+    ctx.save();
+    for (const k of state.flash.keys){
+      const {x,y} = readKey(k);
+      const p = worldToScreen(x,y);
+      ctx.fillStyle = "rgba(240,82,100,.34)";
+      ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+      ctx.strokeStyle = "#ff2a2a";
+      ctx.lineWidth = Math.max(2, s*.05);
+      ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
+    }
+    ctx.restore();
+  }
 
   // Tile drawing is split into phases so the whole board is drawn in layered passes (all
   // backgrounds, then all rails, then all markers). That keeps rails joining cleanly across
@@ -915,8 +942,8 @@
   function drawTileRoutes(x,y,tile){
     if (tile.kind === "switch"){
       const cur = switchCurrent(tile), other = switchOther(tile);
-      if (other != null) drawRoute(x,y,[tile.stem, other], true);   // dim: spring / set-against side
-      drawRoute(x,y,[tile.stem, cur], false);                       // bright: the live route
+      if (other != null) drawRoute(x,y,[tile.stem, other], false, INACTIVE_BRANCH); // darker: set-against side
+      drawRoute(x,y,[tile.stem, cur], false);                                       // bright: the set route
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
@@ -924,19 +951,9 @@
   function drawTileMarkers(x,y,tile){
     const s = tileSize();
     if (tile.kind === "switch"){
-      // A glyph at the centre shows the mode (circle = defaulting/spring, square = manual)
-      // and whether the switch is currently locked by a cleared manual route (red outline).
-      const c = centerPoint(x,y);
-      const r = Math.max(3.5, s*.11);
-      const locked = switchLocked(x,y);
-      ctx.beginPath();
-      if (tile.mode === "manual") ctx.rect(c.x-r, c.y-r, r*2, r*2);
-      else ctx.arc(c.x, c.y, r, 0, Math.PI*2);
-      ctx.fillStyle = tile.mode === "manual" ? "#f1ca57" : "#64d7c4";
-      ctx.fill();
-      ctx.lineWidth = Math.max(1.5, s*.04);
-      ctx.strokeStyle = locked ? SIGNAL_RED : "#0b0e12";
-      ctx.stroke();
+      // Manual switches carry no marker when free; a green padlock marks one locked into a
+      // cleared route (green = "good / reserved").
+      if (switchLocked(x,y)) drawLock(x,y);
       return;
     }
     if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,typeColor(tile.type),.2);
@@ -963,26 +980,61 @@
     drawTileMarkers(x,y,tile);
   }
 
+  // Follow a manual main's live route (current switch settings) tile by tile, collecting the
+  // tiles that are free, and the first obstacle if the route is blocked before it reaches a
+  // forward-facing signal. This is what a manual signal really "covers" — far less than the
+  // flooded block — so it is used for the hover highlight instead of collectProtectedBlock.
+  function manualRoutePreview(sx,sy,dir){
+    const green = [];
+    let cx = sx, cy = sy, d = dir;
+    for (let i=0; i<256; i++){
+      const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
+      const nt = getTile(nx,ny);
+      const from = opposite(d);
+      const here = key(nx,ny);
+      if (!nt || !tileAccepts(nt,from) || !switchAccepts(nt,from)) return {green, obstacle: here};
+      if (occupied(nx,ny,null)) return {green, obstacle: here};
+      if (nt.kind === "switch" && switchLocked(nx,ny)) return {green, obstacle: here};
+      if (nt.kind === "signal"){
+        const ex = exitFor(nt, from);
+        if (ex != null && signalDirs(nt).includes(ex)) return {green}; // reached a forward signal: route complete
+        return {green, obstacle: here};                                // wrong-facing signal blocks the route
+      }
+      green.push(here);
+      const ex = exitFor(nt, from);
+      if (ex == null) return {green};                                  // dead end: path simply ends
+      cx = nx; cy = ny; d = ex;
+    }
+    return {green};
+  }
+
   function drawProtectedHighlight(){
     if (!state.hover) return;
     const tile = getTile(state.hover.x,state.hover.y);
     if (!tile || tile.kind !== "signal") return;
     ctx.save();
+    const s = tileSize();
+    const fillTile = (k, fill, stroke) => {
+      const {x,y} = readKey(k);
+      const p = worldToScreen(x,y);
+      ctx.fillStyle = fill; ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
+      ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(1, s * .035); ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+    };
     for (const dir of signalDirs(tile)){
-      const block = collectProtectedBlock(state.hover.x,state.hover.y,dir,null);
-      for (const k of block.tiles){
-        const {x,y} = readKey(k);
-        const p = worldToScreen(x,y);
-        const s = tileSize();
-        ctx.fillStyle = block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)";
-        ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
-        ctx.strokeStyle = block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)";
-        ctx.lineWidth = Math.max(1, s * .035);
-        ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+      if (manualDirs(tile).includes(dir)){
+        // Manual main: just the live route — green while free, orange on the first obstacle.
+        const r = manualRoutePreview(state.hover.x, state.hover.y, dir);
+        for (const k of r.green) fillTile(k, "rgba(67,209,123,.20)", "rgba(67,209,123,.66)");
+        if (r.obstacle) fillTile(r.obstacle, "rgba(255,159,28,.28)", "rgba(255,159,28,.85)");
+      } else {
+        // Automatic main: the whole block it protects.
+        const block = collectProtectedBlock(state.hover.x,state.hover.y,dir,null);
+        for (const k of block.tiles) fillTile(k,
+          block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)",
+          block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)");
       }
     }
     const p = worldToScreen(state.hover.x,state.hover.y);
-    const s = tileSize();
     ctx.strokeStyle = "#64d7c4";
     ctx.lineWidth = Math.max(2, s * .045);
     ctx.strokeRect(p.x+4,p.y+4,s-8,s-8);
@@ -1230,6 +1282,7 @@
     drawElementNames();
     drawStationLabels();
     drawTrains();
+    drawFlash();
     stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
   }
@@ -1250,13 +1303,8 @@
   function exitFor(tile, from){
     if (!tile) return null;
     if (tile.kind === "switch"){
-      if (from === tile.stem) return switchCurrent(tile);    // stem → the live branch
-      if (tile.branches.includes(from)){
-        // A branch merges to the stem. A manual switch only connects its live branch;
-        // a defaulting switch yields to either branch.
-        if (tile.mode === "manual" && from !== switchCurrent(tile)) return null;
-        return tile.stem;
-      }
+      if (from === tile.stem) return switchCurrent(tile);          // stem → the set branch
+      if (tile.branches.includes(from)) return from === switchCurrent(tile) ? tile.stem : null; // only the set branch connects
       return null;
     }
     for (const route of routesFor(tile)){
@@ -1534,21 +1582,22 @@
       const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
       const nt = getTile(nx,ny);
       const from = opposite(d);
-      if (!nt || !tileAccepts(nt, from) || !switchAccepts(nt, from)) return {ok:false, reason:"the path is broken"};
-      if (occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied"}; // 2c (incl. the terminus signal)
+      const here = key(nx,ny);
+      if (!nt || !tileAccepts(nt, from) || !switchAccepts(nt, from)) return {ok:false, reason:"the path is broken", obstacle:here};
+      if (occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied", obstacle:here}; // 2c (incl. the terminus signal)
       if (nt.kind === "signal"){
         // 2b: the route is only complete at a main facing the WAY WE ARE GOING — one that will
         // actually stop/hand off the train. A signal facing the other way is transparent to it.
         const sx2 = exitFor(nt, from);
         if (sx2 != null && signalDirs(nt).includes(sx2)) return {ok:true, switchKeys};
-        return {ok:false, reason:"the path runs into a signal facing the other way"};
+        return {ok:false, reason:"the path runs into a signal facing the other way", obstacle:here};
       }
       if (nt.kind === "switch"){
-        if (switchLocked(nx,ny)) return {ok:false, reason:"the path crosses a switch locked by another route"}; // 2a
-        switchKeys.push(key(nx,ny));
+        if (switchLocked(nx,ny)) return {ok:false, reason:"the path crosses a switch locked by another route", obstacle:here}; // 2a
+        switchKeys.push(here);
       }
       const ex = exitFor(nt, from);
-      if (ex == null) return {ok:false, reason:"the path is broken at a switch set against it"};
+      if (ex == null) return {ok:false, reason: nt.kind === "switch" ? "the path runs into a switch set against it" : "the path reaches a dead end before any signal", obstacle:here};
       cx = nx; cy = ny; d = ex;
     }
     return {ok:false, reason:"the path is too long"};
@@ -1570,7 +1619,13 @@
       return;
     }
     const route = followManualRoute(x,y,dir);
-    if (!route.ok){ state.message = `Cannot clear ${placeLabel(x,y)}: ${route.reason}`; draw(); return; }
+    if (!route.ok){
+      // Refused: flash the signal's tile and the obstacle tile red for a second.
+      flashTiles([key(x,y), route.obstacle]);
+      state.message = `Cannot clear ${placeLabel(x,y)}: ${route.reason}`;
+      draw(); return;
+    }
+    state.flash = null;
     state.manualGreen.add(mk);
     state.routeLocks.push({mk, switchKeys: route.switchKeys, trainId:null, armed:false, enteredSwitch:new Set(), passedSwitch:new Set()});
     state.message = `Cleared ${placeLabel(x,y)}`;
@@ -1744,25 +1799,7 @@
     train.x = nx;
     train.y = ny;
     train.from = nf;
-    // A defaulting switch entered from a branch aligns to it (it springs back once clear).
-    if (nextTile.kind === "switch" && nextTile.mode === "defaulting" && !switchLocked(nx,ny)
-        && nextTile.branches.includes(nf) && switchCurrent(nextTile) !== nf){
-      nextTile.current = nf;
-    }
     advanceWithSpeed(train);
-  }
-
-  // Defaulting switches spring back to their default branch once no train sits on them and
-  // they are not locked into a cleared route.
-  function revertDefaultingSwitches(){
-    for (const [k,tile] of state.tiles){
-      if (tile.kind !== "switch" || tile.mode !== "defaulting") continue;
-      const def = switchDefault(tile);
-      if (switchCurrent(tile) === def) continue;
-      const {x,y} = readKey(k);
-      if (switchLocked(x,y) || occupied(x,y,null)) continue;
-      tile.current = def;
-    }
   }
 
   function spawnTrains(){
@@ -1790,7 +1827,6 @@
     updateSignals();
     for (const train of state.trains) moveTrain(train);
     for (const train of state.trains) updateTrail(train);
-    revertDefaultingSwitches();
     // Re-evaluate holders/grants against the post-move positions before drawing. Without
     // this, a block that a train just vacated reads as momentarily free for one frame
     // (the waiting train is granted only next frame), flickering every main green.
@@ -1839,17 +1875,20 @@
     requestAnimationFrame(animation);
   }
 
+  // Flash the given tiles red for ~1s (used when an operation is refused). Wall-clock timed
+  // so it shows even while paused; draw() clears it once it expires.
+  function flashTiles(keys){ state.flash = {keys: keys.filter(Boolean), until: performance.now() + 1000}; }
+
   // Operate tool: left-click throws a switch or clears/cancels a manual signal.
   function operateClick(x,y){
     closeContext();
     const tile = getTile(x,y);
     if (!tile) return;
     if (tile.kind === "switch"){
-      if (switchLocked(x,y)){ state.message = "Switch is locked by a cleared route"; draw(); return; }
+      if (switchLocked(x,y)){ flashTiles([key(x,y)]); state.message = "Switch is locked by a cleared route"; draw(); return; }
       const other = switchOther(tile);
       if (other != null){
         tile.current = other;
-        if (tile.mode === "defaulting") tile.default = other; // a defaulting switch now rests this way
         state.message = `Switch ${placeLabel(x,y)} → ${DIRS[other].name}`;
       }
       updateSignals();
@@ -2093,11 +2132,9 @@
       body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
     }
     if (tile.kind === "switch"){
-      const cur = switchCurrent(tile), def = switchDefault(tile);
+      const cur = switchCurrent(tile);
       const branchOpts = sel => tile.branches.map(b => `<option value="${b}" ${sel===b?"selected":""}>${dirArrow(b)} ${DIRS[b].name}</option>`).join("");
-      body += `<label class="field"><span>Mode</span><select name="switchMode"><option value="defaulting" ${tile.mode!=="manual"?"selected":""}>Defaulting (springs back)</option><option value="manual" ${tile.mode==="manual"?"selected":""}>Manual (fixed)</option></select></label>`;
-      body += `<label class="field"><span>Current direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
-      body += `<label class="field"><span>Default direction (used by defaulting mode)</span><select name="switchDefault">${branchOpts(def)}</select></label>`;
+      body += `<label class="field"><span>Set direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
     }
     if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal"){
       const st = stationContaining(Number(x),Number(y));
@@ -2204,16 +2241,10 @@
       delete tile.dwell;
     }
     if (tile.kind === "switch"){
-      if (data.get("switchMode")) tile.mode = data.get("switchMode") === "manual" ? "manual" : "defaulting";
-      if (data.get("switchDefault") != null){
-        const d = Number(data.get("switchDefault"));
-        if (tile.branches.includes(d)) tile.default = d;
-      }
       if (data.get("switchCurrent") != null){
         const c = Number(data.get("switchCurrent"));
         if (tile.branches.includes(c)) tile.current = c;
       }
-      if (!tile.branches.includes(switchDefault(tile))) tile.default = tile.branches[0];
       if (!tile.branches.includes(switchCurrent(tile))) tile.current = tile.branches[0];
     }
     closeContext();
@@ -2468,720 +2499,57 @@
   // emits; selecting one runs it through deserialize(), replacing everything.
   const PREMADE_LAYOUTS = [
     {
-      name: "Miskolc",
+      name: "Loopy",
       data: {
-        "version": 2,
+        "version": 3,
         "trainTypes": [
           {
             "id": 1,
             "color": "#f05264",
-            "name": "1",
-            "period": 60
+            "name": "red"
           },
           {
             "id": 2,
             "color": "#58a8ff",
-            "name": "2",
-            "period": 60
-          }
-        ],
-        "stations": [
-          {
-            "id": 1,
-            "name": "Tiszai",
-            "rect": {
-              "x0": -26,
-              "y0": -4,
-              "x1": -17,
-              "y1": 3
-            }
-          },
-          {
-            "id": 2,
-            "name": "Strand",
-            "rect": {
-              "x0": -15,
-              "y0": -4,
-              "x1": -8,
-              "y1": 3
-            }
+            "name": "blue"
           },
           {
             "id": 3,
-            "name": "Marx",
-            "rect": {
-              "x0": -7,
-              "y0": -4,
-              "x1": 6,
-              "y1": 3
-            }
+            "color": "#f1ca57",
+            "name": "yellow"
           },
           {
             "id": 4,
-            "name": "Vasgyar",
-            "rect": {
-              "x0": -7,
-              "y0": -8,
-              "x1": 6,
-              "y1": -5
-            }
+            "color": "#43d17b",
+            "name": "green"
           },
           {
             "id": 5,
-            "name": "Diosgyor",
-            "rect": {
-              "x0": 7,
-              "y0": -4,
-              "x1": 14,
-              "y1": 3
-            }
+            "color": "#b58cff",
+            "name": "violet"
           }
         ],
+        "stations": [],
         "tiles": [
           {
-            "x": -17,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": -16,
-            "y": -1,
+            "x": -5,
+            "y": -3,
             "tile": {
               "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -15,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -14,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -13,
-            "y": -1,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
-              ]
-            }
-          },
-          {
-            "x": -12,
-            "y": -1,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 6,
-              "filter": [],
-              "dwellSeconds": 2,
-              "timetable": {
-                "1": {
-                  "times": [
-                    10
-                  ]
-                },
-                "2": {
-                  "times": [
-                    30
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": -11,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -10,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -17,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": -16,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -15,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -14,
-            "y": 0,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": -13,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -12,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -11,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -10,
-            "y": 0,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "filter": [],
-              "dwellSeconds": 2,
-              "timetable": {
-                "1": {
-                  "times": [
-                    15
-                  ]
-                },
-                "2": {
-                  "times": [
-                    45
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": -18,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                7
-              ]
-            }
-          },
-          {
-            "x": -19,
-            "y": -2,
-            "tile": {
-              "kind": "switch",
-              "stem": 3,
-              "branches": [
-                7,
-                6
-              ],
-              "defaultBranch": 7,
-              "filters": {
-                "6": [
-                  2
-                ],
-                "7": [
-                  1
-                ]
-              },
-              "caution": true
-            }
-          },
-          {
-            "x": -18,
-            "y": 0,
-            "tile": {
-              "kind": "distant",
               "route": [
                 2,
                 5
-              ],
-              "dirs": [
-                2
               ]
             }
           },
           {
-            "x": -19,
-            "y": 1,
-            "tile": {
-              "kind": "switch",
-              "stem": 1,
-              "branches": [
-                5,
-                6
-              ],
-              "defaultBranch": 5,
-              "filters": {
-                "5": [],
-                "6": []
-              },
-              "caution": true
-            }
-          },
-          {
-            "x": -20,
-            "y": -2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -21,
-            "y": -2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -20,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -21,
-            "y": 1,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "filter": [
-                2
-              ],
-              "dwellSeconds": 2,
-              "caution": true,
-              "timetable": {
-                "2": {
-                  "times": [
-                    30
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": -21,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -22,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -21,
-            "y": 2,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "filter": [
-                1
-              ],
-              "dwellSeconds": 2,
-              "caution": true,
-              "timetable": {
-                "1": {
-                  "times": [
-                    0
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": -22,
-            "y": 2,
-            "tile": {
-              "kind": "spawn",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "type": 1,
-              "caution": true
-            }
-          },
-          {
-            "x": -23,
-            "y": 2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -23,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -22,
-            "y": -2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -22,
-            "y": 1,
-            "tile": {
-              "kind": "spawn",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "type": 2,
-              "caution": true
-            }
-          },
-          {
-            "x": -24,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                4,
-                1
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -25,
+            "x": -6,
             "y": -2,
             "tile": {
               "kind": "track",
               "route": [
                 4,
                 1
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -24,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                3
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -25,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                3
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -25,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -25,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -24,
-            "y": 2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                7
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -23,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                7
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -24,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                5
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -23,
-            "y": -2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                5
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -20,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                3
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -20,
-            "y": 2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                1
-              ],
-              "caution": true
-            }
-          },
-          {
-            "x": -9,
-            "y": -1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -8,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2,
-                6
-              ]
-            }
-          },
-          {
-            "x": -7,
-            "y": -1,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
               ]
             }
           },
@@ -3191,59 +2559,8 @@
             "tile": {
               "kind": "track",
               "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -9,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -8,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -7,
-            "y": 0,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": -6,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6,
-                2
+                0,
+                3
               ]
             }
           },
@@ -3253,19 +2570,30 @@
             "tile": {
               "kind": "track",
               "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
                 6,
-                2
+                3
               ]
             }
           },
           {
             "x": -3,
-            "y": 0,
+            "y": -2,
             "tile": {
               "kind": "track",
               "route": [
-                6,
-                2
+                2,
+                7
               ]
             }
           },
@@ -3276,165 +2604,7 @@
               "kind": "track",
               "route": [
                 6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -2,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": -1,
-            "y": 0,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 2,
-              "filter": [],
-              "dwellSeconds": 2,
-              "timetable": {
-                "1": {
-                  "times": [
-                    25
-                  ]
-                },
-                "2": {
-                  "times": [
-                    55
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": 0,
-            "y": 0,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": 1,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": 2,
-            "y": 0,
-            "tile": {
-              "kind": "switch",
-              "stem": 6,
-              "branches": [
-                2,
                 1
-              ],
-              "defaultBranch": 2,
-              "filters": {
-                "1": [
-                  2
-                ],
-                "2": [
-                  1
-                ]
-              }
-            }
-          },
-          {
-            "x": 3,
-            "y": -1,
-            "tile": {
-              "kind": "switch",
-              "stem": 2,
-              "branches": [
-                6,
-                5
-              ],
-              "defaultBranch": 6,
-              "filters": {
-                "5": [],
-                "6": [
-                  1,
-                  2
-                ]
-              }
-            }
-          },
-          {
-            "x": 4,
-            "y": -1,
-            "tile": {
-              "kind": "switch",
-              "stem": 6,
-              "branches": [
-                2,
-                1
-              ],
-              "defaultBranch": 2,
-              "filters": {
-                "1": [
-                  2
-                ],
-                "2": [
-                  1
-                ]
-              }
-            }
-          },
-          {
-            "x": -5,
-            "y": -1,
-            "tile": {
-              "kind": "switch",
-              "stem": 6,
-              "branches": [
-                2,
-                1
-              ],
-              "defaultBranch": 2,
-              "filters": {
-                "1": [],
-                "2": []
-              }
-            }
-          },
-          {
-            "x": -4,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
               ]
             }
           },
@@ -3442,13 +2612,25 @@
             "x": -3,
             "y": -1,
             "tile": {
-              "kind": "distant",
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": -2,
+            "tile": {
+              "kind": "signal",
               "route": [
                 6,
                 2
               ],
               "dirs": [
-                6
+                6,
+                2
               ]
             }
           },
@@ -3456,28 +2638,20 @@
             "x": -2,
             "y": -1,
             "tile": {
-              "kind": "stop",
+              "kind": "signal",
               "route": [
                 6,
                 2
               ],
-              "dir": 6,
-              "filter": [
-                1
-              ],
-              "dwellSeconds": 2,
-              "timetable": {
-                "1": {
-                  "times": [
-                    0
-                  ]
-                }
-              }
+              "dirs": [
+                2,
+                6
+              ]
             }
           },
           {
             "x": -1,
-            "y": -1,
+            "y": -2,
             "tile": {
               "kind": "spawn",
               "route": [
@@ -3489,8 +2663,41 @@
             }
           },
           {
+            "x": -1,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 0,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
             "x": 0,
             "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 1,
+            "y": -2,
             "tile": {
               "kind": "track",
               "route": [
@@ -3512,339 +2719,152 @@
           },
           {
             "x": 2,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": 3,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
-              ]
-            }
-          },
-          {
-            "x": 4,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": 0,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 6,
-            "y": -1,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6
-              ]
-            }
-          },
-          {
-            "x": 6,
-            "y": 0,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                2
-              ]
-            }
-          },
-          {
-            "x": 7,
-            "y": -1,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 7,
-            "y": 0,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                6,
-                2
-              ],
-              "dirs": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -2,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                0,
-                5
-              ],
-              "dirs": [
-                5
-              ]
-            }
-          },
-          {
-            "x": -4,
             "y": -2,
             "tile": {
               "kind": "track",
               "route": [
-                0,
-                5
-              ]
-            }
-          },
-          {
-            "x": -4,
-            "y": -3,
-            "tile": {
-              "kind": "signal",
-              "route": [
-                0,
-                4
-              ],
-              "dirs": [
-                4
-              ]
-            }
-          },
-          {
-            "x": -4,
-            "y": -4,
-            "tile": {
-              "kind": "distant",
-              "route": [
-                0,
-                4
-              ],
-              "dirs": [
-                4
-              ]
-            }
-          },
-          {
-            "x": -4,
-            "y": -5,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -3,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -4,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -5,
-            "tile": {
-              "kind": "track",
-              "route": [
-                0,
-                4
-              ]
-            }
-          },
-          {
-            "x": 5,
-            "y": -6,
-            "tile": {
-              "kind": "track",
-              "route": [
-                4,
-                7
-              ]
-            }
-          },
-          {
-            "x": 4,
-            "y": -7,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                3
-              ]
-            }
-          },
-          {
-            "x": -3,
-            "y": -7,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                5
-              ]
-            }
-          },
-          {
-            "x": -4,
-            "y": -6,
-            "tile": {
-              "kind": "track",
-              "route": [
-                4,
-                1
-              ]
-            }
-          },
-          {
-            "x": -2,
-            "y": -7,
-            "tile": {
-              "kind": "track",
-              "route": [
                 6,
                 2
               ]
             }
           },
           {
-            "x": -1,
-            "y": -7,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 6,
-              "filter": [
-                2
-              ],
-              "dwellSeconds": 2,
-              "timetable": {
-                "2": {
-                  "times": [
-                    15
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": 0,
-            "y": -7,
+            "x": 2,
+            "y": -1,
             "tile": {
               "kind": "spawn",
               "route": [
                 6,
                 2
               ],
-              "dir": 6,
-              "type": 2
+              "dir": 2,
+              "type": 1
             }
           },
           {
-            "x": 1,
-            "y": -7,
+            "x": 3,
+            "y": -2,
             "tile": {
-              "kind": "track",
+              "kind": "signal",
               "route": [
                 6,
                 2
-              ]
-            }
-          },
-          {
-            "x": 2,
-            "y": -7,
-            "tile": {
-              "kind": "track",
-              "route": [
+              ],
+              "dirs": [
                 6,
+                2
+              ],
+              "manualDirs": [
                 2
               ]
             }
           },
           {
             "x": 3,
-            "y": -7,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2,
+                6
+              ],
+              "manualDirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 4,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "current": 2
+            }
+          },
+          {
+            "x": 5,
+            "y": -2,
+            "tile": {
+              "kind": "switch",
+              "stem": 2,
+              "branches": [
+                6,
+                5
+              ],
+              "current": 6
+            }
+          },
+          {
+            "x": 6,
+            "y": -2,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "current": 1
+            }
+          },
+          {
+            "x": 4,
+            "y": -2,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "current": 1
+            }
+          },
+          {
+            "x": 5,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -2,
             "tile": {
               "kind": "track",
               "route": [
@@ -3855,23 +2875,18 @@
           },
           {
             "x": 8,
-            "y": 0,
+            "y": -2,
             "tile": {
-              "kind": "track",
+              "kind": "signal",
               "route": [
                 6,
-                3
-              ]
-            }
-          },
-          {
-            "x": 9,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                2,
-                7
+                2
+              ],
+              "dirs": [
+                6
+              ],
+              "manualDirs": [
+                6
               ]
             }
           },
@@ -3879,12 +2894,16 @@
             "x": 8,
             "y": -1,
             "tile": {
-              "kind": "distant",
+              "kind": "signal",
               "route": [
                 6,
-                1
+                2
               ],
               "dirs": [
+                2,
+                6
+              ],
+              "manualDirs": [
                 6
               ]
             }
@@ -3895,37 +2914,14 @@
             "tile": {
               "kind": "track",
               "route": [
-                2,
-                5
+                6,
+                2
               ]
             }
           },
           {
-            "x": 10,
-            "y": -2,
-            "tile": {
-              "kind": "stop",
-              "route": [
-                6,
-                2
-              ],
-              "dir": 6,
-              "filter": [
-                1
-              ],
-              "dwellSeconds": 2,
-              "timetable": {
-                "1": {
-                  "times": [
-                    45
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "x": 11,
-            "y": -2,
+            "x": 9,
+            "y": -1,
             "tile": {
               "kind": "track",
               "route": [
@@ -3935,63 +2931,8 @@
             }
           },
           {
-            "x": 12,
-            "y": -2,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 10,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 11,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 12,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                2
-              ]
-            }
-          },
-          {
-            "x": 13,
-            "y": 1,
-            "tile": {
-              "kind": "track",
-              "route": [
-                6,
-                1
-              ]
-            }
-          },
-          {
-            "x": 14,
-            "y": 0,
+            "x": 7,
+            "y": -3,
             "tile": {
               "kind": "track",
               "route": [
@@ -4001,8 +2942,170 @@
             }
           },
           {
-            "x": 14,
-            "y": -1,
+            "x": 6,
+            "y": -4,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                1,
+                5
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -4,
+            "tile": {
+              "kind": "switch",
+              "stem": 0,
+              "branches": [
+                4,
+                3
+              ],
+              "current": 4
+            }
+          },
+          {
+            "x": 6,
+            "y": -5,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                4,
+                0
+              ],
+              "manualDirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -5,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                0,
+                4
+              ],
+              "manualDirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -6,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                0,
+                4
+              ],
+              "dir": 4,
+              "type": 1
+            }
+          },
+          {
+            "x": 7,
+            "y": -6,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -7,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                0,
+                4
+              ],
+              "dir": 0,
+              "type": 1
+            }
+          },
+          {
+            "x": 6,
+            "y": -8,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                0,
+                4
+              ],
+              "manualDirs": []
+            }
+          },
+          {
+            "x": 7,
+            "y": -8,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                0,
+                4
+              ],
+              "manualDirs": []
+            }
+          },
+          {
+            "x": 7,
+            "y": -9,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -9,
             "tile": {
               "kind": "track",
               "route": [
@@ -4012,8 +3115,192 @@
             }
           },
           {
+            "x": 5,
+            "y": -10,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                3
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": -10,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -11,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": -11,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -12,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          },
+          {
+            "x": 11,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ]
+            }
+          },
+          {
+            "x": 13,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
             "x": 13,
             "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": -3,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                3
+              ],
+              "dirs": [
+                6
+              ],
+              "manualDirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 11,
+            "y": -3,
+            "tile": {
+              "kind": "switch",
+              "stem": 2,
+              "branches": [
+                6,
+                5
+              ],
+              "current": 6
+            }
+          },
+          {
+            "x": 8,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": 9,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -12,
             "tile": {
               "kind": "track",
               "route": [
@@ -4024,14 +3311,14 @@
           }
         ],
         "view": {
-          "x": 186.71111968913888,
-          "y": 25.697164446741127,
-          "zoom": 0.7737384925921285
+          "x": -222.19936225932503,
+          "y": 299.25066125180115,
+          "zoom": 1.087046872920474
         }
       }
     }
   ];
-  (function setupPresetMenu(){
+    (function setupPresetMenu(){
     const sel = document.getElementById("presetSelect");
     if (!sel) return;
     PREMADE_LAYOUTS.forEach((layout, i) => {
@@ -4066,8 +3353,8 @@
   }
   // Bring a tile up to the manual-builder model. Imports of older / modern layouts are
   // simplified: distants become plain track, caution flags drop, stop filters & timetables
-  // and switch type-filters are discarded, and a filter-routed switch becomes a defaulting
-  // switch (default = its old default branch).
+  // and switch type-filters are discarded, and every switch becomes a plain manual switch
+  // set to its old default branch.
   function migrateTile(tile){
     delete tile.caution;
     if (tile.kind === "distant") return {kind: "track", route: tile.route};
@@ -4077,10 +3364,8 @@
     }
     if (tile.kind === "stop"){ delete tile.filter; delete tile.timetable; }
     if (tile.kind === "switch"){
-      if (tile.mode !== "manual" && tile.mode !== "defaulting") tile.mode = "defaulting";
-      if (tile.default == null) tile.default = (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]);
-      if (tile.current == null) tile.current = tile.default;
-      delete tile.filters; delete tile.defaultBranch;
+      if (tile.current == null) tile.current = (tile.default != null ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]));
+      delete tile.mode; delete tile.default; delete tile.filters; delete tile.defaultBranch;
     }
     return tile;
   }
@@ -4134,6 +3419,18 @@
   window.addEventListener("keydown", event => {
     if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
     const mod = event.ctrlKey || event.metaKey;
+    if (event.key === "Tab"){
+      // Toggle between Operate and the last build tool.
+      event.preventDefault();
+      if (state.selectedTool === "operate"){
+        state.selectedTool = state.lastTool && state.lastTool !== "operate" ? state.lastTool : "track";
+      } else {
+        state.lastTool = state.selectedTool || "track";
+        state.selectedTool = "operate";
+      }
+      syncControls();
+      return;
+    }
     if (mod && (event.key === "z" || event.key === "Z")){ event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
     if (mod && (event.key === "y" || event.key === "Y")){ event.preventDefault(); redo(); return; }
     if (mod && (event.key === "c" || event.key === "C")){ event.preventDefault(); copySelection(); return; }

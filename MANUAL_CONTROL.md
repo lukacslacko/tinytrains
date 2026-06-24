@@ -11,15 +11,17 @@ builder. This file tracks the requested feature set and what is implemented.
 
 ## Interaction model
 
-- A new **Operate** tool (the default) is for *running* the railway:
-  - **Left-click a switch** → throw it (toggle its direction). For a defaulting
-    switch this moves the direction it rests at; for a manual switch it sets the
-    fixed direction. Locked switches refuse to throw.
-  - **Left-click a manual signal** → clear it to green (or set it back to red).
+- A new **Operate** tool (the default) is for *running* the railway. Press **Tab** to
+  flip between Operate and the last build tool.
+  - **Left-click a switch** → throw it (set the other branch). Locked switches refuse
+    to throw (and flash red).
+  - **Left-click a manual signal** → clear it to green (or set it back to red). If a
+    clear is refused, the signal's tile and the offending tile **flash red** for a
+    second.
   - Drag still pans; wheel still zooms.
 - **Right-click** any tile opens the context pop-up, which is where you *configure*:
-  a switch's **Mode** (defaulting / manual) and default/current direction; a
-  signal's per-direction **Auto ↔ Manual** type; stop dwell; names; etc.
+  a switch's set **direction**; a signal's per-direction **Auto ↔ Manual** type; stop
+  dwell; names; etc.
 - Build with the **Tracks / Stops / Switches** palettes and the right-click
   spawn/signal actions, exactly as in the modern builder.
 
@@ -57,21 +59,19 @@ Stop type-filters and switch branch type-filters are removed; routing is purely 
 switch setting. Train **types** remain but are now cosmetic (they colour spawned
 trains). On import, filters/timetables are discarded.
 
-### 5. Manual vs. defaulting switches — **done**
-A switch has a **mode**:
-- **Manual** — fixed at its `current` branch; the other branch is set against and
-  impassable (a train arriving on it stops before the switch).
-- **Defaulting** — rests at its `default` branch (stem → default). It can still be
-  merged into from *either* branch (it yields), and **springs back** to its default
-  once no train sits on it.
+### 5. Switches — **done (manual only)**
+All switches are **manually set**: fixed at their `current` branch, with the other
+branch set against and impassable (a train arriving on it stops before the switch).
+*(The earlier "defaulting / spring-back" mode was removed per request — there is no
+longer a `mode` on a switch.)*
 
 ### 6. Switch rendering + click controls — **done**
-- The **live route** (stem ↔ current branch) is drawn bright; the other branch dim,
-  so the current direction is visible.
-- A centre glyph shows the **mode**: a teal **circle** = defaulting, a yellow
-  **square** = manual. A **red outline** marks a switch locked by a cleared route.
-- **Left-click (Operate)** toggles the direction; **right-click** opens the pop-up
-  which *allows* changing the mode (and default/current direction).
+- The **set route** (stem ↔ current branch) is drawn bright; the other branch a bit
+  **darker** so the set direction is clear.
+- A switch carries **no marker when free**, and a **green padlock** when locked into a
+  cleared manual route (green = "good / reserved").
+- **Left-click (Operate)** throws the switch (also flashes red if it's locked);
+  **right-click** opens the pop-up to set its direction.
 
 ### 7. Non-automatic (manual) main signals — **done**
 Every main is automatic or manual (toggle per direction in the signal pop-up).
@@ -114,11 +114,8 @@ Achieved without the heavy defaulting-switch flood originally sketched:
 - Every train in manual territory is on a cleared, switch-locked route and drives on
   sight, so a flank train can't be admitted onto a path it would foul, and even two
   trains meeting stop rather than collide.
-
-  *Residual caveat:* a **defaulting** switch on a locked route still yields to a train
-  arriving on its other leg (locking prevents *throwing*, not *traversing*). In normal
-  play no train can legally be on such a leg (that needs its own conflicting cleared
-  route, which 2a forbids), so this is safe — noted rather than fully proven. Automatic
+- With switches now manual-only, a switch set against a movement is **impassable**
+  (no yielding), which removes the earlier defaulting-switch caveat entirely. Automatic
   blocks still flood through both switch legs, so an occupied flank leg also blocks an
   automatic grant.
 
@@ -129,9 +126,8 @@ Points are listed here with status, and the work was delivered incrementally.
 
 ## Implementation notes (where things live in `manual.html`)
 
-- **Switch model & traversal**: `defaultSwitch`, `switchCurrent/Default/Other`,
-  `switchAccepts`, `exitFor`; defaulting spring-back in `revertDefaultingSwitches`
-  and the in-`moveTrain` flip.
+- **Switch model & traversal**: `defaultSwitch` (manual only — `current`),
+  `switchCurrent/Other/Accepts`, `exitFor`.
 - **Automatic blocks only**: `buildSignalSystem` builds blocks/`distantCommit` for
   **automatic** mains only and fills `errorMains` (point 8 manual-entry + idea-1
   opposing-main checks); `approachInfo`, `updateSignals` grant via `mainEligible`
@@ -142,18 +138,17 @@ Points are listed here with status, and the work was delivered incrementally.
   (per-switch unlock, point 3); the pass-revert/arm block in `moveTrain`.
 - **Drive-on-sight (point 4)**: the next-tile checks in `moveTrain`/`canLeave`
   (`occupied`, `switchAccepts`) plus the manual-green / automatic-grant signal gate.
-- **Operate tool**: `operateClick` (wired from `pointerup`).
-- **Rendering**: `drawTileRoutes` (switch emphasis), `drawTileMarkers` (switch glyph
-  + signal auto/manual/error/green/red).
+- **Operate / refusal flash / Tab**: `operateClick` (wired from `pointerup`),
+  `flashTiles` + `drawFlash` (red 1 s flash on a refused operation, wall-clock timed),
+  and the `Tab` handler in the `keydown` listener (toggles Operate ↔ `state.lastTool`).
+- **Rendering**: `drawTileRoutes` (set route bright, other branch darker via
+  `INACTIVE_BRANCH`), `drawTileMarkers` (green padlock `drawLock` when a switch is
+  locked, nothing otherwise; signal auto/manual/error/green/red).
 
 ## Known limitations / next steps
 
-- **Residual flank caveat (point 9):** a *defaulting* switch on a locked route can
-  still be *traversed* (not thrown) from its other leg; argued safe but not proven.
 - **Idea 1 is same-tile** (an automatic main needs its opposing partner on the same
   tile). If you actually meant "anywhere along the block," say so and it can change.
 - Automatic blocks still flood through *both* legs of a switch for occupancy.
-- The bundled **Miskolc** preset was authored for the modern builder (type-routed
-  switches, distants, timetables). It loads and runs, but every switch now rests at
-  its default and its single-direction automatic signals **blink red** under idea 1
-  (no opposing main), so it needs re-signalling/re-routing by hand to be interesting.
+- The bundled **Loopy** preset (Save / Load dropdown) is a small native manual layout
+  with a mix of automatic and manual signals to play with.
