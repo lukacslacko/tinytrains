@@ -624,6 +624,14 @@
   function manualDirs(tile){ return (tile && tile.manualDirs) ? tile.manualDirs : []; }
   function mainIsManual(x,y,dir){ const t = getTile(x,y); return !!(t && t.kind === "signal" && manualDirs(t).includes(dir)); }
   function mainIsManualKey(mk){ const {x,y,dir} = parseMain(mk); return mainIsManual(x,y,dir); }
+  // True when a train sits stopped on a RED manual main, wanting to leave via its direction.
+  function manualMainHasWaiter(x,y,dir){
+    if (state.manualGreen.has(mkMain(x,y,dir))) return false; // it's cleared, not red
+    const tile = getTile(x,y);
+    for (const t of state.trains)
+      if (t.x === x && t.y === y && !trainMoving(t) && exitFor(tile, t.from) === dir) return true;
+    return false;
+  }
   function routesFor(tile){
     if (!tile) return [];
     if (tile.kind === "track") return [tile.route];
@@ -1023,6 +1031,10 @@
         let color;
         if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
         else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
+        // A manual main with a train waiting at it (red) gets a thick white halo to flag it
+        // to the operator, drawn behind the normal yellow-outlined triangle.
+        if (manual && manualMainHasWaiter(x,y,dir))
+          drawTriangle(x,y,dir,color,.385,"#ffffff",Math.max(4, tileSize()*.25),0,SIGNAL_SIDE_OFFSET);
         // Manual mains carry a yellow outline; automatic mains a dark one.
         const stroke = manual ? MANUAL_RING : "#0b0e12";
         drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
