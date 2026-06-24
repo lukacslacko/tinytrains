@@ -410,7 +410,7 @@
   const MANUAL_RING = "#ffd24a"; // manual mains carry a yellow ring to set them apart from automatic ones
   const INACTIVE_BRANCH = "#39424e"; // the set-against branch of a switch, drawn darker than the live route
   const LOCK_GREEN = "#43d17b";      // green outline of a locked manual route / disc on a locked switch
-  const BLOCK_ORANGE = "#ff8c1a";    // orange outline of an occupied automatic block
+  const BLOCK_GREY = "#8f9aa5";      // grey outline of an occupied automatic block
   function blinkOn(){ return Math.floor(performance.now() / 250) % 2 === 0; }
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
@@ -904,13 +904,13 @@
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, LOCK_GREEN, greenW); // green band first…
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, "#0b0e12", blackW);  // …then black over it
   }
-  // Occupied AUTOMATIC blocks get an orange outline (same band style as a locked manual route),
+  // Occupied AUTOMATIC blocks get a grey outline (same band style as a locked manual route),
   // marking every track in the flood-filled block while a train sits inside it.
   function drawOccupiedBlockOutlines(){
     const sys = state.sys;
     if (!sys) return;
     const railW = Math.max(3, tileSize() * .085);
-    const orangeW = railW + tileSize() * .18;
+    const bandW = railW + tileSize() * .18;
     const blackW = railW + tileSize() * .09;
     const segs = [];
     const seen = new Set();
@@ -925,8 +925,8 @@
         for (const rt of routesFor(t)) segs.push({x, y, route: rt});
       }
     }
-    for (const s of segs) drawRouteWide(s.x, s.y, s.route, BLOCK_ORANGE, orangeW); // orange band first…
-    for (const s of segs) drawRouteWide(s.x, s.y, s.route, "#0b0e12", blackW);     // …then black over it
+    for (const s of segs) drawRouteWide(s.x, s.y, s.route, BLOCK_GREY, bandW); // grey band first…
+    for (const s of segs) drawRouteWide(s.x, s.y, s.route, "#0b0e12", blackW); // …then black over it
   }
 
   function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
