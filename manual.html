@@ -936,17 +936,13 @@
     // same size, offset and side placement as a main signal, but a brown arrow with a white outline
     drawTriangle(x,y,d,STOP_BROWN,.385,"#ffffff",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
   }
-  // A small green padlock at a tile's centre, marking a switch locked into a cleared route.
+  // A green disc at a tile's centre, marking a switch locked into a cleared route.
   function drawLock(x,y){
     const c = centerPoint(x,y), s = tileSize();
-    const w = s*0.2, h = s*0.15, bx = c.x - w/2, by = c.y - h/2 + s*0.03;
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath(); ctx.arc(c.x, by, w*0.3, Math.PI, Math.PI*2);   // shackle (top semicircle)
-    ctx.lineWidth = Math.max(1.5, s*0.045); ctx.strokeStyle = "#2e9c5b"; ctx.stroke();
-    ctx.fillStyle = LOCK_GREEN; ctx.fillRect(bx, by, w, h);          // body
-    ctx.lineWidth = Math.max(1, s*0.022); ctx.strokeStyle = "#0b0e12"; ctx.strokeRect(bx, by, w, h);
-    ctx.fillStyle = "#0b0e12";                                       // keyhole
-    ctx.beginPath(); ctx.arc(c.x, by + h*0.5, Math.max(1, s*0.024), 0, Math.PI*2); ctx.fill();
+    const r = Math.max(4.5, s*0.17);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+    ctx.fillStyle = LOCK_GREEN; ctx.fill();
+    ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
   // Red flash overlay on refused-operation tiles; expires by wall clock (works while paused).
   function drawFlash(){
@@ -1016,9 +1012,9 @@
   }
 
   // Follow a manual main's live route (current switch settings) tile by tile, collecting the
-  // tiles that are free, and the first obstacle if the route is blocked before it reaches a
-  // forward-facing signal. This is what a manual signal really "covers" — far less than the
-  // flooded block — so it is used for the hover highlight instead of collectProtectedBlock.
+  // free path segments (each {k, seg:[from,ex]}) and the first obstacle tile if the route is
+  // blocked before it reaches a forward-facing signal. This is what a manual signal really
+  // "covers" — far less than the flooded block — so it drives the hover highlight.
   function manualRoutePreview(sx,sy,dir){
     const green = [];
     let cx = sx, cy = sy, d = dir;
@@ -1035,45 +1031,53 @@
         if (ex != null && signalDirs(nt).includes(ex)) return {green}; // reached a forward signal: route complete
         return {green, obstacle: here};                                // wrong-facing signal blocks the route
       }
-      green.push(here);
       const ex = exitFor(nt, from);
+      green.push({k: here, seg: ex != null ? [from, ex] : (nt.route ? nt.route.slice() : [from])});
       if (ex == null) return {green};                                  // dead end: path simply ends
       cx = nx; cy = ny; d = ex;
     }
     return {green};
   }
 
-  function drawProtectedHighlight(){
+  // Hover hint over a signal: outline the *tracks* it governs with a broad, low-saturation
+  // band (drawn under the rails, like a wider/fainter version of a set route's outline).
+  // Manual mains trace their live route — muted green while free, muted orange at the first
+  // obstacle. Automatic mains flood their whole block in muted green.
+  // Stroke many route segments [{x,y,route}] as ONE path so the translucent band is composited
+  // a single time — overlaps at tile centres/boundaries stay uniform instead of stacking darker.
+  function strokeBand(segs, color, width){
+    if (!segs.length) return;
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const sg of segs){
+      const c = centerPoint(sg.x, sg.y);
+      for (const d of sg.route){
+        const e = endpointPoint(sg.x, sg.y, d);
+        ctx.moveTo(c.x, c.y); ctx.lineTo(e.x, e.y);
+      }
+    }
+    ctx.stroke();
+  }
+  function drawSignalHoverHighlight(){
     if (!state.hover) return;
     const tile = getTile(state.hover.x,state.hover.y);
     if (!tile || tile.kind !== "signal") return;
-    ctx.save();
-    const s = tileSize();
-    const fillTile = (k, fill, stroke) => {
-      const {x,y} = readKey(k);
-      const p = worldToScreen(x,y);
-      ctx.fillStyle = fill; ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
-      ctx.strokeStyle = stroke; ctx.lineWidth = Math.max(1, s * .035); ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
-    };
+    const w = Math.max(3, tileSize() * .085) + tileSize() * .30; // broader than a set route's band
+    const greenSegs = [], orangeSegs = [];
+    const tileSegs = (k, arr) => { const {x,y} = readKey(k); const t = getTile(x,y); if (t) for (const rt of routesFor(t)) arr.push({x,y,route:rt}); };
     for (const dir of signalDirs(tile)){
       if (manualDirs(tile).includes(dir)){
-        // Manual main: just the live route — green while free, orange on the first obstacle.
         const r = manualRoutePreview(state.hover.x, state.hover.y, dir);
-        for (const k of r.green) fillTile(k, "rgba(67,209,123,.20)", "rgba(67,209,123,.66)");
-        if (r.obstacle) fillTile(r.obstacle, "rgba(255,159,28,.28)", "rgba(255,159,28,.85)");
+        greenSegs.push({x:state.hover.x, y:state.hover.y, route: tile.route}); // the signal tile itself
+        for (const g of r.green){ const {x,y} = readKey(g.k); greenSegs.push({x,y,route:g.seg}); }
+        if (r.obstacle) tileSegs(r.obstacle, orangeSegs);
       } else {
-        // Automatic main: the whole block it protects.
         const block = collectProtectedBlock(state.hover.x,state.hover.y,dir,null);
-        for (const k of block.tiles) fillTile(k,
-          block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)",
-          block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)");
+        for (const k of block.tiles) tileSegs(k, greenSegs);
       }
     }
-    const p = worldToScreen(state.hover.x,state.hover.y);
-    ctx.strokeStyle = "#64d7c4";
-    ctx.lineWidth = Math.max(2, s * .045);
-    ctx.strokeRect(p.x+4,p.y+4,s-8,s-8);
-    ctx.restore();
+    strokeBand(greenSegs, "rgba(67,209,123,.45)", w);  // one composite per colour → uniform alpha
+    strokeBand(orangeSegs, "rgba(255,184,0,.95)", w);  // obstacle: bright, near-saturated orange-yellow
   }
 
   // ---- Multi-part train bodies ------------------------------------------------------
@@ -1309,10 +1313,10 @@
     // Layered passes so rails join cleanly across tile boundaries.
     const tiles = [...state.tiles];
     for (const [k] of tiles){ const {x,y} = readKey(k); drawTileBg(x,y); }
-    drawManualRouteOutlines();
+    drawSignalHoverHighlight();   // broad muted band under everything
+    drawManualRouteOutlines();    // set-route green/black halo over it
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
-    drawProtectedHighlight();
     drawSelectionOverlay();
     drawPlacementGhost();
     drawElementNames();

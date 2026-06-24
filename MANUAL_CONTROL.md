@@ -68,7 +68,7 @@ longer a `mode` on a switch.)*
 ### 6. Switch rendering + click controls — **done**
 - The **set route** (stem ↔ current branch) is drawn bright; the other branch a bit
   **darker** so the set direction is clear.
-- A switch carries **no marker when free**, and a **green padlock** when locked into a
+- A switch carries **no marker when free**, and a **green disc** when locked into a
   cleared manual route (green = "good / reserved").
 - **Left-click (Operate)** throws the switch (also flashes red if it's locked);
   **right-click** opens the pop-up to set its direction.
@@ -148,7 +148,7 @@ Points are listed here with status, and the work was delivered incrementally.
   `flashTiles` + `drawFlash` (red 1 s flash on a refused operation, wall-clock timed),
   and the `Tab` handler in the `keydown` listener (toggles Operate ↔ `state.lastTool`).
 - **Rendering**: `drawTileRoutes` (set route bright, other branch darker via
-  `INACTIVE_BRANCH`), `drawTileMarkers` (green padlock `drawLock` when a switch is
+  `INACTIVE_BRANCH`), `drawTileMarkers` (green disc `drawLock` when a switch is
   locked, nothing otherwise; signal auto/manual/error/green/red).
 
 ## Known limitations / next steps
