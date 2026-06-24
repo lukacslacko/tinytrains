@@ -868,6 +868,41 @@
     }
     ctx.stroke();
   }
+  // Stroke a route segment at an arbitrary width/colour (used for the green path underlay).
+  function drawRouteWide(x,y,route,color,width){
+    const c = centerPoint(x,y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const d of route){
+      const e = endpointPoint(x,y,d);
+      ctx.moveTo(c.x,c.y);
+      ctx.lineTo(e.x,e.y);
+    }
+    ctx.stroke();
+  }
+  // The reserved path of every still-active manual route, drawn as a thick green band then a
+  // thinner black band UNDER the white rails (drawn later), so a green outline shows along the
+  // set path. Tiles a cleared train has already passed are dropped; the tiles ahead stay marked.
+  function drawManualRouteOutlines(){
+    if (!state.routeLocks || !state.routeLocks.length) return;
+    const railW = Math.max(3, tileSize() * .085);
+    const greenW = railW + tileSize() * .18;
+    const blackW = railW + tileSize() * .09;
+    const segs = [];
+    for (const rl of state.routeLocks){
+      if (!rl.path) continue;
+      for (const s of rl.path){
+        if (rl.passedTile && rl.passedTile.has(s.k)) continue; // dropped once the train has passed it
+        const {x,y} = readKey(s.k);
+        segs.push({x, y, seg: s.seg});
+      }
+    }
+    for (const s of segs) drawRouteWide(s.x, s.y, s.seg, LOCK_GREEN, greenW); // green band first…
+    for (const s of segs) drawRouteWide(s.x, s.y, s.seg, "#0b0e12", blackW);  // …then black over it
+  }
 
   function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
     const c = centerPoint(x,y);
@@ -1274,6 +1309,7 @@
     // Layered passes so rails join cleanly across tile boundaries.
     const tiles = [...state.tiles];
     for (const [k] of tiles){ const {x,y} = readKey(k); drawTileBg(x,y); }
+    drawManualRouteOutlines();
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
     drawProtectedHighlight();
@@ -1548,8 +1584,9 @@
   // ---- Manual signals & route locks -------------------------------------------------
   // Prune cleared greens / spent route locks and recompute which switches are locked. Called
   // from updateSignals each tick (and on every edit), after train body tiles are computed.
-  // Each locked switch is released the instant the cleared train's LAST AXLE leaves it
-  // (idea 3) — tracked per switch, not per whole route.
+  // Each path tile (and the switches among them) is released the instant the cleared train's
+  // LAST AXLE leaves it — tracked per tile, so the green outline and switch locks both shrink
+  // behind the train and the route lock ends once the train has fully cleared the path.
   function maintainManualState(sys){
     for (const mk of [...state.manualGreen])
       if (!mainIsManualKey(mk)) state.manualGreen.delete(mk);
@@ -1559,24 +1596,29 @@
       const tr = state.trains.find(t => t.id === rl.trainId);
       if (!tr) return false;                                   // the cleared train vanished → release
       const bt = tr._tiles || computeBodyTiles(tr);
-      for (const sk of rl.switchKeys){
-        if (rl.passedSwitch.has(sk)) continue;
-        if (bt.has(sk)) rl.enteredSwitch.add(sk);              // body is on the switch
-        else if (rl.enteredSwitch.has(sk)) rl.passedSwitch.add(sk); // last axle just left it → unlock
+      for (const s of rl.path){
+        if (rl.passedTile.has(s.k)) continue;
+        if (bt.has(s.k)) rl.enteredTile.add(s.k);              // body is on this path tile
+        else if (rl.enteredTile.has(s.k)) rl.passedTile.add(s.k); // last axle just left it
       }
-      return !rl.switchKeys.every(sk => rl.passedSwitch.has(sk)); // done once every switch is passed
+      return !rl.path.every(s => rl.passedTile.has(s.k));      // done once the whole path is behind the train
     });
     state.lockedSwitchKeys = new Set();
     for (const rl of state.routeLocks)
       for (const sk of rl.switchKeys)
-        if (!rl.passedSwitch.has(sk)) state.lockedSwitchKeys.add(sk);
+        if (!rl.passedTile.has(sk)) state.lockedSwitchKeys.add(sk);
   }
   // Trace the route a cleared manual signal opens: follow the live track (current switch
   // settings) from the signal to the next signal facing the way we travel, checking that
   // (2a) it crosses no already-locked switch and (2c) no axle sits anywhere on the path up to
-  // and including that signal. Returns the switch tiles it crosses, or a reason it cannot clear.
+  // and including that signal. On success returns the switch tiles it crosses plus the per-tile
+  // path segments (the manual signal tile and every tile up to, but not including, the terminus
+  // signal); otherwise a reason and the obstacle tile.
   function followManualRoute(sx,sy,dir){
     const switchKeys = [];
+    const path = [];
+    const st = getTile(sx,sy);
+    if (st && st.route) path.push({k: key(sx,sy), seg: st.route.slice()}); // the signal tile itself
     let cx = sx, cy = sy, d = dir;
     for (let i=0; i<256; i++){
       const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
@@ -1589,7 +1631,7 @@
         // 2b: the route is only complete at a main facing the WAY WE ARE GOING — one that will
         // actually stop/hand off the train. A signal facing the other way is transparent to it.
         const sx2 = exitFor(nt, from);
-        if (sx2 != null && signalDirs(nt).includes(sx2)) return {ok:true, switchKeys};
+        if (sx2 != null && signalDirs(nt).includes(sx2)) return {ok:true, switchKeys, path};
         return {ok:false, reason:"the path runs into a signal facing the other way", obstacle:here};
       }
       if (nt.kind === "switch"){
@@ -1598,6 +1640,7 @@
       }
       const ex = exitFor(nt, from);
       if (ex == null) return {ok:false, reason: nt.kind === "switch" ? "the path runs into a switch set against it" : "the path reaches a dead end before any signal", obstacle:here};
+      path.push({k: here, seg: [from, ex]});
       cx = nx; cy = ny; d = ex;
     }
     return {ok:false, reason:"the path is too long"};
@@ -1627,7 +1670,7 @@
     }
     state.flash = null;
     state.manualGreen.add(mk);
-    state.routeLocks.push({mk, switchKeys: route.switchKeys, trainId:null, armed:false, enteredSwitch:new Set(), passedSwitch:new Set()});
+    state.routeLocks.push({mk, switchKeys: route.switchKeys, path: route.path, trainId:null, armed:false, enteredTile:new Set(), passedTile:new Set()});
     state.message = `Cleared ${placeLabel(x,y)}`;
     updateSignals(); draw();
   }

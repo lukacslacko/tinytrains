@@ -90,6 +90,10 @@ Every main is automatic or manual (toggle per direction in the signal pop-up).
 - Trains run **on sight** in manual territory *(point 4)*: a train stops only for an
   occupied tile directly ahead, a **manual** switch set against it, or a red signal —
   nothing else. More than one train may move in manual territory at once *(2e/2f)*.
+- A cleared route is drawn on the map as a **green outline** along the set track (a
+  thick green band, then black, then the white rail on top). As the train runs the
+  route the outline (and the switch locks) **drop tile-by-tile behind it**; the tiles
+  ahead stay marked until it has passed them.
 - Automatic and manual mains render distinctly (manual = yellow outline).
 
 ### 8. Automatic mains need all-automatic block entries — **done**
@@ -133,9 +137,11 @@ Points are listed here with status, and the work was delivered incrementally.
   opposing-main checks); `approachInfo`, `updateSignals` grant via `mainEligible`
   (manual mains are never eligible — they have no block).
 - **Manual signals & route locks**: `state.manualGreen`, `state.routeLocks` (each with
-  per-switch `enteredSwitch`/`passedSwitch`), `state.lockedSwitchKeys`;
-  `followManualRoute` (2a/2b/2c), `toggleManualSignal`, `maintainManualState`
-  (per-switch unlock, point 3); the pass-revert/arm block in `moveTrain`.
+  a `path` of `{k,seg}` tiles plus `enteredTile`/`passedTile`), `state.lockedSwitchKeys`;
+  `followManualRoute` (2a/2b/2c, returns the path), `toggleManualSignal`,
+  `maintainManualState` (per-tile release behind the train, point 3); the pass-revert/arm
+  block in `moveTrain`. The on-map green outline is `drawManualRouteOutlines` (green then
+  black bands under the rails, skipping `passedTile`).
 - **Drive-on-sight (point 4)**: the next-tile checks in `moveTrain`/`canLeave`
   (`occupied`, `switchAccepts`) plus the manual-green / automatic-grant signal gate.
 - **Operate / refusal flash / Tab**: `operateClick` (wired from `pointerup`),
