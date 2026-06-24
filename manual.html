@@ -1,0 +1,4170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiny Trains Manual Control</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg:#0f1318;
+    --rail:#dde6ef;
+    --grid:#252d36;
+    --grid-strong:#36414d;
+    --panel:#151a20;
+    --panel-2:#1c232b;
+    --line:#303944;
+    --ink:#edf3f6;
+    --muted:#8f9aa5;
+    --accent:#64d7c4;
+    --warn:#f1c25f;
+    --danger:#ff6b76;
+    --green:#43d17b;
+    --red:#f05264;
+    --blue:#58a8ff;
+    --yellow:#f1ca57;
+    --violet:#b58cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink)}
+  html{overflow-x:hidden}
+  body{
+    font:13px/1.35 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  #app{min-height:100vh;display:grid;grid-template-columns:276px minmax(0,1fr);align-items:start}
+  aside{
+    min-width:0;
+    height:100vh;
+    position:sticky;
+    top:0;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  .brand{
+    padding:16px 16px 12px;
+    border-bottom:1px solid var(--line);
+  }
+  h1{font-size:20px;line-height:1.05;margin:0 0 5px;letter-spacing:0}
+  .brand p{margin:0;color:var(--muted)}
+  .toolbar{
+    flex:1 1 auto;
+    min-height:0;
+    padding:12px;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .toolbar>*{flex:0 0 auto}
+  .group{display:grid;gap:8px}
+  .quick-controls{
+    flex:0 0 auto;
+    padding:10px 12px;
+    border-bottom:1px solid var(--line);
+    display:grid;
+    gap:8px;
+  }
+  .label{
+    color:var(--muted);
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+  }
+  details.palette{
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:#121820;
+    overflow:hidden;
+  }
+  details.palette summary{
+    min-height:36px;
+    padding:9px 10px;
+    color:var(--ink);
+    cursor:pointer;
+    list-style:none;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    font-weight:700;
+  }
+  details.palette summary::-webkit-details-marker{display:none}
+  details.palette summary::after{
+    content:"+";
+    color:var(--muted);
+    font-size:16px;
+    line-height:1;
+  }
+  details.palette[open] summary{
+    border-bottom:1px solid var(--line);
+  }
+  details.palette[open] summary::after{content:"-"}
+  .palette-body{
+    padding:8px;
+    display:grid;
+    gap:8px;
+  }
+  .help{
+    margin:0;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.35;
+  }
+  .tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .shape-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+  .shape-button{
+    min-height:78px;
+    padding:6px;
+    display:grid;
+    gap:4px;
+    justify-items:stretch;
+  }
+  .shape-preview{
+    width:100%;
+    aspect-ratio:1;
+    height:auto;
+    border-radius:5px;
+    background:#10161d;
+    border:1px solid #26313b;
+  }
+  .shape-button span{
+    display:block;
+    min-width:0;
+    overflow:hidden;
+    color:var(--muted);
+    font-size:11px;
+    line-height:1.15;
+    text-align:center;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  button,select,input,textarea{
+    font:inherit;
+    color:var(--ink);
+  }
+  button,select{
+    min-height:34px;
+    border:1px solid var(--line);
+    background:var(--panel-2);
+    border-radius:7px;
+    padding:7px 9px;
+  }
+  button{cursor:pointer;text-align:left}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  #contextMenu button[data-action]{text-align:center;font-size:16px;line-height:1}
+  button:hover,select:hover{border-color:#4a5664}
+  button.active{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent) inset}
+  button.danger.active{border-color:var(--danger)}
+  .row{display:flex;gap:7px;align-items:center}
+  .row>*{flex:1 1 0}
+  .color-row{display:flex;gap:7px;flex-wrap:wrap}
+  .swatch{
+    width:30px;height:30px;min-height:30px;padding:0;border-radius:50%;
+    border:2px solid #0000;
+  }
+  .swatch.active{border-color:var(--ink);box-shadow:0 0 0 1px #000 inset}
+  /* Vertical list of type rows. It must NOT inherit .color-row's flex-wrap:wrap — a wrapping
+     column flex container takes a min-content width equal to its widest row's max-content, so
+     it would refuse to shrink and push the whole left panel into horizontal scroll. nowrap +
+     min-width:0 lets it shrink to the panel, so the name input (flex:1 1 auto, min-width:0)
+     gives up width instead of overflowing. */
+  #colorButtons{flex-direction:column;align-items:stretch;gap:0;flex-wrap:nowrap;min-width:0}
+  .type-row{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .type-row .swatch{width:26px;height:26px;min-height:26px;flex:0 0 auto;color:#06090d;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
+  .type-row input[type=color]{width:30px;height:26px;padding:0;flex:0 0 auto;border:none;background:none;cursor:pointer}
+  .type-row .type-name{flex:1 1 auto;min-width:0;height:26px}
+  .type-row .type-del{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;color:var(--danger)}
+  .type-add{margin-top:3px}
+  .status{
+    flex:0 0 auto;
+    padding:10px 12px;
+    border-top:1px solid var(--line);
+    color:var(--muted);
+    display:grid;
+    gap:4px;
+  }
+  #stage{position:relative;min-width:0;min-height:0;background:#0d1116}
+  @media (min-width:761px){
+    #stage{position:sticky;top:0;height:100vh}
+  }
+  canvas{display:block;width:100%;height:100%;cursor:grab}
+  canvas.dragging{cursor:grabbing}
+  #contextMenu,#ioPanel{
+    position:absolute;
+    z-index:5;
+    background:#151b22;
+    border:1px solid #3a4653;
+    border-radius:8px;
+    box-shadow:0 16px 40px #0008;
+  }
+  #contextMenu{min-width:250px;max-width:270px;max-height:calc(100vh - 24px);overflow:auto;padding:12px;display:none;gap:10px}
+  #contextMenu.open{display:grid}
+  #notifyPanel{
+    position:absolute;left:12px;bottom:12px;z-index:4;
+    width:min(340px,calc(100% - 24px));
+    background:#0f151bf2;
+    border:1px solid #2b3742;border-radius:9px;
+    box-shadow:0 12px 32px #0008;
+    display:flex;flex-direction:column;overflow:hidden;font-size:12px;
+  }
+  #notifyHead{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:6px 8px 6px 11px;border-bottom:1px solid #2b3742;
+    color:var(--muted);font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:11px;
+  }
+  #notifyHead .row{flex:0 0 auto;gap:6px}
+  #notifyHead button{min-height:24px;flex:0 0 auto;padding:2px 9px;font-size:11px;text-align:center}
+  #notifyLog{padding:6px 8px;overflow-y:auto;max-height:34vh;display:flex;flex-direction:column;gap:3px}
+  #notifyPanel.collapsed #notifyLog{display:none}
+  #notifyPanel.collapsed{width:min(220px,calc(100% - 24px))}
+  .note{display:flex;gap:8px;padding:3px 7px;border-radius:5px;border-left:3px solid var(--green);background:#141b22}
+  .note-time{color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;flex:0 0 auto}
+  .note-text{min-width:0;word-break:break-word}
+  .note-info{border-left-color:var(--green)}
+  .note-warn{border-left-color:#ff9f1c;background:#211a0f}
+  .note-alert{border-left-color:var(--red);background:#241318}
+  #contextMenu h2,#ioPanel h2{font-size:14px;margin:0}
+  .field{display:grid;gap:5px}
+  .field span{color:var(--muted);font-size:12px}
+  .field input,.field select,.field textarea{
+    width:100%;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:#0f141a;
+    padding:8px;
+  }
+  #ioPanel{
+    width:min(680px,calc(100vw - 36px));
+    left:50%;top:50%;transform:translate(-50%,-50%);
+    padding:14px;
+    display:none;
+    gap:10px;
+  }
+  #ioPanel.open{display:grid}
+  #ioPanel textarea{height:300px;resize:vertical;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  @media (max-width:760px){
+    #app{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+    aside{position:relative;height:min(72vh,760px);border-right:0;border-bottom:1px solid var(--line)}
+    #stage{height:100vh}
+    .tools{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .shape-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand">
+      <h1>Tiny Trains Manual</h1>
+      <p>Build with a shape tool, then switch to <strong>Operate</strong> to throw switches and clear manual signals. Drag to pan, wheel to zoom. Middle-click to pick a tile. Right-click configurable tiles.</p>
+    </div>
+    <div class="quick-controls">
+      <div class="row">
+        <button id="pauseBtn">Pause</button>
+        <button id="stepBtn">Step</button>
+      </div>
+      <div class="row">
+        <button id="undoBtn">Undo</button>
+        <button id="redoBtn">Redo</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <section class="group">
+        <div class="label">Tool</div>
+        <div class="tools" id="toolButtons"></div>
+      </section>
+      <details class="palette" open>
+        <summary>Tracks</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="trackPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Stops</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="stopPalette"></div>
+        </div>
+      </details>
+      <details class="palette">
+        <summary>Switches</summary>
+        <div class="palette-body">
+          <div class="shape-grid" id="switchPalette"></div>
+        </div>
+      </details>
+      <section class="group">
+        <div class="label">Spawns &amp; Signals</div>
+        <p class="help">Right-click a track tile to spawn a train or add a block signal facing either way. <strong>Automatic</strong> signals protect a block: green when clear, red when taken &mdash; a train rolls through a green one without slowing and brakes to a stop at a red one. An automatic main must have an <strong>opposing main on the same tile</strong> (use <code>+ both</code>); without one it blinks red and no train may pass (it would otherwise lead a train out of a protected block into open track). <strong>Manual</strong> signals are default red and have no block; in Operate mode click one to clear a route &mdash; allowed only when the path through to a signal facing your way is clear and crosses no already-locked switch. Clearing locks the switches on the route; the signal drops to red as a train passes and each switch unlocks as the train's tail clears it. All trains run on sight and never crash: a train only stops for an occupied tile ahead, a manual switch set against it, or a red signal.</p>
+        <div class="label">Train types</div>
+        <p class="help">A layout has a list of train <strong>types</strong>, each a numeric id with a display colour and optional name (purely cosmetic now &mdash; routing is by switch setting, not type). Click a swatch to use that type for new spawns; edit the colour or name inline; use + to add a type and &times; to remove an unused one.</p>
+        <div class="color-row" id="colorButtons"></div>
+      </section>
+      <section class="group">
+        <div class="label">Stations</div>
+        <p class="help">Pick the <strong>Station</strong> tool and drag a rectangle to mark a named region. Name the stops, switches and signals inside it (right-click an element &rarr; Name) using station-local labels like <code>1E</code>, <code>2W</code>, <code>A</code>, <code>2</code> &mdash; these are how a station master refers to the infrastructure. Rename or remove stations below.</p>
+        <div id="stationList"></div>
+      </section>
+      <section class="group">
+        <div class="label">Save / Load</div>
+        <div class="row">
+          <button id="saveBtn">Save Browser</button>
+          <button id="loadBtn">Load Browser</button>
+        </div>
+        <div class="row">
+          <button id="exportBtn">Export JSON</button>
+          <button id="importBtn">Import JSON</button>
+        </div>
+        <div class="row">
+          <select id="presetSelect" title="Replace the layout with a pre-made one">
+            <option value="">Pre-made layouts&hellip;</option>
+          </select>
+        </div>
+      </section>
+    </div>
+    <div class="status">
+      <div id="stats">0 trains</div>
+      <div id="hint">Selected: track</div>
+    </div>
+  </aside>
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <form id="contextMenu"></form>
+    <section id="ioPanel" aria-label="Import export panel">
+      <h2 id="ioTitle">Export JSON</h2>
+      <textarea id="ioText" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="ioApply">Apply</button>
+        <button id="ioClose">Close</button>
+      </div>
+    </section>
+    <section id="notifyPanel" aria-label="Notifications">
+      <div id="notifyHead">
+        <span>Notifications</span>
+        <div class="row">
+          <button id="notifyClear" type="button" title="Clear the log">Clear</button>
+          <button id="notifyToggle" type="button" title="Collapse / expand">▾</button>
+        </div>
+      </div>
+      <div id="notifyLog"></div>
+    </section>
+  </main>
+</div>
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const stage = document.getElementById("stage");
+  const contextMenu = document.getElementById("contextMenu");
+  const stats = document.getElementById("stats");
+  const hint = document.getElementById("hint");
+  const notifyPanel = document.getElementById("notifyPanel");
+  const notifyLog = document.getElementById("notifyLog");
+
+  // A layout has a list of train *types*. A type is a numeric id (ids start at 1) with a
+  // display colour and optional name. In the manual builder routing is decided by switch
+  // settings, not by train type, so types are purely cosmetic — they colour spawned trains.
+  const DEFAULT_TYPE_COLORS = ["#f05264","#58a8ff","#f1ca57","#43d17b","#b58cff"];
+  const DEFAULT_TYPE_NAMES  = ["red","blue","yellow","green","violet"];
+  // Old saves stored colour-name strings; map them to the default ids on load.
+  const LEGACY_COLOR_IDS = {red:1, blue:2, yellow:3, green:4, violet:5};
+  const UNKNOWN_TYPE_COLOR = "#9aa6b2";
+  function defaultTrainTypes(){
+    return DEFAULT_TYPE_COLORS.map((color,i) => ({id:i+1, color, name:DEFAULT_TYPE_NAMES[i]}));
+  }
+  function trainTypeById(id){
+    for (const t of state.trainTypes) if (t.id === id) return t;
+    return null;
+  }
+  function typeColor(id){ const t = trainTypeById(id); return t ? t.color : UNKNOWN_TYPE_COLOR; }
+  function nextTypeId(){ let m = 0; for (const t of state.trainTypes) if (t.id > m) m = t.id; return m + 1; }
+  function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+  // Movement is speed-based: trains accelerate up to MAX_SPEED and brake along a sqrt curve so
+  // they coast to a stop exactly on the tile they must halt at. DECEL is tuned so a train at
+  // full speed can stop within one tile, so it halts cleanly before an occupied tile or a red main.
+  const MAX_SPEED = 0.018;
+  const ACCEL = 0.0008;
+  const DECEL = 0.0002;
+  const MIN_SPEED = 0.0016;
+  // Multi-part trains: an engine plus cars, each a length in tile units, joined by a small
+  // gap. Bodies trail the head along its path; block occupancy follows the whole body.
+  const DEFAULT_CARS = [0.6, 0.5, 0.5];
+  const CAR_GAP = 0.12;
+  const CAR_WIDTH = 0.42;
+  // Short pause after a held train's main signal turns green, so the clear is visible
+  // before the train pulls away.
+  const SIGNAL_REACTION_SECONDS = 0.5;
+  // Signals are drawn beside the track, to the right of the direction they face.
+  const SIGNAL_SIDE_OFFSET = 0.26;
+  const SPAWN_TICK_FRAMES = 14;
+  const FRAMES_PER_SECOND = 60;
+  const DEFAULT_DWELL_SECONDS = 2;
+  const STOP_BROWN = "#8b5a2b";
+  const SIGNAL_GREEN = "#16a34a";
+  const SIGNAL_RED = "#ff2a2a";
+  const SIGNAL_RED_DARK = "#3a0a0a";
+  const MANUAL_RING = "#ffd24a"; // manual mains carry a yellow ring to set them apart from automatic ones
+  function blinkOn(){ return Math.floor(performance.now() / 250) % 2 === 0; }
+  const DIRS = [
+    {name:"N", dx:0, dy:-1, px:.5, py:0},
+    {name:"NE", dx:1, dy:-1, px:1, py:0},
+    {name:"E", dx:1, dy:0, px:1, py:.5},
+    {name:"SE", dx:1, dy:1, px:1, py:1},
+    {name:"S", dx:0, dy:1, px:.5, py:1},
+    {name:"SW", dx:-1, dy:1, px:0, py:1},
+    {name:"W", dx:-1, dy:0, px:0, py:.5},
+    {name:"NW", dx:-1, dy:-1, px:0, py:0}
+  ];
+  const TRACK_SHAPES = [
+    {label:"Straight E-W", route:[6,2]},
+    {label:"Straight N-S", route:[0,4]},
+    {label:"Straight NE-SW", route:[1,5]},
+    {label:"Straight NW-SE", route:[7,3]},
+    {label:"Turn W to NE", route:[6,1]},
+    {label:"Turn W to SE", route:[6,3]},
+    {label:"Turn E to NW", route:[2,7]},
+    {label:"Turn E to SW", route:[2,5]},
+    {label:"Turn N to SE", route:[0,3]},
+    {label:"Turn N to SW", route:[0,5]},
+    {label:"Turn S to NE", route:[4,1]},
+    {label:"Turn S to NW", route:[4,7]},
+    {label:"Buffer E", route:[2]},
+    {label:"Buffer W", route:[6]},
+    {label:"Buffer N", route:[0]},
+    {label:"Buffer S", route:[4]}
+  ];
+  function buildDirectionalShapes(kind){
+    const shapes = [];
+    for (const shape of TRACK_SHAPES){
+      for (const dir of shape.route){
+        shapes.push({
+          label: `${shape.label} ${kind} ${DIRS[dir].name}`,
+          route: cloneRoute(shape.route),
+          dir
+        });
+      }
+    }
+    return shapes;
+  }
+  function switchShape(stem, branches){
+    return {
+      label: `${DIRS[stem].name} to ${branches.map(b => DIRS[b].name).join(" / ")}`,
+      stem,
+      branches,
+      defaultBranch: branches[0]
+    };
+  }
+  function buildSwitchShapes(){
+    const shapes = [];
+    const seen = new Set();
+    function add(stem, branches){
+      const id = `${stem}:${branches.join(",")}`;
+      if (seen.has(id)) return;
+      seen.add(id);
+      shapes.push(switchShape(stem, branches));
+    }
+    for (let stem=0; stem<DIRS.length; stem++){
+      const oppositeDir = opposite(stem);
+      add(stem, [oppositeDir, (oppositeDir + 7) % 8]);
+      add(stem, [oppositeDir, (oppositeDir + 1) % 8]);
+    }
+    for (let stem=0; stem<DIRS.length; stem++){
+      const oppositeDir = opposite(stem);
+      add(stem, [(oppositeDir + 1) % 8, (oppositeDir + 7) % 8]);
+    }
+    return shapes;
+  }
+  const SWITCH_SHAPES = buildSwitchShapes();
+  const SPAWN_SHAPES = buildDirectionalShapes("spawn");
+  const STOP_SHAPES = buildDirectionalShapes("stop");
+  const SIGNAL_SHAPES = buildDirectionalShapes("signal");
+  const TOOLS = [
+    ["operate","Operate"],
+    ["select","Select"],
+    ["station","Station"],
+    ["erase","Erase"]
+  ];
+  const CROSSING_SHAPES = [
+    {label:"Cross +", tool:"crossPlus"},
+    {label:"Cross X", tool:"crossX"}
+  ];
+
+  const state = {
+    tiles: new Map(),
+    trains: [],
+    nextTrainId: 1,
+    stations: [],      // named regions {id,name,rect}; element names live on tiles
+    nextStationId: 1,
+    tick: 0,
+    frame: 0,
+    simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second)
+    paused: false,
+    selectedTool: "operate",
+    trainTypes: defaultTrainTypes(),
+    selectedType: 1,
+    selectedShape: 0,
+    selectedSpawnShape: 0,
+    selectedStopShape: 0,
+    selectedSignalShape: 0,
+    selectedSwitchShape: 0,
+    view: {x: 0, y: 0, zoom: 1},
+    drag: null,
+    hover: null,
+    selection: null,   // committed rectangle {x0,y0,x1,y1} in world cells
+    selecting: null,   // rectangle being dragged out
+    // ---- manual control (transient runtime state, not saved with the layout) ----
+    manualGreen: new Set(),     // mainKeys "x,y,dir" of manual signals the operator has cleared
+    routeLocks: [],             // active locked routes set up by clearing a manual signal
+    lockedSwitchKeys: new Set(),// switch tile keys "x,y" currently locked by a routeLock
+    message: ""
+  };
+
+  // Undo/redo history of the tile map, plus a clipboard for copy/cut/paste.
+  const history = { undo: [], redo: [] };
+  let clipboard = null;
+  function tilesToString(){ return JSON.stringify([...state.tiles]); }
+  function applyTilesString(s){ state.tiles = new Map(JSON.parse(s)); updateSignals(); }
+  function pushHistory(){
+    history.undo.push(tilesToString());
+    if (history.undo.length > 200) history.undo.shift();
+    history.redo.length = 0;
+  }
+  function undo(){
+    if (!history.undo.length){ state.message = "Nothing to undo"; draw(); return; }
+    history.redo.push(tilesToString());
+    applyTilesString(history.undo.pop());
+    state.message = "Undo";
+    draw();
+  }
+  function redo(){
+    if (!history.redo.length){ state.message = "Nothing to redo"; draw(); return; }
+    history.undo.push(tilesToString());
+    applyTilesString(history.redo.pop());
+    state.message = "Redo";
+    draw();
+  }
+  function normRect(s){
+    return s && {x0:Math.min(s.x0,s.x1), y0:Math.min(s.y0,s.y1), x1:Math.max(s.x0,s.x1), y1:Math.max(s.y0,s.y1)};
+  }
+  function forSelection(fn){
+    const r = normRect(state.selection); if (!r) return false;
+    for (let y=r.y0; y<=r.y1; y++) for (let x=r.x0; x<=r.x1; x++) fn(x,y,r);
+    return r;
+  }
+  function copySelection(){
+    const r = normRect(state.selection); if (!r) return;
+    const tiles = [];
+    forSelection((x,y) => { const t = getTile(x,y); if (t) tiles.push({dx:x-r.x0, dy:y-r.y0, tile:JSON.parse(JSON.stringify(t))}); });
+    clipboard = {tiles};
+    state.message = `Copied ${tiles.length} tiles`;
+    draw();
+  }
+  function deleteSelection(){
+    const r = normRect(state.selection); if (!r) return;
+    pushHistory();
+    forSelection((x,y) => removeTile(x,y));
+    state.trains = state.trains.filter(t => !(t.x>=r.x0 && t.x<=r.x1 && t.y>=r.y0 && t.y<=r.y1));
+    updateSignals();
+    state.message = "Deleted selection";
+    draw();
+  }
+  function cutSelection(){ copySelection(); deleteSelection(); }
+  function pasteClipboard(){
+    if (!clipboard || !clipboard.tiles.length || !state.hover){ state.message = "Nothing to paste"; draw(); return; }
+    pushHistory();
+    const ax = state.hover.x, ay = state.hover.y;
+    for (const it of clipboard.tiles) setTile(ax+it.dx, ay+it.dy, JSON.parse(JSON.stringify(it.tile)));
+    updateSignals();
+    state.message = `Pasted ${clipboard.tiles.length} tiles`;
+    draw();
+  }
+
+  // Stations are named rectangular regions. Membership is geometric: a stop,
+  // switch or signal "belongs" to a station when its tile lies inside the rect.
+  // The station-local names of those elements live on the tiles themselves
+  // (tile.name) — a station master enumerates the tiles within its rect.
+  function addStation(rect){
+    const r = normRect(rect);
+    const id = state.nextStationId++;
+    const st = {id, name:`Station ${id}`, rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    state.stations.push(st);
+    return st;
+  }
+  function removeStation(id){ state.stations = state.stations.filter(s => s.id !== id); }
+  // The topmost station whose rect contains (x,y), or null.
+  function stationContaining(x,y){
+    for (let i = state.stations.length-1; i >= 0; i--){
+      const r = normRect(state.stations[i].rect);
+      if (r && x>=r.x0 && x<=r.x1 && y>=r.y0 && y<=r.y1) return state.stations[i];
+    }
+    return null;
+  }
+
+  function key(x,y){ return `${x},${y}`; }
+  function readKey(k){ const [x,y] = k.split(",").map(Number); return {x,y}; }
+  function opposite(d){ return (d + 4) % 8; }
+  function cloneRoute(route){ return route.slice(); }
+  // A signal tile can carry main signals in several directions (e.g. one each way so two
+  // blocks meet on one tile). signalDirs() reads the list, falling back to the legacy
+  // single `dir`. A "main" is identified by tile position plus its direction.
+  function signalDirs(tile){ return tile && tile.dirs ? tile.dirs : (tile && tile.dir != null ? [tile.dir] : []); }
+  function mkMain(x,y,dir){ return `${x},${y},${dir}`; }
+  function parseMain(mk){ const [x,y,dir] = mk.split(",").map(Number); return {x,y,dir}; }
+  // A main signal is either *automatic* (default green when its block is clear) or *manual*
+  // (default red, cleared by the operator). manualDirs lists the directions on a signal tile
+  // whose main is manual; any signal direction not in it is automatic.
+  function manualDirs(tile){ return (tile && tile.manualDirs) ? tile.manualDirs : []; }
+  function mainIsManual(x,y,dir){ const t = getTile(x,y); return !!(t && t.kind === "signal" && manualDirs(t).includes(dir)); }
+  function mainIsManualKey(mk){ const {x,y,dir} = parseMain(mk); return mainIsManual(x,y,dir); }
+  function routesFor(tile){
+    if (!tile) return [];
+    if (tile.kind === "track") return [tile.route];
+    if (tile.kind === "crossPlus") return [[6,2],[0,4]];
+    if (tile.kind === "crossX") return [[7,3],[1,5]];
+    if (tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn") return [tile.route];
+    if (tile.kind === "switch") return [[tile.stem, tile.branches[0]],[tile.stem, tile.branches[1]]];
+    return [];
+  }
+  function tileAccepts(tile, enterDir){
+    return routesFor(tile).some(route => route.includes(enterDir));
+  }
+  // ---- Switch helpers (manual builder) -------------------------------------------------
+  // A switch has a stem and two branches. `current` is the branch the stem is connected to.
+  // A *manual* switch is fixed at `current` (the other branch is set against and impassable).
+  // A *defaulting* switch rests at `default`; it can still be merged into from either branch
+  // (it yields), and springs back to `default` once the train has cleared it.
+  function switchCurrent(tile){ return (tile.current != null) ? tile.current : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]); }
+  function switchDefault(tile){ return (tile.default != null) ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]); }
+  function switchOther(tile){ return tile.branches.find(b => b !== switchCurrent(tile)); }
+  function switchLocked(x,y){ return state.lockedSwitchKeys.has(key(x,y)); }
+  // Whether a train arriving at a switch from direction `enterDir` may traverse it.
+  function switchAccepts(tile, enterDir){
+    if (!tile || tile.kind !== "switch") return true;
+    if (enterDir === tile.stem) return true;                 // from the stem → exits the live branch
+    if (!tile.branches.includes(enterDir)) return false;     // not a port of this switch
+    if (tile.mode === "manual") return enterDir === switchCurrent(tile); // only the live branch connects
+    return true;                                             // defaulting: yields to any branch
+  }
+  function getTile(x,y){ return state.tiles.get(key(x,y)); }
+  function setTile(x,y,tile){ state.tiles.set(key(x,y), tile); }
+  function removeTile(x,y){ state.tiles.delete(key(x,y)); }
+
+  function defaultSwitch(){
+    const shape = SWITCH_SHAPES[state.selectedSwitchShape];
+    return {
+      kind: "switch",
+      stem: shape.stem,
+      branches: shape.branches.slice(),
+      mode: "defaulting",            // "defaulting" (springs back) or "manual" (fixed)
+      default: shape.branches[0],    // resting branch for a defaulting switch
+      current: shape.branches[0]     // branch the stem is currently connected to
+    };
+  }
+  function makeTile(tool){
+    const route = cloneRoute(TRACK_SHAPES[state.selectedShape].route);
+    if (tool === "track") return {kind:"track", route};
+    if (tool === "crossPlus") return {kind:"crossPlus"};
+    if (tool === "crossX") return {kind:"crossX"};
+    if (tool === "switch") return defaultSwitch();
+    if (tool === "spawn"){
+      const shape = SPAWN_SHAPES[state.selectedSpawnShape];
+      return {kind:"spawn", route:cloneRoute(shape.route), dir:shape.dir, type:state.selectedType};
+    }
+    if (tool === "stop"){
+      const shape = STOP_SHAPES[state.selectedStopShape];
+      return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, dwellSeconds:DEFAULT_DWELL_SECONDS};
+    }
+    if (tool === "signal"){
+      const shape = SIGNAL_SHAPES[state.selectedSignalShape];
+      return {kind:"signal", route:cloneRoute(shape.route), dir:shape.dir};
+    }
+    return null;
+  }
+
+  function sortedRouteKey(route){ return route.slice().sort((a,b) => a - b).join("-"); }
+  function findTrackShapeIndex(route){
+    const r = sortedRouteKey(route);
+    const i = TRACK_SHAPES.findIndex(s => sortedRouteKey(s.route) === r);
+    return i < 0 ? state.selectedShape : i;
+  }
+  function findDirShapeIndex(shapes, route, dir){
+    const r = sortedRouteKey(route);
+    return shapes.findIndex(s => s.dir === dir && sortedRouteKey(s.route) === r);
+  }
+  function findSwitchShapeIndex(tile){
+    const b = tile.branches.slice().sort((a,b) => a - b).join(",");
+    return SWITCH_SHAPES.findIndex(s =>
+      s.stem === tile.stem && s.branches.slice().sort((x,y) => x - y).join(",") === b);
+  }
+
+  function resize(){
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const rect = stage.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    canvas.style.width = rect.width + "px";
+    canvas.style.height = rect.height + "px";
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    draw();
+  }
+  window.addEventListener("resize", resize);
+
+  function tileSize(){ return 46 * state.view.zoom; }
+  function worldToScreen(x,y){
+    const s = tileSize();
+    return {
+      x: stage.clientWidth / 2 + state.view.x + x * s,
+      y: stage.clientHeight / 2 + state.view.y + y * s
+    };
+  }
+  function screenToWorld(px,py){
+    const s = tileSize();
+    return {
+      x: Math.floor((px - stage.clientWidth / 2 - state.view.x) / s),
+      y: Math.floor((py - stage.clientHeight / 2 - state.view.y) / s)
+    };
+  }
+  function centerPoint(x,y){
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    return {x:p.x + s/2, y:p.y + s/2};
+  }
+  function lerpPoint(a,b,t){
+    return {x:a.x + (b.x - a.x) * t, y:a.y + (b.y - a.y) * t};
+  }
+  function endpointPoint(x,y,d){
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    return {x:p.x + DIRS[d].px * s, y:p.y + DIRS[d].py * s};
+  }
+  function previewPoint(d,w,h,pad){
+    return {
+      x: pad + DIRS[d].px * (w - pad * 2),
+      y: pad + DIRS[d].py * (h - pad * 2)
+    };
+  }
+  function drawPreviewRoute(pctx,w,h,route,muted){
+    const c = {x:w / 2, y:h / 2};
+    pctx.strokeStyle = muted ? "#71808e" : "#dde6ef";
+    pctx.lineWidth = 5;
+    pctx.lineCap = "round";
+    pctx.lineJoin = "round";
+    pctx.beginPath();
+    for (const d of route){
+      const e = previewPoint(d,w,h,9);
+      pctx.moveTo(c.x,c.y);
+      pctx.lineTo(e.x,e.y);
+    }
+    pctx.stroke();
+  }
+  function drawPreviewTriangle(pctx,w,h,d,color,scale,strokeColor,lineWidth,offset){
+    const c = {x:w / 2, y:h / 2};
+    const e = previewPoint(d,w,h,9);
+    const vx = e.x - c.x;
+    const vy = e.y - c.y;
+    const len = Math.hypot(vx,vy) || 1;
+    const ux = vx / len;
+    const uy = vy / len;
+    const px = -uy;
+    const py = ux;
+    const size = Math.min(w,h) * (scale || .12);
+    const off = offset != null ? offset : .18;
+    const cx = c.x + ux * Math.min(w,h) * off;
+    const cy = c.y + uy * Math.min(w,h) * off;
+    pctx.fillStyle = color;
+    pctx.beginPath();
+    pctx.moveTo(cx + ux * size, cy + uy * size);
+    pctx.lineTo(cx - ux * size * .75 + px * size * .65, cy - uy * size * .75 + py * size * .65);
+    pctx.lineTo(cx - ux * size * .75 - px * size * .65, cy - uy * size * .75 - py * size * .65);
+    pctx.closePath();
+    pctx.fill();
+    if (strokeColor){
+      pctx.strokeStyle = strokeColor;
+      pctx.lineWidth = lineWidth || 2;
+      pctx.stroke();
+    }
+  }
+  function drawPreviewStopMarker(pctx,w,h,d){
+    drawPreviewTriangle(pctx,w,h,d,STOP_BROWN,.385,"#ffffff",2.4,0);
+  }
+  function addShapePreview(button, shape, kind){
+    const preview = document.createElement("canvas");
+    const w = 64;
+    const h = 64;
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    preview.className = "shape-preview";
+    preview.width = w * dpr;
+    preview.height = h * dpr;
+    preview.style.width = "100%";
+    preview.style.height = "auto";
+    const pctx = preview.getContext("2d");
+    pctx.setTransform(dpr,0,0,dpr,0,0);
+    pctx.clearRect(0,0,w,h);
+    pctx.fillStyle = "#10161d";
+    pctx.fillRect(0,0,w,h);
+    pctx.strokeStyle = "#26313b";
+    pctx.lineWidth = 1;
+    pctx.strokeRect(.5,.5,w-1,h-1);
+    if (kind === "track"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+    } else if (kind === "crossPlus"){
+      drawPreviewRoute(pctx,w,h,[6,2],false);
+      drawPreviewRoute(pctx,w,h,[0,4],false);
+    } else if (kind === "crossX"){
+      drawPreviewRoute(pctx,w,h,[7,3],false);
+      drawPreviewRoute(pctx,w,h,[1,5],false);
+    } else if (kind === "spawn"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewTriangle(pctx,w,h,shape.dir,typeColor(state.selectedType),.18);
+    } else if (kind === "stop"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewStopMarker(pctx,w,h,shape.dir);
+    } else if (kind === "signal"){
+      drawPreviewRoute(pctx,w,h,shape.route,false);
+      drawPreviewTriangle(pctx,w,h,shape.dir,"#16a34a",.385,null,null,0);
+    } else {
+      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
+      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
+    }
+    button.insertBefore(preview, button.firstChild);
+  }
+
+  function drawGrid(){
+    const s = tileSize();
+    const w = stage.clientWidth;
+    const h = stage.clientHeight;
+    const left = Math.floor((-w/2 - state.view.x) / s) - 1;
+    const right = Math.ceil((w/2 - state.view.x) / s) + 1;
+    const top = Math.floor((-h/2 - state.view.y) / s) - 1;
+    const bottom = Math.ceil((h/2 - state.view.y) / s) + 1;
+    ctx.fillStyle = "#0d1116";
+    ctx.fillRect(0,0,w,h);
+    ctx.lineWidth = 1;
+    for (let x=left; x<=right; x++){
+      const p = worldToScreen(x,0).x;
+      ctx.strokeStyle = x === 0 ? "#3f4b58" : "#242b34";
+      ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,h); ctx.stroke();
+    }
+    for (let y=top; y<=bottom; y++){
+      const p = worldToScreen(0,y).y;
+      ctx.strokeStyle = y === 0 ? "#3f4b58" : "#242b34";
+      ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(w,p); ctx.stroke();
+    }
+  }
+
+  function drawRoute(x,y,route,muted){
+    const c = centerPoint(x,y);
+    ctx.strokeStyle = muted ? "#71808e" : "#dde6ef";
+    ctx.lineWidth = Math.max(3, tileSize() * .085);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const d of route){
+      const e = endpointPoint(x,y,d);
+      ctx.moveTo(c.x,c.y);
+      ctx.lineTo(e.x,e.y);
+    }
+    ctx.stroke();
+  }
+
+  function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
+    const c = centerPoint(x,y);
+    const e = endpointPoint(x,y,d);
+    const vx = e.x - c.x;
+    const vy = e.y - c.y;
+    const len = Math.hypot(vx,vy) || 1;
+    const ux = vx / len;
+    const uy = vy / len;
+    const px = -uy; // unit perpendicular, pointing to the right of the travel direction d
+    const py = ux;
+    const size = tileSize() * (scale || .17);
+    const off = offset != null ? offset : .18;
+    const lat = lateral || 0;
+    const cx = c.x + ux * tileSize() * off + px * tileSize() * lat;
+    const cy = c.y + uy * tileSize() * off + py * tileSize() * lat;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx + ux * size, cy + uy * size);
+    ctx.lineTo(cx - ux * size * .75 + px * size * .65, cy - uy * size * .75 + py * size * .65);
+    ctx.lineTo(cx - ux * size * .75 - px * size * .65, cy - uy * size * .75 - py * size * .65);
+    ctx.closePath();
+    ctx.fill();
+    if (strokeColor){
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = lineWidth || Math.max(2, tileSize() * .035);
+      ctx.stroke();
+    }
+  }
+  function drawStopMarker(x,y,d){
+    // same size, offset and side placement as a main signal, but a brown arrow with a white outline
+    drawTriangle(x,y,d,STOP_BROWN,.385,"#ffffff",Math.max(1.5, tileSize()*.03),0,SIGNAL_SIDE_OFFSET);
+  }
+
+  // Tile drawing is split into phases so the whole board is drawn in layered passes (all
+  // backgrounds, then all rails, then all markers). That keeps rails joining cleanly across
+  // tile boundaries instead of a later tile's background erasing an earlier tile's rail.
+  function drawTileBg(x,y){
+    const p = worldToScreen(x,y), s = tileSize();
+    ctx.fillStyle = "#121820";
+    ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+  }
+  function drawTileRoutes(x,y,tile){
+    if (tile.kind === "switch"){
+      const cur = switchCurrent(tile), other = switchOther(tile);
+      if (other != null) drawRoute(x,y,[tile.stem, other], true);   // dim: spring / set-against side
+      drawRoute(x,y,[tile.stem, cur], false);                       // bright: the live route
+      return;
+    }
+    for (const route of routesFor(tile)) drawRoute(x,y,route,false);
+  }
+  function drawTileMarkers(x,y,tile){
+    const s = tileSize();
+    if (tile.kind === "switch"){
+      // A glyph at the centre shows the mode (circle = defaulting/spring, square = manual)
+      // and whether the switch is currently locked by a cleared manual route (red outline).
+      const c = centerPoint(x,y);
+      const r = Math.max(3.5, s*.11);
+      const locked = switchLocked(x,y);
+      ctx.beginPath();
+      if (tile.mode === "manual") ctx.rect(c.x-r, c.y-r, r*2, r*2);
+      else ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+      ctx.fillStyle = tile.mode === "manual" ? "#f1ca57" : "#64d7c4";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, s*.04);
+      ctx.strokeStyle = locked ? SIGNAL_RED : "#0b0e12";
+      ctx.stroke();
+      return;
+    }
+    if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,typeColor(tile.type),.2);
+    if (tile.kind === "stop") drawStopMarker(x,y,tile.dir);
+    if (tile.kind === "signal"){
+      const blink = blinkOn();
+      for (const dir of signalDirs(tile)){
+        const mk = mkMain(x,y,dir);
+        const manual = manualDirs(tile).includes(dir);
+        const error = !manual && state.sys && state.sys.errorMains.has(mk);
+        let color;
+        if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
+        else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
+        // Manual mains carry a yellow outline; automatic mains a dark one.
+        const stroke = manual ? MANUAL_RING : "#0b0e12";
+        drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
+      }
+    }
+  }
+  // Full single-tile render (used for the placement ghost).
+  function drawTile(x,y,tile){
+    drawTileBg(x,y);
+    drawTileRoutes(x,y,tile);
+    drawTileMarkers(x,y,tile);
+  }
+
+  function drawProtectedHighlight(){
+    if (!state.hover) return;
+    const tile = getTile(state.hover.x,state.hover.y);
+    if (!tile || tile.kind !== "signal") return;
+    ctx.save();
+    for (const dir of signalDirs(tile)){
+      const block = collectProtectedBlock(state.hover.x,state.hover.y,dir,null);
+      for (const k of block.tiles){
+        const {x,y} = readKey(k);
+        const p = worldToScreen(x,y);
+        const s = tileSize();
+        ctx.fillStyle = block.blocked ? "rgba(240,82,100,.22)" : "rgba(67,209,123,.18)";
+        ctx.fillRect(p.x+2,p.y+2,s-4,s-4);
+        ctx.strokeStyle = block.blocked ? "rgba(240,82,100,.72)" : "rgba(67,209,123,.62)";
+        ctx.lineWidth = Math.max(1, s * .035);
+        ctx.strokeRect(p.x+3,p.y+3,s-6,s-6);
+      }
+    }
+    const p = worldToScreen(state.hover.x,state.hover.y);
+    const s = tileSize();
+    ctx.strokeStyle = "#64d7c4";
+    ctx.lineWidth = Math.max(2, s * .045);
+    ctx.strokeRect(p.x+4,p.y+4,s-8,s-8);
+    ctx.restore();
+  }
+
+  // ---- Multi-part train bodies ------------------------------------------------------
+  function centerW(x,y){ return {x:x+0.5, y:y+0.5}; }
+  function endpointW(x,y,d){ return {x:x+DIRS[d].px, y:y+DIRS[d].py}; }
+  function lerpW(a,b,t){ return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t}; }
+  function headWorld(train){
+    if (!trainMoving(train)) return centerW(train.x, train.y);
+    const start = centerW(train.prevX, train.prevY);
+    const joint = endpointW(train.prevX, train.prevY, train.moveDir);
+    const end = centerW(train.x, train.y);
+    return train.progress < .5 ? lerpW(start, joint, train.progress*2) : lerpW(joint, end, (train.progress-.5)*2);
+  }
+  function trainCars(train){ return train.cars && train.cars.length ? train.cars : DEFAULT_CARS; }
+  function trainTotalLength(train){
+    const cars = trainCars(train);
+    return cars.reduce((a,c)=>a+c,0) + (cars.length-1)*CAR_GAP;
+  }
+  // Prepend the head's world position to the trail and trim it to the body length.
+  function updateTrail(train){
+    if (!train.trail) train.trail = [];
+    const h = headWorld(train);
+    const t0 = train.trail[0];
+    if (!t0 || Math.hypot(h.x-t0.x, h.y-t0.y) > 0.004) train.trail.unshift(h);
+    const keep = trainTotalLength(train) + 0.6;
+    let acc = 0, cut = train.trail.length;
+    for (let i=0; i<train.trail.length-1; i++){
+      acc += Math.hypot(train.trail[i+1].x-train.trail[i].x, train.trail[i+1].y-train.trail[i].y);
+      if (acc > keep){ cut = i+2; break; }
+    }
+    if (cut < train.trail.length) train.trail.length = cut;
+  }
+  function seedTrail(train, dir){
+    // straight back-fill so a freshly spawned train shows its body immediately
+    const h = headWorld(train);
+    const back = DIRS[dir];
+    const n = Math.ceil((trainTotalLength(train)+0.6) / 0.1);
+    train.trail = [];
+    for (let i=0; i<=n; i++) train.trail.push({x:h.x - back.dx*0.1*i, y:h.y - back.dy*0.1*i});
+  }
+  function computeBodyTiles(train){
+    const set = new Set();
+    const trail = train.trail;
+    if (!trail || trail.length < 1){
+      set.add(key(train.x,train.y));
+      if (trainMoving(train)) set.add(key(train.prevX,train.prevY));
+      return set;
+    }
+    const total = trainTotalLength(train);
+    const add = pt => set.add(key(Math.floor(pt.x), Math.floor(pt.y)));
+    add(trail[0]);
+    let acc = 0;
+    for (let i=0; i<trail.length-1 && acc<total; i++){
+      const a = trail[i], b = trail[i+1];
+      const seg = Math.hypot(b.x-a.x, b.y-a.y);
+      const steps = Math.max(1, Math.ceil(seg/0.2));
+      for (let s=1; s<=steps; s++){
+        if (acc + seg*(s/steps) > total) break;
+        add(lerpW(a,b,s/steps));
+      }
+      acc += seg;
+    }
+    return set;
+  }
+  // collect trail points between distances d0..d1 behind the head (inclusive endpoints)
+  function trailSpan(trail, d0, d1){
+    const pts = [];
+    let acc = 0, started = false;
+    const at = dist => { // point at a given distance back
+      let a2 = 0;
+      for (let i=0; i<trail.length-1; i++){
+        const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
+        if (a2 + seg >= dist) return lerpW(trail[i], trail[i+1], seg ? (dist-a2)/seg : 0);
+        a2 += seg;
+      }
+      return trail[trail.length-1];
+    };
+    if (!trail.length) return pts;
+    pts.push(at(d0));
+    for (let i=0; i<trail.length-1; i++){
+      const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
+      if (acc+seg > d0 && acc+seg < d1) pts.push(trail[i+1]);
+      acc += seg;
+      if (acc >= d1) break;
+    }
+    pts.push(at(d1));
+    return pts;
+  }
+
+  function drawTrains(){
+    const s = tileSize();
+    for (const train of state.trains){
+      const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
+      const cars = trainCars(train);
+      let dist = 0;
+      cars.forEach((len, idx) => {
+        const pts = trailSpan(trail, dist, dist+len).map(worldPtToScreen);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        // dark outline then body
+        ctx.strokeStyle = "#06090d";
+        ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
+        strokePolyline(pts);
+        ctx.strokeStyle = idx === 0 ? typeColor(train.type) : "#7c8898";
+        ctx.lineWidth = CAR_WIDTH * s;
+        strokePolyline(pts);
+        dist += len + CAR_GAP;
+      });
+      // engine front highlight
+      const hp = worldPtToScreen(trail[0]);
+      ctx.fillStyle = "#fff"; ctx.globalAlpha = .85;
+      ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.06), 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  function worldPtToScreen(pt){
+    // pt is in tile units (tile centre = x+0.5). worldToScreen maps tile index to its corner.
+    const s = tileSize();
+    return {x: stage.clientWidth/2 + state.view.x + pt.x*s, y: stage.clientHeight/2 + state.view.y + pt.y*s};
+  }
+  function strokePolyline(pts){
+    if (pts.length < 2){
+      if (pts.length === 1){ ctx.beginPath(); ctx.arc(pts[0].x, pts[0].y, ctx.lineWidth/2, 0, Math.PI*2); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); }
+      return;
+    }
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+
+  // Translucent tint + border under the tiles, marking a station's extent.
+  function drawStations(){
+    const s = tileSize();
+    for (const st of state.stations){
+      const r = normRect(st.rect); if (!r) continue;
+      const a = worldToScreen(r.x0, r.y0);
+      const w = (r.x1-r.x0+1)*s, h = (r.y1-r.y0+1)*s;
+      ctx.save();
+      ctx.fillStyle = "rgba(120,150,205,.10)";
+      ctx.fillRect(a.x, a.y, w, h);
+      ctx.strokeStyle = "rgba(150,180,235,.5)";
+      ctx.lineWidth = Math.max(1, s*.03);
+      ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+      ctx.restore();
+    }
+  }
+  // Station names (top-left of each region) drawn over the tiles.
+  function drawStationLabels(){
+    const s = tileSize();
+    ctx.save();
+    ctx.font = `600 ${Math.max(10, Math.min(16, s*.34))}px system-ui, sans-serif`;
+    ctx.textBaseline = "top";
+    for (const st of state.stations){
+      const r = normRect(st.rect); if (!r) continue;
+      const a = worldToScreen(r.x0, r.y0);
+      const label = st.name || `Station ${st.id}`;
+      const tw = ctx.measureText(label).width;
+      const bh = Math.max(14, s*.42);
+      ctx.fillStyle = "rgba(22,30,44,.82)";
+      ctx.fillRect(a.x+2, a.y+2, tw+10, bh);
+      ctx.fillStyle = "#cfe0ff";
+      ctx.fillText(label, a.x+7, a.y+2+(bh-Math.max(10,Math.min(16,s*.34)))/2);
+    }
+    ctx.restore();
+  }
+  // Station-local element names (1E, A, 2…) drawn at the bottom-left of their tile.
+  function drawElementNames(){
+    const s = tileSize();
+    if (s < 16) return; // unreadable when zoomed far out
+    ctx.save();
+    ctx.font = `${Math.max(9, Math.min(13, s*.26))}px system-ui, sans-serif`;
+    ctx.textBaseline = "top";
+    for (const [k,t] of state.tiles){
+      if (!t.name) continue;
+      const {x,y} = readKey(k);
+      const p = worldToScreen(x,y);
+      const bh = Math.max(11, s*.3);
+      const tw = ctx.measureText(t.name).width;
+      ctx.fillStyle = "rgba(10,14,20,.72)";
+      ctx.fillRect(p.x+2, p.y+s-bh-2, tw+6, bh);
+      ctx.fillStyle = "#e6edf5";
+      ctx.fillText(t.name, p.x+5, p.y+s-bh-1);
+    }
+    ctx.restore();
+  }
+  function drawSelectionOverlay(){
+    const r = normRect(state.selecting || state.selection);
+    if (!r) return;
+    const a = worldToScreen(r.x0, r.y0);
+    const s = tileSize();
+    const w = (r.x1-r.x0+1)*s, h = (r.y1-r.y0+1)*s;
+    ctx.save();
+    ctx.fillStyle = "rgba(100,215,196,.10)";
+    ctx.fillRect(a.x, a.y, w, h);
+    ctx.strokeStyle = "#64d7c4";
+    ctx.lineWidth = Math.max(1.5, s*.04);
+    ctx.setLineDash([Math.max(5,s*.2), Math.max(3,s*.12)]);
+    ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+    ctx.restore();
+  }
+
+  function drawPlacementGhost(){
+    if (!state.hover || state.selectedTool === "select" || state.selectedTool === "station" || state.selectedTool === "operate") return;
+    const {x,y} = state.hover;
+    const p = worldToScreen(x,y);
+    const s = tileSize();
+    ctx.save();
+    if (state.selectedTool === "erase"){
+      ctx.globalAlpha = .42;
+      ctx.fillStyle = "#ff6b76";
+      ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
+      ctx.strokeStyle = "#ff9aa3";
+      ctx.lineWidth = Math.max(1, s * .035);
+      ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
+    } else {
+      const tile = makeTile(state.selectedTool);
+      if (!tile){ ctx.restore(); return; }
+      const invalid = false;
+      ctx.globalAlpha = .52;
+      drawTile(x,y,tile);
+      ctx.globalAlpha = .9;
+      ctx.strokeStyle = invalid ? "#ff6b76" : "#64d7c4";
+      ctx.lineWidth = Math.max(1, s * .035);
+      ctx.strokeRect(p.x+2,p.y+2,s-4,s-4);
+    }
+    ctx.restore();
+  }
+
+  function draw(){
+    drawGrid();
+    drawStations();
+    // Layered passes so rails join cleanly across tile boundaries.
+    const tiles = [...state.tiles];
+    for (const [k] of tiles){ const {x,y} = readKey(k); drawTileBg(x,y); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
+    drawProtectedHighlight();
+    drawSelectionOverlay();
+    drawPlacementGhost();
+    drawElementNames();
+    drawStationLabels();
+    drawTrains();
+    stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
+    hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
+  }
+
+  function trainMoving(train){
+    return train.progress != null && train.progress < 1 && train.prevX != null && train.prevY != null;
+  }
+
+  function trainPoint(train){
+    if (!trainMoving(train)) return centerPoint(train.x, train.y);
+    const start = centerPoint(train.prevX, train.prevY);
+    const joint = endpointPoint(train.prevX, train.prevY, train.moveDir);
+    const end = centerPoint(train.x, train.y);
+    if (train.progress < .5) return lerpPoint(start, joint, train.progress * 2);
+    return lerpPoint(joint, end, (train.progress - .5) * 2);
+  }
+
+  function exitFor(tile, from){
+    if (!tile) return null;
+    if (tile.kind === "switch"){
+      if (from === tile.stem) return switchCurrent(tile);    // stem → the live branch
+      if (tile.branches.includes(from)){
+        // A branch merges to the stem. A manual switch only connects its live branch;
+        // a defaulting switch yields to either branch.
+        if (tile.mode === "manual" && from !== switchCurrent(tile)) return null;
+        return tile.stem;
+      }
+      return null;
+    }
+    for (const route of routesFor(tile)){
+      if (!route.includes(from)) continue;
+      if (route.length < 2) return null;
+      return route[0] === from ? route[1] : route[0];
+    }
+    return null;
+  }
+
+  function exitsForBlock(tile, from){
+    if (!tile) return [];
+    if (tile.kind === "switch"){
+      const dirs = [tile.stem, ...tile.branches];
+      if (!dirs.includes(from)) return [];
+      return dirs.filter(d => d !== from);
+    }
+    const exits = [];
+    for (const route of routesFor(tile)){
+      if (!route.includes(from) || route.length < 2) continue;
+      for (const d of route){
+        if (d !== from && !exits.includes(d)) exits.push(d);
+      }
+    }
+    return exits;
+  }
+
+  function collectProtectedBlock(x,y,dir,ignoreId){
+    const nx = x + DIRS[dir].dx;
+    const ny = y + DIRS[dir].dy;
+    return scanProtectedBlock(nx, ny, opposite(dir), ignoreId);
+  }
+
+  function scanProtectedBlock(x,y,from,ignoreId){
+    const seen = new Set();
+    const tiles = new Set();
+    const todo = [{x,y,from}];
+    let blocked = false;
+    while (todo.length){
+      const n = todo.pop();
+      const id = `${n.x},${n.y},${n.from}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const tile = getTile(n.x,n.y);
+      if (!tile) continue;
+      // A signal bounds the block: it is a wall, not part of the protected run of
+      // track, so it is never flooded through *and* never counts as occupancy. If a
+      // boundary signal tile counted, two trains each waiting on the other's signal
+      // would each see the other inside their block and deadlock forever.
+      if (tile.kind === "signal") continue;
+      tiles.add(key(n.x,n.y));
+      if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) blocked = true;
+      for (const ex of exitsForBlock(tile,n.from)){
+        todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
+      }
+    }
+    return {blocked, tiles};
+  }
+
+  // ---- Blocks & block reservation ---------------------------------------------------
+  // Only AUTOMATIC mains define blocks. Each automatic main guards a block (the run of
+  // track up to the next signal) with at most one holder, and carries an INVISIBLE distant
+  // on the tile immediately before it (point 2): a train approaching commits to the block as
+  // it steps onto the main from that tile and, if the block was free, rolls straight through;
+  // if the block is taken it brakes to a stop at the main and waits for green. MANUAL mains
+  // have NO block and no occupancy state — they are pure operator-cleared route gates (see
+  // followManualRoute / toggleManualSignal), and trains run on sight between them.
+  // buildSignalSystem() recomputes the static topology each tick.
+  function regionIdFor(x,y,dir){
+    const tiles = scanProtectedBlock(x + DIRS[dir].dx, y + DIRS[dir].dy, opposite(dir), null).tiles;
+    return {id: [...tiles].sort().join("|"), tiles};
+  }
+  function buildSignalSystem(){
+    const blockOfMain = new Map();    // AUTOMATIC mainKey "x,y,dir" -> blockId
+    const tileOfMain = new Map();     // AUTOMATIC mainKey -> the signal tile key "x,y"
+    const blockTiles = new Map();     // blockId -> Set of tile keys
+    const mainsOfBlock = new Map();   // blockId -> [automatic mainKey]
+    const distantCommit = new Map();  // before-tile "bx,by,dir" -> {blockId, mainKey, mainTile, approach:Set}
+    const errorMains = new Set();
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "signal") continue;
+      const {x,y} = readKey(k);
+      for (const dir of signalDirs(tile)){
+        if (manualDirs(tile).includes(dir)) continue; // automatic mains only define blocks
+        const mk = mkMain(x,y,dir);
+        const {id, tiles} = regionIdFor(x,y,dir);
+        blockOfMain.set(mk, id);
+        tileOfMain.set(mk, k);
+        if (!blockTiles.has(id)) blockTiles.set(id, tiles);
+        if (!mainsOfBlock.has(id)) mainsOfBlock.set(id, []);
+        mainsOfBlock.get(id).push(mk);
+        const bx = x - DIRS[dir].dx, by = y - DIRS[dir].dy;
+        distantCommit.set(mkMain(bx,by,dir), {blockId: id, mainKey: mk, mainTile: k, approach: new Set([key(bx,by), k])});
+      }
+    }
+    // Point 8: an automatic block fed by a MANUAL entry can be entered on sight (no grant),
+    // so its automatic mains can't keep it exclusive → they go into the blinking-red error.
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "signal") continue;
+      const {x,y} = readKey(k);
+      for (const dir of signalDirs(tile)){
+        if (!manualDirs(tile).includes(dir)) continue; // manual entries
+        const {id} = regionIdFor(x,y,dir);
+        for (const mk of (mainsOfBlock.get(id) || [])) errorMains.add(mk);
+      }
+    }
+    // Idea 1: an automatic main must not lead out of a protected block into open track — it
+    // requires an opposing-direction main (auto OR manual) on the SAME tile (the other end of
+    // its route), making a complete block boundary. Without it, it blinks red and is impassable.
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "signal") continue;
+      const {x,y} = readKey(k);
+      for (const dir of signalDirs(tile)){
+        if (manualDirs(tile).includes(dir)) continue;
+        if (!signalDirs(tile).includes(opposite(dir))) errorMains.add(mkMain(x,y,dir));
+      }
+    }
+    return {blockOfMain, tileOfMain, blockTiles, mainsOfBlock, distantCommit, errorMains, holder:new Map()};
+  }
+
+  // Only AUTOMATIC, non-errored mains use the block-grant system. Manual mains never get a
+  // hold — a train passes them purely on the operator's cleared green (checked in moveTrain).
+  function mainEligible(mk, sys){
+    if (mainIsManualKey(mk)) return false;
+    return !sys.errorMains.has(mk);
+  }
+
+  // The block+main a train is reserving.
+  function approachInfo(train, sys){
+    // The invisible distant commits the block as the train moves OFF the tile before the main.
+    if (trainMoving(train) && train.prevX != null){
+      const dc = sys.distantCommit.get(mkMain(train.prevX, train.prevY, train.moveDir));
+      if (dc) return {blockId: dc.blockId, mainKey: dc.mainKey, mainTile: dc.mainTile, approach: dc.approach, rollThrough: true};
+    }
+    const tile = getTile(train.x, train.y);
+    if (!tile) return null;
+    const ex = exitFor(tile, train.from);
+    if (ex == null) return null;
+    if (tile.kind === "signal"){
+      const mk = mkMain(train.x, train.y, ex);
+      if (sys.blockOfMain.has(mk)) return {blockId: sys.blockOfMain.get(mk), mainKey: mk, mainTile: sys.tileOfMain.get(mk), rollThrough: false};
+    }
+    return null;
+  }
+
+  function nextWantSeq(){ state.wantSeq = (state.wantSeq || 0) + 1; return state.wantSeq; }
+  function trainHolds(train, blockId){ return train.holds && train.holds.some(h => h.blockId === blockId); }
+  // Physical occupancy of a block's tiles (a safety net for trains that are inside a block
+  // without holding it, e.g. spawned in or placed by an edit).
+  function blockOccupiedByOther(blockId, sys, ignoreId){
+    const tiles = sys.blockTiles.get(blockId);
+    if (!tiles) return false;
+    for (const t of state.trains){
+      if (t.id === ignoreId) continue;
+      const bt = t._tiles || computeBodyTiles(t);
+      for (const tk of bt) if (tiles.has(tk)) return true;
+    }
+    return false;
+  }
+  function inBlockRegion(train, h, sys){
+    const here = key(train.x, train.y);
+    const tiles = sys.blockTiles.get(h.blockId);
+    if (tiles && tiles.has(here)) return true;
+    if (here === h.entryMainTile) return true;
+    if (h.approach && h.approach.has(here)) return true; // tiles from the distant up to the main
+    return false;
+  }
+
+  // Recomputes blocks and re-derives occupancy from live train bodies every call (and it is
+  // called on every tile edit). Because occupancy is recounted from real positions rather
+  // than a stored counter, changing the signalling never leaves "virtual" trains in a block.
+  function updateSignals(){
+    const sys = buildSignalSystem();
+    for (const t of state.trains) t._tiles = computeBodyTiles(t);
+    maintainManualState(sys);
+    // release holds once the train has left the block's protected tiles and entry approach
+    for (const t of state.trains){
+      if (!t.holds) t.holds = [];
+      t.holds = t.holds.filter(h => sys.blockTiles.has(h.blockId) && inBlockRegion(t, h, sys));
+    }
+    for (const t of state.trains) for (const h of t.holds) sys.holder.set(h.blockId, t.id);
+    // gather contenders, then grant each free block to its longest-waiting contender
+    const contenders = new Map();
+    for (const t of state.trains){
+      const ap = approachInfo(t, sys);
+      t._ap = ap;
+      if (!ap || trainHolds(t, ap.blockId)){ t.wantSince = null; continue; }
+      if (!mainEligible(ap.mainKey, sys)){ t.wantSince = null; continue; } // red manual / errored automatic
+      if (!contenders.has(ap.blockId)) contenders.set(ap.blockId, []);
+      contenders.get(ap.blockId).push({train:t, ap});
+    }
+    for (const [blockId, list] of contenders){
+      for (const c of list) if (c.train.wantSince == null) c.train.wantSince = nextWantSeq();
+      if (sys.holder.has(blockId)) continue; // reserved: everyone keeps waiting
+      list.sort((a,b) => (a.train.wantSince - b.train.wantSince) || (a.train.id - b.train.id));
+      const win = list[0];
+      if (blockOccupiedByOther(blockId, sys, win.train.id)) continue; // physically obstructed
+      win.train.holds.push({blockId, entryMainKey: win.ap.mainKey, entryMainTile: win.ap.mainTile, approach: win.ap.approach, rollThrough: win.ap.rollThrough});
+      win.train.wantSince = null;
+      sys.holder.set(blockId, win.train.id);
+    }
+    state.sys = sys;
+  }
+
+  function holdForMain(train, mainKey){ return train.holds && train.holds.find(h => h.entryMainKey === mainKey); }
+  // A main is "green" for a train that holds its block via that main.
+  function mainIsGreenFor(train, mainKey){ return !!holdForMain(train, mainKey); }
+  // A block is free when no train holds it and none is physically inside it.
+  function blockFree(id, sys){
+    return !sys.holder.has(id) && !blockOccupiedByOther(id, sys, null);
+  }
+  // Whether a main shows green. AUTOMATIC mains are default-green: green whenever the block
+  // ahead is clear (and for the train holding it while still approaching), red when taken,
+  // never green while in the error state. MANUAL mains are default-red: green only while the
+  // operator has them cleared.
+  function mainRenderGreen(mainKey, sys, manual){
+    if (manual) return state.manualGreen.has(mainKey);
+    if (sys.errorMains.has(mainKey)) return false;
+    const id = sys.blockOfMain.get(mainKey);
+    if (blockFree(id, sys)) return true;
+    const tiles = sys.blockTiles.get(id);
+    for (const t of state.trains){
+      if (!t.holds) continue;
+      for (const h of t.holds){
+        if (h.blockId === id && h.entryMainKey === mainKey && tiles && !tiles.has(key(t.x,t.y))) return true;
+      }
+    }
+    return false;
+  }
+  // True if this train may pass main `mk` without stopping (it reserved the block early at the
+  // invisible distant). A train that had to stop at a red main reacts briefly before pulling away.
+  function mayRollThrough(train, mk){
+    const h = holdForMain(train, mk);
+    return !!(h && h.rollThrough);
+  }
+
+  function occupied(x,y,ignoreId){
+    return state.trains.some(t => t.id !== ignoreId && trainOccupies(t,x,y));
+  }
+
+  // ---- Manual signals & route locks -------------------------------------------------
+  // Prune cleared greens / spent route locks and recompute which switches are locked. Called
+  // from updateSignals each tick (and on every edit), after train body tiles are computed.
+  // Each locked switch is released the instant the cleared train's LAST AXLE leaves it
+  // (idea 3) — tracked per switch, not per whole route.
+  function maintainManualState(sys){
+    for (const mk of [...state.manualGreen])
+      if (!mainIsManualKey(mk)) state.manualGreen.delete(mk);
+    state.routeLocks = state.routeLocks.filter(rl => {
+      if (!mainIsManualKey(rl.mk)) return false;               // the manual signal is gone/changed
+      if (!rl.armed) return state.manualGreen.has(rl.mk);      // awaiting a train: hold while still cleared
+      const tr = state.trains.find(t => t.id === rl.trainId);
+      if (!tr) return false;                                   // the cleared train vanished → release
+      const bt = tr._tiles || computeBodyTiles(tr);
+      for (const sk of rl.switchKeys){
+        if (rl.passedSwitch.has(sk)) continue;
+        if (bt.has(sk)) rl.enteredSwitch.add(sk);              // body is on the switch
+        else if (rl.enteredSwitch.has(sk)) rl.passedSwitch.add(sk); // last axle just left it → unlock
+      }
+      return !rl.switchKeys.every(sk => rl.passedSwitch.has(sk)); // done once every switch is passed
+    });
+    state.lockedSwitchKeys = new Set();
+    for (const rl of state.routeLocks)
+      for (const sk of rl.switchKeys)
+        if (!rl.passedSwitch.has(sk)) state.lockedSwitchKeys.add(sk);
+  }
+  // Trace the route a cleared manual signal opens: follow the live track (current switch
+  // settings) from the signal to the next signal facing the way we travel, checking that
+  // (2a) it crosses no already-locked switch and (2c) no axle sits anywhere on the path up to
+  // and including that signal. Returns the switch tiles it crosses, or a reason it cannot clear.
+  function followManualRoute(sx,sy,dir){
+    const switchKeys = [];
+    let cx = sx, cy = sy, d = dir;
+    for (let i=0; i<256; i++){
+      const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
+      const nt = getTile(nx,ny);
+      const from = opposite(d);
+      if (!nt || !tileAccepts(nt, from) || !switchAccepts(nt, from)) return {ok:false, reason:"the path is broken"};
+      if (occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied"}; // 2c (incl. the terminus signal)
+      if (nt.kind === "signal"){
+        // 2b: the route is only complete at a main facing the WAY WE ARE GOING — one that will
+        // actually stop/hand off the train. A signal facing the other way is transparent to it.
+        const sx2 = exitFor(nt, from);
+        if (sx2 != null && signalDirs(nt).includes(sx2)) return {ok:true, switchKeys};
+        return {ok:false, reason:"the path runs into a signal facing the other way"};
+      }
+      if (nt.kind === "switch"){
+        if (switchLocked(nx,ny)) return {ok:false, reason:"the path crosses a switch locked by another route"}; // 2a
+        switchKeys.push(key(nx,ny));
+      }
+      const ex = exitFor(nt, from);
+      if (ex == null) return {ok:false, reason:"the path is broken at a switch set against it"};
+      cx = nx; cy = ny; d = ex;
+    }
+    return {ok:false, reason:"the path is too long"};
+  }
+  // Operator clears (or cancels) a manual main. Clearing needs a clear route to a forward
+  // signal (followManualRoute); it then locks every switch on that route. The main drops back
+  // to red the moment a train passes it, and each switch unlocks as the train's last axle
+  // clears it. While a main is green and no train has taken it yet, clicking it cancels (a
+  // train that has already taken the route holds it red, so a re-clear is blocked by occupancy).
+  function toggleManualSignal(x,y,dir){
+    const tile = getTile(x,y);
+    if (!tile || tile.kind !== "signal" || !manualDirs(tile).includes(dir)) return;
+    const mk = mkMain(x,y,dir);
+    if (state.manualGreen.has(mk)){
+      state.manualGreen.delete(mk);
+      state.routeLocks = state.routeLocks.filter(r => r.mk !== mk);
+      state.message = `Signal ${placeLabel(x,y)} set back to red`;
+      updateSignals(); draw();
+      return;
+    }
+    const route = followManualRoute(x,y,dir);
+    if (!route.ok){ state.message = `Cannot clear ${placeLabel(x,y)}: ${route.reason}`; draw(); return; }
+    state.manualGreen.add(mk);
+    state.routeLocks.push({mk, switchKeys: route.switchKeys, trainId:null, armed:false, enteredSwitch:new Set(), passedSwitch:new Set()});
+    state.message = `Cleared ${placeLabel(x,y)}`;
+    updateSignals(); draw();
+  }
+
+  function trainOccupies(train,x,y){
+    if (train._tiles) return train._tiles.has(key(x,y));
+    return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
+  }
+
+  // True if a train arriving at (x,y) via `from` can immediately continue onward; its
+  // negation is what tells a moving train to brake to a stop on the tile it is entering.
+  function canLeave(train, x, y, from){
+    const tile = getTile(x,y);
+    if (!tile) return false;
+    const ex = exitFor(tile, from);
+    if (ex == null) return false;
+    if (tile.kind === "stop" && ex === tile.dir){
+      if (train.stopKey !== key(x,y)) return false;          // hasn't docked yet
+      if (state.simFrame < train.releaseFrame) return false; // still dwelling
+    }
+    if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
+      const mk = mkMain(x,y,ex);
+      if (mainIsManual(x,y,ex)){
+        if (!state.manualGreen.has(mk)) return false;          // red manual main: hold
+      } else {
+        // automatic main: needs the block, reserved early at the invisible distant (roll
+        // through) or reacted to while stopped here.
+        if (!mainIsGreenFor(train, mk)) return false;
+        if (!mayRollThrough(train, mk) && train.reactedMain !== mk) return false;
+      }
+    }
+    const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
+    const nt = getTile(nx,ny);
+    if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return false;
+    // All trains proceed with caution: never roll onto an occupied tile, brake to a stop.
+    if (occupied(nx,ny,train.id)) return false;
+    return true;
+  }
+
+  // Advance a moving train by its current speed, easing toward MAX_SPEED or braking along
+  // a sqrt curve so it coasts to a stop exactly on the tile it cannot continue past.
+  function advanceWithSpeed(train){
+    if (!trainMoving(train)) return false;
+    const d = DIRS[train.moveDir];
+    const seg = Math.hypot(d.dx,d.dy) || 1;
+    const halt = !canLeave(train, train.x, train.y, train.from);
+    const remaining = (1 - train.progress) * seg;
+    let target = MAX_SPEED;
+    if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
+    if (train.speed < target) train.speed = Math.min(target, train.speed + ACCEL);
+    else train.speed = target;
+    if (halt && train.speed < MIN_SPEED && remaining < 0.5){
+      train.progress = 1; // crawling and almost there: dock on the tile centre
+    } else {
+      train.progress = Math.min(1, train.progress + train.speed / seg);
+    }
+    if (train.progress >= 1){
+      delete train.prevX; delete train.prevY; delete train.moveDir;
+      if (halt) train.speed = 0;
+    }
+    return true;
+  }
+
+  // ---- Sim clock and notifications -------------------------------------------------
+  // The sim advances one simFrame per simStep (60 = one sim-second).
+  function formatClock(frame){
+    const s = Math.max(0, Math.floor(frame / FRAMES_PER_SECOND));
+    const m = Math.floor(s / 60);
+    return `${String(m).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
+  }
+  // A human label for a cell: "<station> <element-name>" when known, else its coordinates.
+  function placeLabel(x,y){
+    const t = getTile(x,y);
+    const st = stationContaining(x,y);
+    const parts = [];
+    if (st) parts.push(st.name);
+    if (t && t.name) parts.push(t.name);
+    return parts.length ? parts.join(" ") : `${x},${y}`;
+  }
+  function trainDesc(train){
+    const t = trainTypeById(train.type);
+    const nm = t && t.name ? t.name : `type ${train.type}`;
+    return `Train ${train.id} (${nm})`;
+  }
+  // Push a line into the scrolling notification window. level: info | warn | alert.
+  function notify(level, text){
+    if (!notifyLog) return;
+    const row = document.createElement("div");
+    row.className = "note note-" + level;
+    row.innerHTML = `<span class="note-time">${formatClock(state.simFrame)}</span><span class="note-text">${escapeHtml(text)}</span>`;
+    notifyLog.appendChild(row);
+    while (notifyLog.children.length > 200) notifyLog.removeChild(notifyLog.firstChild);
+    notifyLog.scrollTop = notifyLog.scrollHeight;
+  }
+  // Called the first frame a train docks at a stop: records when it may leave (arrival + dwell).
+  function registerStopArrival(train, tile){
+    train.stopKey = key(train.x, train.y);
+    train.releaseFrame = state.simFrame + Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
+  }
+  // Called when a train pulls away from a named stop: a plain departure line (silent otherwise).
+  function notifyDeparture(train, tile, x, y){
+    if (tile.name) notify("info", `${trainDesc(train)} departed ${placeLabel(x,y)}`);
+  }
+
+  function stopDwellSeconds(tile){
+    if (tile.dwellSeconds != null){
+      const seconds = Number(tile.dwellSeconds);
+      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
+    }
+    if (tile.dwell != null){
+      const seconds = Number(tile.dwell) / 40;
+      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
+    }
+    return DEFAULT_DWELL_SECONDS;
+  }
+
+  function moveTrain(train){
+    if (train.speed == null) train.speed = 0;
+    if (trainMoving(train)){ advanceWithSpeed(train); return; }
+    if (train.wait > 0){ train.wait--; train.speed = 0; return; }
+    const tile = getTile(train.x,train.y);
+    const ex = exitFor(tile, train.from);
+    if (ex == null){ train.speed = 0; return; }
+    if (tile.kind === "stop" && ex === tile.dir){
+      const stopKey = key(train.x,train.y);
+      if (train.stopKey !== stopKey){
+        registerStopArrival(train, tile);
+        train.speed = 0;
+        return;
+      }
+      if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
+    }
+    if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
+      const mk = mkMain(train.x, train.y, ex);
+      if (mainIsManual(train.x, train.y, ex)){
+        if (!state.manualGreen.has(mk)){ train.speed = 0; return; } // red manual: wait for the operator
+        // green manual: roll straight through (drive on sight), no block, no react
+      } else {
+        if (!mainIsGreenFor(train, mk)){ train.speed = 0; return; } // red: hold until the block clears
+        if (!mayRollThrough(train, mk) && train.reactedMain !== mk){
+          // had to stop at the main (block was taken on approach): pause to react before leaving
+          train.reactedMain = mk;
+          train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
+          train.speed = 0; return;
+        }
+      }
+    }
+    const nx = train.x + DIRS[ex].dx;
+    const ny = train.y + DIRS[ex].dy;
+    const nf = opposite(ex);
+    const nextTile = getTile(nx,ny);
+    if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf)){ train.speed = 0; return; }
+    if (occupied(nx,ny,train.id)){ train.speed = 0; return; } // proceed with caution: never collide
+    // Passing a cleared MANUAL main drops it back to red and arms its route lock to this train,
+    // so the switches it set stay locked until this train has fully passed them.
+    if (tile.kind === "signal" && signalDirs(tile).includes(ex) && state.manualGreen.has(mkMain(train.x,train.y,ex))){
+      const mk = mkMain(train.x,train.y,ex);
+      state.manualGreen.delete(mk);
+      const rl = state.routeLocks.find(r => r.mk === mk && !r.armed);
+      if (rl){ rl.armed = true; rl.trainId = train.id; }
+    }
+    if (train.stopKey === key(train.x, train.y) && tile.kind === "stop") notifyDeparture(train, tile, train.x, train.y);
+    delete train.stopKey;
+    train.reactedMain = null; // leaving this tile; the next main needs its own reaction
+    train.prevX = train.x;
+    train.prevY = train.y;
+    train.moveDir = ex;
+    train.progress = 0;
+    train.x = nx;
+    train.y = ny;
+    train.from = nf;
+    // A defaulting switch entered from a branch aligns to it (it springs back once clear).
+    if (nextTile.kind === "switch" && nextTile.mode === "defaulting" && !switchLocked(nx,ny)
+        && nextTile.branches.includes(nf) && switchCurrent(nextTile) !== nf){
+      nextTile.current = nf;
+    }
+    advanceWithSpeed(train);
+  }
+
+  // Defaulting switches spring back to their default branch once no train sits on them and
+  // they are not locked into a cleared route.
+  function revertDefaultingSwitches(){
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "switch" || tile.mode !== "defaulting") continue;
+      const def = switchDefault(tile);
+      if (switchCurrent(tile) === def) continue;
+      const {x,y} = readKey(k);
+      if (switchLocked(x,y) || occupied(x,y,null)) continue;
+      tile.current = def;
+    }
+  }
+
+  function spawnTrains(){
+    const spent = [];
+    for (const [k,tile] of state.tiles){
+      if (tile.kind !== "spawn") continue;
+      const {x,y} = readKey(k);
+      const nx = x + DIRS[tile.dir].dx;
+      const ny = y + DIRS[tile.dir].dy;
+      const nf = opposite(tile.dir);
+      const nextTile = getTile(nx,ny);
+      if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
+      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, type:tile.type, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
+      seedTrail(train, tile.dir);
+      train._tiles = computeBodyTiles(train);
+      state.trains.push(train);
+      spent.push({x, y, route:cloneRoute(tile.route)});
+    }
+    for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
+  }
+
+  function simStep(){
+    state.simFrame++;
+    spawnTrains();
+    updateSignals();
+    for (const train of state.trains) moveTrain(train);
+    for (const train of state.trains) updateTrail(train);
+    revertDefaultingSwitches();
+    // Re-evaluate holders/grants against the post-move positions before drawing. Without
+    // this, a block that a train just vacated reads as momentarily free for one frame
+    // (the waiting train is granted only next frame), flickering every main green.
+    updateSignals();
+    state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
+    if (state.frame === 0) state.tick++;
+  }
+
+  // FIXED-TIMESTEP loop. One simStep == 1/60 s of SIM time, no matter the display's refresh
+  // rate. requestAnimationFrame fires at the monitor's rate (60 Hz, 120 Hz ProMotion, 144 Hz…),
+  // so we bank the real elapsed time and run as many fixed steps as it covers, then draw once.
+  // Previously the sim advanced one step per rAF callback, so the entire simulation — the
+  // clock included — ran at the refresh rate: a 120 Hz screen ran everything at exactly 2×
+  // real time. Pinning steps to wall-clock time keeps the clock and train speeds correct on
+  // every display.
+  const SIM_STEP_MS = 1000 / FRAMES_PER_SECOND;
+  const MAX_CATCHUP_STEPS = 5; // cap steps per frame so a long stall can't spiral
+  let simAccumulatorMs = 0;
+  let lastFrameMs = null;
+  let loggedSimError = false;
+  function animation(now){
+    if (now == null) now = performance.now();
+    try {
+      if (lastFrameMs == null) lastFrameMs = now;
+      let elapsed = now - lastFrameMs;
+      lastFrameMs = now;
+      if (state.paused){
+        simAccumulatorMs = 0; // don't bank time while paused; resume cleanly
+      } else {
+        if (elapsed > 250) elapsed = 250; // clamp background-tab / hitch gaps
+        simAccumulatorMs += elapsed;
+        let steps = 0;
+        while (simAccumulatorMs >= SIM_STEP_MS && steps < MAX_CATCHUP_STEPS){
+          simStep();
+          simAccumulatorMs -= SIM_STEP_MS;
+          steps++;
+        }
+        if (steps >= MAX_CATCHUP_STEPS) simAccumulatorMs = 0; // drop a backlog we can't catch up
+      }
+      draw();
+    } catch (err){
+      // never let a single bad frame freeze the loop; surface it once
+      if (!loggedSimError){ console.error("simStep failed:", err); loggedSimError = true; }
+      state.message = "Error: " + (err && err.message ? err.message : err);
+    }
+    requestAnimationFrame(animation);
+  }
+
+  // Operate tool: left-click throws a switch or clears/cancels a manual signal.
+  function operateClick(x,y){
+    closeContext();
+    const tile = getTile(x,y);
+    if (!tile) return;
+    if (tile.kind === "switch"){
+      if (switchLocked(x,y)){ state.message = "Switch is locked by a cleared route"; draw(); return; }
+      const other = switchOther(tile);
+      if (other != null){
+        tile.current = other;
+        if (tile.mode === "defaulting") tile.default = other; // a defaulting switch now rests this way
+        state.message = `Switch ${placeLabel(x,y)} → ${DIRS[other].name}`;
+      }
+      updateSignals();
+      draw();
+      return;
+    }
+    if (tile.kind === "signal"){
+      const dirs = manualDirs(tile);
+      if (!dirs.length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      for (const dir of dirs) toggleManualSignal(x,y,dir);
+      return;
+    }
+  }
+
+  function placeTile(x,y){
+    closeContext();
+    if (state.selectedTool === "select" || state.selectedTool === "operate") return;
+    if (state.selectedTool === "erase"){
+      if (!getTile(x,y) && !state.trains.some(t => trainOccupies(t,x,y))) return;
+      pushHistory();
+      removeTile(x,y);
+      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
+    } else {
+      const tile = makeTile(state.selectedTool);
+      if (!tile) return;
+      pushHistory();
+      setTile(x,y,tile);
+    }
+    updateSignals();
+    draw();
+  }
+
+  // Middle-click eyedropper: make the active tool match the tile under the cursor
+  // so left-clicks stamp copies of its kind, shape, orientation (and spawn color).
+  function pickTile(x,y){
+    const tile = getTile(x,y);
+    if (!tile) return;
+    closeContext();
+    const kind = tile.kind;
+    if (kind === "track"){
+      state.selectedTool = "track";
+      state.selectedShape = findTrackShapeIndex(tile.route);
+    } else if (kind === "crossPlus" || kind === "crossX"){
+      state.selectedTool = kind;
+    } else if (kind === "spawn" || kind === "signal"){
+      // spawns and signals are placed by right-click, not a tool: pick the track shape
+      state.selectedTool = "track";
+      state.selectedShape = findTrackShapeIndex(tile.route);
+      if (tile.type){ state.selectedType = tile.type; refreshColorUI(); }
+    } else if (kind === "stop"){
+      state.selectedTool = "stop";
+      const i = findDirShapeIndex(STOP_SHAPES, tile.route, tile.dir);
+      if (i >= 0) state.selectedStopShape = i;
+    } else if (kind === "switch"){
+      state.selectedTool = "switch";
+      const i = findSwitchShapeIndex(tile);
+      if (i >= 0) state.selectedSwitchShape = i;
+    } else {
+      return;
+    }
+    state.message = `Picked ${kind}`;
+    syncControls();
+  }
+
+  function pointerPos(event){
+    const r = canvas.getBoundingClientRect();
+    return {x:event.clientX - r.left, y:event.clientY - r.top};
+  }
+  function setHoverFromPoint(p){
+    const w = screenToWorld(p.x,p.y);
+    if (state.hover && state.hover.x === w.x && state.hover.y === w.y) return;
+    state.hover = w;
+    draw();
+  }
+  canvas.addEventListener("pointerdown", event => {
+    if (event.button === 1){
+      event.preventDefault();
+      const p = pointerPos(event);
+      const w = screenToWorld(p.x,p.y);
+      pickTile(w.x,w.y);
+      return;
+    }
+    if (event.button !== 0) return;
+    const p = pointerPos(event);
+    setHoverFromPoint(p);
+    if (state.selectedTool === "select" || state.selectedTool === "station"){
+      const w = screenToWorld(p.x,p.y);
+      state.drag = {select:true, station: state.selectedTool === "station", sx:p.x, sy:p.y, moved:false};
+      state.selecting = {x0:w.x, y0:w.y, x1:w.x, y1:w.y};
+      canvas.setPointerCapture(event.pointerId);
+      draw();
+      return;
+    }
+    state.drag = {sx:p.x, sy:p.y, vx:state.view.x, vy:state.view.y, moved:false};
+    canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("auxclick", event => {
+    if (event.button === 1) event.preventDefault();
+  });
+  canvas.addEventListener("pointermove", event => {
+    const p = pointerPos(event);
+    if (!state.drag){
+      setHoverFromPoint(p);
+      return;
+    }
+    if (state.drag.select){
+      const w = screenToWorld(p.x,p.y);
+      state.selecting.x1 = w.x; state.selecting.y1 = w.y;
+      if (Math.hypot(p.x-state.drag.sx, p.y-state.drag.sy) > 5) state.drag.moved = true;
+      draw();
+      return;
+    }
+    const dx = p.x - state.drag.sx;
+    const dy = p.y - state.drag.sy;
+    if (Math.hypot(dx,dy) > 5) state.drag.moved = true;
+    if (state.drag.moved){
+      state.view.x = state.drag.vx + dx;
+      state.view.y = state.drag.vy + dy;
+      draw();
+    }
+  });
+  canvas.addEventListener("pointerup", event => {
+    if (!state.drag) return;
+    const p = pointerPos(event);
+    if (state.drag.select){
+      if (state.drag.station){
+        if (state.drag.moved){
+          const st = addStation(normRect(state.selecting));
+          state.message = `Created ${st.name}`;
+          refreshStationsUI();
+        }
+        state.selecting = null;
+        state.drag = null;
+        setHoverFromPoint(p);
+        draw();
+        return;
+      }
+      state.selection = state.selecting;
+      state.selecting = null;
+      state.drag = null;
+      setHoverFromPoint(p);
+      draw();
+      return;
+    }
+    if (!state.drag.moved){
+      const w = screenToWorld(p.x,p.y);
+      if (state.selectedTool === "operate") operateClick(w.x,w.y);
+      else placeTile(w.x,w.y);
+    }
+    state.drag = null;
+    canvas.classList.remove("dragging");
+    setHoverFromPoint(p);
+  });
+  canvas.addEventListener("pointerleave", () => {
+    if (state.drag) return;
+    state.hover = null;
+    draw();
+  });
+  canvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    closeContext();
+    const before = screenToWorld(event.offsetX,event.offsetY);
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    state.view.zoom = Math.max(.35, Math.min(2.7, state.view.zoom * factor));
+    const after = screenToWorld(event.offsetX,event.offsetY);
+    const s = tileSize();
+    state.view.x += (after.x - before.x) * s;
+    state.view.y += (after.y - before.y) * s;
+    setHoverFromPoint({x:event.offsetX, y:event.offsetY});
+    draw();
+  }, {passive:false});
+  canvas.addEventListener("contextmenu", event => {
+    event.preventDefault();
+    const p = pointerPos(event);
+    const w = screenToWorld(p.x,p.y);
+    const tile = getTile(w.x,w.y);
+    if (!tile) return closeContext();
+    openContext(w.x,w.y,tile,event.clientX,event.clientY);
+  });
+
+  function typeOptLabel(t){ return t.name ? `${escapeHtml(t.name)} (#${t.id})` : `Type ${t.id}`; }
+  // A single-choice <select> of train types (used for a spawn's type).
+  function typeSelectOptions(value){
+    return state.trainTypes.map(t => `<option value="${t.id}" ${Number(value) === t.id ? "selected" : ""}>${typeOptLabel(t)}</option>`).join("");
+  }
+  const DIR_ARROWS = ["↑","↗","→","↘","↓","↙","←","↖"]; // N NE E SE S SW W NW
+  function dirArrow(value){ const a = DIR_ARROWS[Number(value)]; return a || String(value); }
+  function dirOptions(value){
+    return DIRS.map((d,i) => `<option value="${i}" ${Number(value) === i ? "selected" : ""}>${dirArrow(i)}</option>`).join("");
+  }
+  function shapeOptions(route){
+    const r = route ? route.join("-") : "";
+    return TRACK_SHAPES.map((s,i) => `<option value="${i}" ${s.route.join("-") === r ? "selected" : ""}>${s.label}</option>`).join("");
+  }
+
+  function openContext(x,y,tile,clientX,clientY){
+    contextMenu.dataset.x = x;
+    contextMenu.dataset.y = y;
+    let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
+    const trainsHere = state.trains.filter(t => trainOccupies(t,x,y));
+    if (trainsHere.length){
+      body += `<div class="field"><span>Train${trainsHere.length > 1 ? "s" : ""} here</span><div class="row">` +
+        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? ` (${trainsHere.length})` : ""}</button>` +
+        `</div></div>`;
+    }
+    if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "spawn"){
+      body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
+    }
+    if (tile.kind === "track"){
+      body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
+        tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
+        `</div></div>`;
+      body += `<div class="field"><span>Add a stop facing</span><div class="row">` +
+        tile.route.map(d => `<button type="button" data-action="addstop" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
+        `</div></div>`;
+    }
+    if (tile.kind === "track" || tile.kind === "signal"){
+      const sig = tile.kind === "signal" ? signalDirs(tile) : [];
+      const allOn = tile.route.length >= 2 && tile.route.every(d => sig.includes(d));
+      body += `<div class="field"><span>Block signals (toggle each way)</span><div class="row">` +
+        tile.route.map(d => {
+          const on = sig.includes(d);
+          return `<button type="button" data-action="${on ? "unsignal" : "signal"}" data-dir="${d}">${on ? "−" : "+"} ${dirArrow(d)}</button>`;
+        }).join("") +
+        (tile.route.length >= 2 ? `<button type="button" data-action="${allOn ? "unsignalboth" : "signalboth"}" title="Block signals in both route directions at once">${allOn ? "− both" : "+ both"}</button>` : "") +
+        `</div></div>`;
+    }
+    if (tile.kind === "signal"){
+      const man = manualDirs(tile);
+      body += `<div class="field"><span>Main type (click to switch automatic ↔ manual)</span><div class="row">` +
+        signalDirs(tile).map(d => `<button type="button" data-action="togglemanual" data-dir="${d}">${dirArrow(d)} ${man.includes(d) ? "Manual" : "Auto"}</button>`).join("") +
+        `</div></div>`;
+    }
+    if (tile.kind === "spawn"){
+      body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
+      body += `<label class="field"><span>Train type</span><select name="type">${typeSelectOptions(tile.type)}</select></label>`;
+    }
+    if (tile.kind === "stop"){
+      body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
+      body += `<label class="field"><span>Dwell seconds</span><input name="dwellSeconds" type="number" min="0.25" max="30" step="0.25" value="${stopDwellSeconds(tile)}"></label>`;
+    }
+    if (tile.kind === "switch"){
+      const cur = switchCurrent(tile), def = switchDefault(tile);
+      const branchOpts = sel => tile.branches.map(b => `<option value="${b}" ${sel===b?"selected":""}>${dirArrow(b)} ${DIRS[b].name}</option>`).join("");
+      body += `<label class="field"><span>Mode</span><select name="switchMode"><option value="defaulting" ${tile.mode!=="manual"?"selected":""}>Defaulting (springs back)</option><option value="manual" ${tile.mode==="manual"?"selected":""}>Manual (fixed)</option></select></label>`;
+      body += `<label class="field"><span>Current direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
+      body += `<label class="field"><span>Default direction (used by defaulting mode)</span><select name="switchDefault">${branchOpts(def)}</select></label>`;
+    }
+    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal"){
+      const st = stationContaining(Number(x),Number(y));
+      const hint = st ? ` in ${escapeHtml(st.name)}` : "";
+      body += `<label class="field"><span>Name${hint}</span><input name="elname" type="text" maxlength="24" placeholder="e.g. 1E, A, 2" value="${escapeHtml(tile.name || "")}"></label>`;
+    }
+    body += `<div class="row"><button type="submit">Apply</button><button type="button" name="delete">Delete</button></div>`;
+    contextMenu.innerHTML = body;
+    const rect = stage.getBoundingClientRect();
+    contextMenu.style.left = Math.max(8, Math.min(clientX - rect.left, rect.width - 280)) + "px";
+    contextMenu.style.top = Math.max(8, Math.min(clientY - rect.top, rect.height - 420)) + "px";
+    contextMenu.classList.add("open");
+  }
+  function closeContext(){ contextMenu.classList.remove("open"); }
+  contextMenu.addEventListener("click", event => {
+    const t = event.target;
+    if (t.name === "delete"){
+      pushHistory();
+      removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
+      closeContext();
+      updateSignals();
+      draw();
+      return;
+    }
+    const action = t.dataset && t.dataset.action;
+    if (!action) return;
+    const x = Number(contextMenu.dataset.x);
+    const y = Number(contextMenu.dataset.y);
+    const dir = Number(t.dataset.dir);
+    const tile = getTile(x,y);
+    if (!tile){ closeContext(); return; }
+    const route = cloneRoute(tile.route || []);
+    if (action === "spawn"){
+      if (tile.kind !== "track"){ closeContext(); return; }
+      pushHistory();
+      setTile(x,y,{kind:"spawn", route, dir, type: state.selectedType});
+      state.message = `Spawn heading ${DIRS[dir].name}`;
+    } else if (action === "addstop"){
+      if (tile.kind !== "track"){ closeContext(); return; }
+      pushHistory();
+      setTile(x,y,{kind:"stop", route, dir, dwellSeconds:DEFAULT_DWELL_SECONDS});
+      state.message = `Stop facing ${DIRS[dir].name}`;
+    } else if (action === "signal"){
+      pushHistory();
+      const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
+      if (!dirs.includes(dir)) dirs.push(dir);
+      setTile(x,y,{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()});
+      state.message = `Signal facing ${DIRS[dir].name}`;
+    } else if (action === "unsignal"){
+      if (tile.kind !== "signal"){ closeContext(); return; }
+      pushHistory();
+      const dirs = signalDirs(tile).filter(d => d !== dir);
+      const man = manualDirs(tile).filter(d => d !== dir);
+      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, manualDirs: man});
+      else setTile(x,y,{kind:"track", route});
+      state.message = `Removed signal facing ${DIRS[dir].name}`;
+    } else if (action === "togglemanual"){
+      if (tile.kind !== "signal"){ closeContext(); return; }
+      pushHistory();
+      const man = manualDirs(tile).slice();
+      const i = man.indexOf(dir);
+      if (i >= 0) man.splice(i,1); else man.push(dir);
+      if (man.length) tile.manualDirs = man; else delete tile.manualDirs;
+      state.message = `${DIRS[dir].name} main is now ${man.includes(dir) ? "manual" : "automatic"}`;
+    } else if (action === "signalboth"){
+      pushHistory();
+      const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
+      for (const d of route) if (!dirs.includes(d)) dirs.push(d);
+      setTile(x,y,{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()});
+      state.message = `Signals both ways`;
+    } else if (action === "unsignalboth"){
+      if (tile.kind !== "signal"){ closeContext(); return; }
+      pushHistory();
+      const dirs = signalDirs(tile).filter(d => !route.includes(d));
+      const man = manualDirs(tile).filter(d => !route.includes(d));
+      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, manualDirs: man});
+      else setTile(x,y,{kind:"track", route});
+      state.message = `Removed signals both ways`;
+    } else if (action === "removetrain"){
+      const before = state.trains.length;
+      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
+      const removed = before - state.trains.length;
+      state.message = removed > 1 ? `Removed ${removed} trains` : (removed ? `Removed train` : `No train here`);
+    }
+    closeContext();
+    updateSignals();
+    draw();
+  });
+  contextMenu.addEventListener("submit", event => {
+    event.preventDefault();
+    const x = Number(contextMenu.dataset.x);
+    const y = Number(contextMenu.dataset.y);
+    const tile = getTile(x,y);
+    const data = new FormData(contextMenu);
+    if (!tile) return;
+    pushHistory();
+    const routeShape = data.get("routeShape");
+    if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
+    if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
+    if (data.get("type")) tile.type = Number(data.get("type"));
+    if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) tile.name = v; else delete tile.name; }
+    if (data.get("dwellSeconds")){
+      tile.dwellSeconds = Number(data.get("dwellSeconds"));
+      delete tile.dwell;
+    }
+    if (tile.kind === "switch"){
+      if (data.get("switchMode")) tile.mode = data.get("switchMode") === "manual" ? "manual" : "defaulting";
+      if (data.get("switchDefault") != null){
+        const d = Number(data.get("switchDefault"));
+        if (tile.branches.includes(d)) tile.default = d;
+      }
+      if (data.get("switchCurrent") != null){
+        const c = Number(data.get("switchCurrent"));
+        if (tile.branches.includes(c)) tile.current = c;
+      }
+      if (!tile.branches.includes(switchDefault(tile))) tile.default = tile.branches[0];
+      if (!tile.branches.includes(switchCurrent(tile))) tile.current = tile.branches[0];
+    }
+    closeContext();
+    updateSignals();
+    draw();
+  });
+
+  let syncControls = () => draw();
+  let refreshColorUI = () => {};
+  let refreshStationsUI = () => {};
+  function updatePauseButton(){
+    document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
+  }
+  function togglePause(){
+    state.paused = !state.paused;
+    updatePauseButton();
+    draw();
+  }
+  function closeAllPalettes(){
+    for (const palette of document.querySelectorAll("details.palette")) palette.open = false;
+  }
+
+  function setupControls(){
+    const toolButtons = document.getElementById("toolButtons");
+    const trackPalette = document.getElementById("trackPalette");
+    const stopPalette = document.getElementById("stopPalette");
+    const switchPalette = document.getElementById("switchPalette");
+    function syncSelection(){
+      for (const b of toolButtons.querySelectorAll("button")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
+      for (const b of trackPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "track" && Number(b.dataset.shape) === state.selectedShape);
+      for (const b of trackPalette.querySelectorAll("button[data-crossing]")) b.classList.toggle("active", b.dataset.tool === state.selectedTool);
+      for (const b of stopPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "stop" && Number(b.dataset.shape) === state.selectedStopShape);
+      for (const b of switchPalette.querySelectorAll("button")) b.classList.toggle("active", state.selectedTool === "switch" && Number(b.dataset.shape) === state.selectedSwitchShape);
+      draw();
+    }
+    syncControls = syncSelection;
+    for (const [id,label] of TOOLS){
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = label;
+      btn.dataset.tool = id;
+      if (id === state.selectedTool) btn.classList.add("active");
+      if (id === "erase") btn.classList.add("danger");
+      btn.addEventListener("click", () => {
+        state.selectedTool = id;
+        syncSelection();
+      });
+      toolButtons.appendChild(btn);
+    }
+    TRACK_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "track");
+      const label = document.createElement("span");
+      label.textContent = shape.label;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "track";
+        state.selectedShape = i;
+        syncSelection();
+      });
+      trackPalette.appendChild(btn);
+    });
+    CROSSING_SHAPES.forEach(shape => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.crossing = "true";
+      btn.dataset.tool = shape.tool;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, shape.tool);
+      const label = document.createElement("span");
+      label.textContent = shape.label;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = shape.tool;
+        syncSelection();
+      });
+      trackPalette.appendChild(btn);
+    });
+    STOP_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "stop");
+      const label = document.createElement("span");
+      label.textContent = `Stop ${DIRS[shape.dir].name}`;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "stop";
+        state.selectedStopShape = i;
+        syncSelection();
+      });
+      stopPalette.appendChild(btn);
+    });
+    SWITCH_SHAPES.forEach((shape,i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "shape-button";
+      btn.dataset.shape = i;
+      btn.title = shape.label;
+      addShapePreview(btn, shape, "switch");
+      const label = document.createElement("span");
+      label.textContent = `Switch ${i + 1}`;
+      btn.appendChild(label);
+      btn.addEventListener("click", () => {
+        state.selectedTool = "switch";
+        state.selectedSwitchShape = i;
+        syncSelection();
+      });
+      switchPalette.appendChild(btn);
+    });
+    syncSelection();
+    const colorButtons = document.getElementById("colorButtons");
+    // Is a train type referenced anywhere (so removing it would dangle a reference)?
+    function typeInUse(id){
+      for (const [,tile] of state.tiles){
+        if (tile.kind === "spawn" && tile.type === id) return true;
+      }
+      for (const tr of state.trains) if (tr.type === id) return true;
+      return false;
+    }
+    function addTrainType(){
+      const id = nextTypeId();
+      state.trainTypes.push({id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:""});
+      state.selectedType = id;
+      buildTypeEditor();
+      draw();
+    }
+    function removeTrainType(id){
+      if (state.trainTypes.length <= 1){ state.message = "Keep at least one train type"; draw(); return; }
+      if (typeInUse(id)){ state.message = `Type #${id} is in use — can't remove`; draw(); return; }
+      state.trainTypes = state.trainTypes.filter(t => t.id !== id);
+      if (state.selectedType === id) state.selectedType = state.trainTypes[0].id;
+      buildTypeEditor();
+      draw();
+    }
+    // Build the train-types editor: one row per type (swatch=select-for-spawn,
+    // colour picker, name field, delete) plus an "add type" button.
+    function buildTypeEditor(){
+      colorButtons.innerHTML = "";
+      for (const t of state.trainTypes){
+        const row = document.createElement("div");
+        row.className = "type-row";
+        const swatch = document.createElement("button");
+        swatch.type = "button";
+        swatch.className = "swatch" + (t.id === state.selectedType ? " active" : "");
+        swatch.style.background = t.color;
+        swatch.title = "Use this type for new spawns";
+        swatch.textContent = String(t.id);
+        swatch.addEventListener("click", () => { state.selectedType = t.id; buildTypeEditor(); draw(); });
+        const col = document.createElement("input");
+        col.type = "color"; col.value = t.color; col.title = "Display colour";
+        col.addEventListener("input", () => { t.color = col.value; swatch.style.background = col.value; draw(); });
+        const nm = document.createElement("input");
+        nm.type = "text"; nm.className = "type-name"; nm.value = t.name || ""; nm.placeholder = "name"; nm.maxLength = 16;
+        nm.addEventListener("change", () => { t.name = nm.value.trim(); });
+        const del = document.createElement("button");
+        del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove type";
+        del.addEventListener("click", () => removeTrainType(t.id));
+        row.append(swatch, col, nm, del);
+        colorButtons.appendChild(row);
+      }
+      const add = document.createElement("button");
+      add.type = "button"; add.className = "type-add"; add.textContent = "+ Add type";
+      add.addEventListener("click", addTrainType);
+      colorButtons.appendChild(add);
+    }
+    refreshColorUI = buildTypeEditor;
+    buildTypeEditor();
+    // Stations list: rename / remove. New stations are drawn with the Station tool.
+    const stationList = document.getElementById("stationList");
+    function buildStationList(){
+      stationList.innerHTML = "";
+      if (!state.stations.length){
+        const empty = document.createElement("p");
+        empty.className = "help"; empty.style.margin = "0";
+        empty.textContent = "No stations yet — drag the Station tool over the map to add one.";
+        stationList.appendChild(empty);
+        return;
+      }
+      for (const st of state.stations){
+        const row = document.createElement("div");
+        row.className = "type-row";
+        const nm = document.createElement("input");
+        nm.type = "text"; nm.className = "type-name"; nm.value = st.name || ""; nm.placeholder = "station name"; nm.maxLength = 32;
+        nm.addEventListener("change", () => { st.name = nm.value.trim() || `Station ${st.id}`; draw(); });
+        const del = document.createElement("button");
+        del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove station";
+        del.addEventListener("click", () => { removeStation(st.id); buildStationList(); draw(); });
+        row.append(nm, del);
+        stationList.appendChild(row);
+      }
+    }
+    refreshStationsUI = buildStationList;
+    buildStationList();
+    updatePauseButton();
+    document.getElementById("pauseBtn").addEventListener("click", togglePause);
+    document.getElementById("stepBtn").addEventListener("click", simStep);
+    document.getElementById("undoBtn").addEventListener("click", undo);
+    document.getElementById("redoBtn").addEventListener("click", redo);
+    document.getElementById("saveBtn").addEventListener("click", () => {
+      localStorage.setItem("tinytrains-manual-layout", serialize());
+      state.message = "Saved in this browser";
+      draw();
+    });
+    document.getElementById("loadBtn").addEventListener("click", () => {
+      loadBrowserSave();
+      draw();
+    });
+    document.getElementById("exportBtn").addEventListener("click", () => openIO("export"));
+    document.getElementById("importBtn").addEventListener("click", () => openIO("import"));
+    document.getElementById("notifyClear").addEventListener("click", () => { notifyLog.innerHTML = ""; });
+    document.getElementById("notifyToggle").addEventListener("click", () => {
+      const collapsed = notifyPanel.classList.toggle("collapsed");
+      document.getElementById("notifyToggle").textContent = collapsed ? "▸" : "▾";
+    });
+  }
+
+  const ioPanel = document.getElementById("ioPanel");
+  const ioText = document.getElementById("ioText");
+  function openIO(mode){
+    ioPanel.dataset.mode = mode;
+    document.getElementById("ioTitle").textContent = mode === "export" ? "Export JSON" : "Import JSON";
+    ioText.value = mode === "export" ? serialize() : "";
+    document.getElementById("ioApply").textContent = mode === "export" ? "Refresh" : "Load JSON";
+    ioPanel.classList.add("open");
+  }
+  document.getElementById("ioClose").addEventListener("click", () => ioPanel.classList.remove("open"));
+  document.getElementById("ioApply").addEventListener("click", () => {
+    if (ioPanel.dataset.mode === "export"){
+      ioText.value = serialize();
+    } else {
+      try {
+        deserialize(ioText.value);
+        ioPanel.classList.remove("open");
+        state.message = "Imported JSON";
+      } catch (err) {
+        state.message = "Import failed: " + err.message;
+      }
+      draw();
+    }
+  });
+
+  // ---- Pre-made layouts (offered in the Save / Load dropdown) ----
+  // Each entry's `data` is a full layout object in the same shape serialize()
+  // emits; selecting one runs it through deserialize(), replacing everything.
+  const PREMADE_LAYOUTS = [
+    {
+      name: "Miskolc",
+      data: {
+        "version": 2,
+        "trainTypes": [
+          {
+            "id": 1,
+            "color": "#f05264",
+            "name": "1",
+            "period": 60
+          },
+          {
+            "id": 2,
+            "color": "#58a8ff",
+            "name": "2",
+            "period": 60
+          }
+        ],
+        "stations": [
+          {
+            "id": 1,
+            "name": "Tiszai",
+            "rect": {
+              "x0": -26,
+              "y0": -4,
+              "x1": -17,
+              "y1": 3
+            }
+          },
+          {
+            "id": 2,
+            "name": "Strand",
+            "rect": {
+              "x0": -15,
+              "y0": -4,
+              "x1": -8,
+              "y1": 3
+            }
+          },
+          {
+            "id": 3,
+            "name": "Marx",
+            "rect": {
+              "x0": -7,
+              "y0": -4,
+              "x1": 6,
+              "y1": 3
+            }
+          },
+          {
+            "id": 4,
+            "name": "Vasgyar",
+            "rect": {
+              "x0": -7,
+              "y0": -8,
+              "x1": 6,
+              "y1": -5
+            }
+          },
+          {
+            "id": 5,
+            "name": "Diosgyor",
+            "rect": {
+              "x0": 7,
+              "y0": -4,
+              "x1": 14,
+              "y1": 3
+            }
+          }
+        ],
+        "tiles": [
+          {
+            "x": -17,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -16,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -15,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -14,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -13,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -12,
+            "y": -1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    10
+                  ]
+                },
+                "2": {
+                  "times": [
+                    30
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -11,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -10,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -17,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -16,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -15,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -14,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -13,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -12,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -11,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -10,
+            "y": 0,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    15
+                  ]
+                },
+                "2": {
+                  "times": [
+                    45
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -18,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": -19,
+            "y": -2,
+            "tile": {
+              "kind": "switch",
+              "stem": 3,
+              "branches": [
+                7,
+                6
+              ],
+              "defaultBranch": 7,
+              "filters": {
+                "6": [
+                  2
+                ],
+                "7": [
+                  1
+                ]
+              },
+              "caution": true
+            }
+          },
+          {
+            "x": -18,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                2,
+                5
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -19,
+            "y": 1,
+            "tile": {
+              "kind": "switch",
+              "stem": 1,
+              "branches": [
+                5,
+                6
+              ],
+              "defaultBranch": 5,
+              "filters": {
+                "5": [],
+                "6": []
+              },
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": 1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [
+                2
+              ],
+              "dwellSeconds": 2,
+              "caution": true,
+              "timetable": {
+                "2": {
+                  "times": [
+                    30
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -21,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -21,
+            "y": 2,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "caution": true,
+              "timetable": {
+                "1": {
+                  "times": [
+                    0
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -22,
+            "y": 2,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "type": 1,
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -22,
+            "y": 1,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "type": 2,
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -25,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -24,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -23,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -20,
+            "y": 2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ],
+              "caution": true
+            }
+          },
+          {
+            "x": -9,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -8,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2,
+                6
+              ]
+            }
+          },
+          {
+            "x": -7,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -6,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -9,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -8,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -7,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": -6,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -5,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -1,
+            "y": 0,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 2,
+              "filter": [],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    25
+                  ]
+                },
+                "2": {
+                  "times": [
+                    55
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [
+                  2
+                ],
+                "2": [
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "x": 3,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 2,
+              "branches": [
+                6,
+                5
+              ],
+              "defaultBranch": 6,
+              "filters": {
+                "5": [],
+                "6": [
+                  1,
+                  2
+                ]
+              }
+            }
+          },
+          {
+            "x": 4,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [
+                  2
+                ],
+                "2": [
+                  1
+                ]
+              }
+            }
+          },
+          {
+            "x": -5,
+            "y": -1,
+            "tile": {
+              "kind": "switch",
+              "stem": 6,
+              "branches": [
+                2,
+                1
+              ],
+              "defaultBranch": 2,
+              "filters": {
+                "1": [],
+                "2": []
+              }
+            }
+          },
+          {
+            "x": -4,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": -1,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    0
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": -1,
+            "y": -1,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "type": 1
+            }
+          },
+          {
+            "x": 0,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 1,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 6,
+            "y": 0,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": -1,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 7,
+            "y": 0,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                6,
+                2
+              ],
+              "dirs": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -2,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                5
+              ],
+              "dirs": [
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -3,
+            "tile": {
+              "kind": "signal",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -4,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                0,
+                4
+              ],
+              "dirs": [
+                4
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -5,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -3,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -4,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -5,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                4
+              ]
+            }
+          },
+          {
+            "x": 5,
+            "y": -6,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 4,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          },
+          {
+            "x": -3,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": -4,
+            "y": -6,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                1
+              ]
+            }
+          },
+          {
+            "x": -2,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": -1,
+            "y": -7,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                2
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "2": {
+                  "times": [
+                    15
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 0,
+            "y": -7,
+            "tile": {
+              "kind": "spawn",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "type": 2
+            }
+          },
+          {
+            "x": 1,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 2,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 3,
+            "y": -7,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          },
+          {
+            "x": 9,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                7
+              ]
+            }
+          },
+          {
+            "x": 8,
+            "y": -1,
+            "tile": {
+              "kind": "distant",
+              "route": [
+                6,
+                1
+              ],
+              "dirs": [
+                6
+              ]
+            }
+          },
+          {
+            "x": 9,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                2,
+                5
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": -2,
+            "tile": {
+              "kind": "stop",
+              "route": [
+                6,
+                2
+              ],
+              "dir": 6,
+              "filter": [
+                1
+              ],
+              "dwellSeconds": 2,
+              "timetable": {
+                "1": {
+                  "times": [
+                    45
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "x": 11,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 10,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 11,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 12,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                2
+              ]
+            }
+          },
+          {
+            "x": 13,
+            "y": 1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                1
+              ]
+            }
+          },
+          {
+            "x": 14,
+            "y": 0,
+            "tile": {
+              "kind": "track",
+              "route": [
+                0,
+                5
+              ]
+            }
+          },
+          {
+            "x": 14,
+            "y": -1,
+            "tile": {
+              "kind": "track",
+              "route": [
+                4,
+                7
+              ]
+            }
+          },
+          {
+            "x": 13,
+            "y": -2,
+            "tile": {
+              "kind": "track",
+              "route": [
+                6,
+                3
+              ]
+            }
+          }
+        ],
+        "view": {
+          "x": 186.71111968913888,
+          "y": 25.697164446741127,
+          "zoom": 0.7737384925921285
+        }
+      }
+    }
+  ];
+  (function setupPresetMenu(){
+    const sel = document.getElementById("presetSelect");
+    if (!sel) return;
+    PREMADE_LAYOUTS.forEach((layout, i) => {
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = layout.name;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => {
+      const layout = PREMADE_LAYOUTS[Number(sel.value)];
+      sel.value = ""; // back to the "Pre-made layouts…" placeholder, so it can be picked again
+      if (!layout) return;
+      if (!confirm(`Replace the current layout with the pre-made "${layout.name}"? This cannot be undone.`)) return;
+      try {
+        deserialize(JSON.stringify(layout.data));
+        state.message = `Loaded "${layout.name}"`;
+      } catch (err) {
+        state.message = "Load failed: " + err.message;
+      }
+      draw();
+    });
+  })();
+
+  function serialize(){
+    return JSON.stringify({
+      version: 3,
+      trainTypes: state.trainTypes.map(t => ({id: t.id, color: t.color, name: t.name || ""})),
+      stations: state.stations,
+      tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
+      view: state.view
+    }, null, 2);
+  }
+  // Bring a tile up to the manual-builder model. Imports of older / modern layouts are
+  // simplified: distants become plain track, caution flags drop, stop filters & timetables
+  // and switch type-filters are discarded, and a filter-routed switch becomes a defaulting
+  // switch (default = its old default branch).
+  function migrateTile(tile){
+    delete tile.caution;
+    if (tile.kind === "distant") return {kind: "track", route: tile.route};
+    if (tile.kind === "spawn" && tile.type == null && tile.color != null){
+      tile.type = LEGACY_COLOR_IDS[tile.color] || 1;
+      delete tile.color;
+    }
+    if (tile.kind === "stop"){ delete tile.filter; delete tile.timetable; }
+    if (tile.kind === "switch"){
+      if (tile.mode !== "manual" && tile.mode !== "defaulting") tile.mode = "defaulting";
+      if (tile.default == null) tile.default = (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]);
+      if (tile.current == null) tile.current = tile.default;
+      delete tile.filters; delete tile.defaultBranch;
+    }
+    return tile;
+  }
+  function deserialize(text){
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.tiles)) throw new Error("Missing tiles array");
+    state.trainTypes = (Array.isArray(data.trainTypes) && data.trainTypes.length)
+      ? data.trainTypes.map(t => ({id: t.id, color: t.color || UNKNOWN_TYPE_COLOR, name: t.name || ""}))
+      : defaultTrainTypes();
+    state.tiles = new Map();
+    for (const item of data.tiles){
+      if (!Number.isFinite(item.x) || !Number.isFinite(item.y) || !item.tile) continue;
+      setTile(item.x,item.y, migrateTile(item.tile));
+    }
+    if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
+    state.stations = (Array.isArray(data.stations) ? data.stations : [])
+      .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+    state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
+    state.trains = [];
+    state.nextTrainId = 1;
+    state.tick = 0;
+    state.frame = 0;
+    state.simFrame = 0;
+    state.manualGreen = new Set();
+    state.routeLocks = [];
+    state.lockedSwitchKeys = new Set();
+    if (notifyLog) notifyLog.innerHTML = "";
+    if (data.view) state.view = {...state.view, ...data.view};
+    refreshColorUI();
+    refreshStationsUI();
+    updateSignals();
+  }
+
+  function loadBrowserSave(){
+    const saved = localStorage.getItem("tinytrains-manual-layout");
+    if (!saved){
+      state.message = "No browser save found";
+      return false;
+    }
+    try {
+      deserialize(saved);
+      state.message = "Loaded browser save";
+      return true;
+    } catch (err) {
+      state.message = "Browser save failed: " + err.message;
+      return false;
+    }
+  }
+
+  window.addEventListener("keydown", event => {
+    if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && (event.key === "z" || event.key === "Z")){ event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
+    if (mod && (event.key === "y" || event.key === "Y")){ event.preventDefault(); redo(); return; }
+    if (mod && (event.key === "c" || event.key === "C")){ event.preventDefault(); copySelection(); return; }
+    if (mod && (event.key === "x" || event.key === "X")){ event.preventDefault(); cutSelection(); return; }
+    if (mod && (event.key === "v" || event.key === "V")){ event.preventDefault(); pasteClipboard(); return; }
+    if ((event.key === "Delete" || event.key === "Backspace") && state.selection){ event.preventDefault(); deleteSelection(); return; }
+    if (event.code === "Space"){ event.preventDefault(); togglePause(); }
+    if (event.key === "s"){ simStep(); draw(); } // manual single-step (simStep no longer self-draws)
+    if (event.key === "Escape"){
+      closeContext();
+      ioPanel.classList.remove("open");
+      if (state.selection || state.selecting){
+        state.selection = null; state.selecting = null;
+        draw();
+      } else if (state.selectedTool){
+        state.selectedTool = null;
+        syncControls();
+      } else {
+        closeAllPalettes();
+        draw();
+      }
+    }
+  });
+
+  setupControls();
+  loadBrowserSave();
+  updateSignals();
+  resize();
+  notify("info", "Manual control ready — switch to Operate to throw switches and clear manual signals.");
+  animation();
+})();
+</script>
+</body>
+</html>
