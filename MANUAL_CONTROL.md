@@ -156,5 +156,5 @@ Points are listed here with status, and the work was delivered incrementally.
 - **Idea 1 is same-tile** (an automatic main needs its opposing partner on the same
   tile). If you actually meant "anywhere along the block," say so and it can change.
 - Automatic blocks still flood through *both* legs of a switch for occupancy.
-- The bundled **Loopy** preset (Save / Load dropdown) is a small native manual layout
-  with a mix of automatic and manual signals to play with.
+- The Save / Load dropdown ships two native manual layouts to play with: **Loopy**
+  (small) and **Miskolc** (larger), both mixing automatic and manual signals.
