@@ -409,7 +409,8 @@
   const SIGNAL_RED_DARK = "#3a0a0a";
   const MANUAL_RING = "#ffd24a"; // manual mains carry a yellow ring to set them apart from automatic ones
   const INACTIVE_BRANCH = "#39424e"; // the set-against branch of a switch, drawn darker than the live route
-  const LOCK_GREEN = "#43d17b";      // padlock on a switch locked into a cleared route
+  const LOCK_GREEN = "#43d17b";      // green outline of a locked manual route / disc on a locked switch
+  const BLOCK_ORANGE = "#ff8c1a";    // orange outline of an occupied automatic block
   function blinkOn(){ return Math.floor(performance.now() / 250) % 2 === 0; }
   const DIRS = [
     {name:"N", dx:0, dy:-1, px:.5, py:0},
@@ -903,6 +904,30 @@
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, LOCK_GREEN, greenW); // green band first…
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, "#0b0e12", blackW);  // …then black over it
   }
+  // Occupied AUTOMATIC blocks get an orange outline (same band style as a locked manual route),
+  // marking every track in the flood-filled block while a train sits inside it.
+  function drawOccupiedBlockOutlines(){
+    const sys = state.sys;
+    if (!sys) return;
+    const railW = Math.max(3, tileSize() * .085);
+    const orangeW = railW + tileSize() * .18;
+    const blackW = railW + tileSize() * .09;
+    const segs = [];
+    const seen = new Set();
+    for (const [id, tiles] of sys.blockTiles){
+      if (!blockOccupiedByOther(id, sys, null)) continue;   // only occupied blocks
+      for (const k of tiles){
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const {x,y} = readKey(k);
+        const t = getTile(x,y);
+        if (!t) continue;
+        for (const rt of routesFor(t)) segs.push({x, y, route: rt});
+      }
+    }
+    for (const s of segs) drawRouteWide(s.x, s.y, s.route, BLOCK_ORANGE, orangeW); // orange band first…
+    for (const s of segs) drawRouteWide(s.x, s.y, s.route, "#0b0e12", blackW);     // …then black over it
+  }
 
   function drawTriangle(x,y,d,color,scale,strokeColor,lineWidth,offset,lateral){
     const c = centerPoint(x,y);
@@ -1067,6 +1092,9 @@
     const tileSegs = (k, arr) => { const {x,y} = readKey(k); const t = getTile(x,y); if (t) for (const rt of routesFor(t)) arr.push({x,y,route:rt}); };
     for (const dir of signalDirs(tile)){
       if (manualDirs(tile).includes(dir)){
+        // A cleared (green) manual main already shows its committed route outline ahead, and
+        // its own locked switches would read as obstacles here — so skip the hover halo for it.
+        if (state.manualGreen.has(mkMain(state.hover.x, state.hover.y, dir))) continue;
         const r = manualRoutePreview(state.hover.x, state.hover.y, dir);
         greenSegs.push({x:state.hover.x, y:state.hover.y, route: tile.route}); // the signal tile itself
         for (const g of r.green){ const {x,y} = readKey(g.k); greenSegs.push({x,y,route:g.seg}); }
@@ -1314,6 +1342,7 @@
     const tiles = [...state.tiles];
     for (const [k] of tiles){ const {x,y} = readKey(k); drawTileBg(x,y); }
     drawSignalHoverHighlight();   // broad muted band under everything
+    drawOccupiedBlockOutlines();  // orange halo on occupied automatic blocks
     drawManualRouteOutlines();    // set-route green/black halo over it
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
@@ -1810,8 +1839,15 @@
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(train.x, train.y, ex);
       if (mainIsManual(train.x, train.y, ex)){
-        if (!state.manualGreen.has(mk)){ train.speed = 0; return; } // red manual: wait for the operator
-        // green manual: roll straight through (drive on sight), no block, no react
+        if (!state.manualGreen.has(mk)){ train.speed = 0; return; } // red: wait for the operator
+        // A train that was stopped here (speed 0) lingers a moment when the main clears, like an
+        // automatic main turning green; a train that rolls up to an already-green one does not.
+        if (train.speed === 0 && train.reactedMain !== mk){
+          train.reactedMain = mk;
+          train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
+          return;
+        }
+        // otherwise roll straight through (drive on sight)
       } else {
         if (!mainIsGreenFor(train, mk)){ train.speed = 0; return; } // red: hold until the block clears
         if (!mayRollThrough(train, mk) && train.reactedMain !== mk){
