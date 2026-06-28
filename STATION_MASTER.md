@@ -65,9 +65,15 @@ Notify:
 `mcp-server.js` is a zero-dependency MCP server over stdio (newline-delimited JSON-RPC), scoped to
 one station, that calls the HTTP API. Tools:
 
-`get_guide`, `get_my_instructions`, `list_stations`, `get_infrastructure`, `set_switch`,
-`clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),
-`await_events` (the blocking notification receiver), `list_watches`, `cancel_watch`.
+`get_guide`, `get_my_instructions`, `list_stations`, `get_infrastructure` (switches + signals, with
+any train **waiting** at each signal), `list_trains` (where every train is + its heading + why it is
+waiting), `set_switch`, `clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch
+every signal at once), `await_events` (the blocking notification receiver), `send_message`,
+`list_watches`, `cancel_watch`.
+
+Because approach/arrival notifications are edge-triggered, a master also **sweeps `get_infrastructure`
+every cycle** for trains already waiting at its signals and routes them — so trains don't get
+stranded when no fresh event fires (the guide drives this; the Ollama agent does it in its loop).
 
 Run / configure (one per station):
 

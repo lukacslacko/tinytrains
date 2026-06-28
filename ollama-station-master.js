@@ -77,7 +77,41 @@ set_switch and clear_signal tool calls (set switches first, then clear the entry
 
   console.error(`[ollama master] station=${STATION} game=${GAME || "(default)"} model=${MODEL} — watching ${signals}`);
 
-  // 3) Event loop owned by the script: long-poll, and let the model act on each arrival.
+  // Run one decision through the model (it may emit several tool calls, then "done").
+  async function act(user){
+    const messages = [{ role: "system", content: system }, { role: "user", content: user }];
+    for (let round = 0; round < 6; round++){
+      let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error("  llm error:", e.message); return; }
+      messages.push(msg);
+      const calls = msg.tool_calls || [];
+      if (!calls.length){ if (msg.content) console.error("  (model said:", msg.content.slice(0, 120).replace(/\n/g, " ") + ")"); return; }
+      for (const c of calls){
+        const a = c.function.arguments || {};
+        const out = await runTool(c.function.name, a);
+        console.error(`  ${c.function.name}(${JSON.stringify(a)}) -> ${out.ok ? "ok" : "REFUSED: " + out.error}`);
+        messages.push({ role: "tool", tool_name: c.function.name, content: JSON.stringify(out) });
+        if (c.function.name === "done") return;
+      }
+    }
+  }
+  // Sweep every signal for a train already WAITING at it and route it (these fire no fresh event).
+  // A short per-train cooldown avoids re-deciding a train that can't yet be cleared.
+  const handled = {};
+  async function sweepWaiting(){
+    let report; try { report = (await gj(`/api/stations/${encodeURIComponent(STATION)}`)).station; } catch { return; }
+    for (const sig of (report.signals || [])){
+      for (const w of (sig.waiting || [])){
+        const key = `${sig.name}:${w.trainType}:${w.wantsDir}`;
+        if (handled[key] && Date.now() - handled[key] < 12000) continue;
+        handled[key] = Date.now();
+        console.error(`\n→ waiting: train "${w.trainTypeName}" at ${sig.name} wants ${w.wantsDir}`);
+        await act(`A train of type ${w.trainType} ("${w.trainTypeName}") is WAITING at ${sig.name} wanting to go ${w.wantsDir}. Set its route and clear ${sig.name} per your instructions.`);
+      }
+    }
+  }
+
+  // 3) Loop owned by the script: handle waiting trains, then long-poll for new arrivals/messages.
+  await sweepWaiting();
   while (true){
     let res;
     try {
@@ -87,29 +121,14 @@ set_switch and clear_signal tool calls (set switches first, then clear the entry
     } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 1000)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
-      const user = ev.mode === "message"
-        ? `The operator sent you a message: "${ev.text}". Reply with send_message if a reply is warranted, and take any switch/signal actions they ask for.`
-        : `A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.`;
-      console.error(`\n→ ${ev.mode === "message" ? `operator: "${ev.text}"` : `${ev.mode}: train "${ev.trainTypeName}" at ${ev.element}`} (${ev.clock})`);
-      const messages = [
-        { role: "system", content: system },
-        { role: "user", content: user }
-      ];
-      for (let round = 0; round < 6; round++){
-        let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error("  llm error:", e.message); break; }
-        messages.push(msg);
-        const calls = msg.tool_calls || [];
-        if (!calls.length){ if (msg.content) console.error("  (model said:", msg.content.slice(0, 120).replace(/\n/g, " ") + ")"); break; }
-        let done = false;
-        for (const c of calls){
-          const a = c.function.arguments || {};
-          const out = await runTool(c.function.name, a);
-          console.error(`  ${c.function.name}(${JSON.stringify(a)}) -> ${out.ok ? "ok" : "REFUSED: " + out.error}`);
-          messages.push({ role: "tool", tool_name: c.function.name, content: JSON.stringify(out) });
-          if (c.function.name === "done") done = true;
-        }
-        if (done) break;
+      if (ev.mode === "message"){
+        console.error(`\n→ operator: "${ev.text}" (${ev.clock})`);
+        await act(`The operator sent you a message: "${ev.text}". Reply with send_message if a reply is warranted, and take any switch/signal actions they ask for.`);
+      } else {
+        console.error(`\n→ ${ev.mode}: train "${ev.trainTypeName}" at ${ev.element} (${ev.clock})`);
+        await act(`A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.`);
       }
     }
+    await sweepWaiting(); // every cycle, also clear any train stuck waiting at a signal
   }
 })().catch(e => { console.error(e); process.exit(1); });

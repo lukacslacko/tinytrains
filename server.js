@@ -260,22 +260,29 @@ path 5,2,1,4". Notation:
   notification (e.g. type 1 is "line 1"). Match the instruction's line/train number to the
   notified train type.
 
-## Operate PROACTIVELY (this is the point)
-Don't wait for trains to stop at red signals. Set the route and clear the entry signal **while the
-train is still approaching**, so it rolls straight through without braking. The notification system
-gives you that lead time:
+## Operate PROACTIVELY, and never let a train sit (this is the point)
+Two jobs: route APPROACHING trains before they have to brake, AND clear out any train already WAITING
+at one of your red signals. Approach notifications are edge-triggered — a train that is already
+stopped at a signal (it arrived before you started, or while you were busy) fires no fresh event, so
+you must also **sweep your signals every cycle**.
 
-1. Once, learn your station: \`get_my_instructions\`, \`get_infrastructure\` (your switches + signals
-   with their live state), \`list_stations\` (for context).
-2. Set an **approach watch** on each entry signal named in your instructions — easiest is
-   \`watch_arrivals()\`, which watches every signal in your station; or \`watch(element, "approach")\`
-   for specific ones. ("approach" fires while the train is still a few tiles away and heading toward
-   the point; "reach" fires when it arrives; "pass" fires when its tail clears.)
-3. Call \`await_events\` and **block**. It returns when a watched train approaches/arrives, telling
-   you the train's type and which element. (This is how notifications reach you — keep calling it;
-   it is your event loop.)
-4. For that train + element, look up your instructions, set the switches, and clear the entry signal
-   — now, before it arrives. Then go back to \`await_events\`.
+1. Once, learn your station: \`get_my_instructions\`, \`get_infrastructure\`, \`list_stations\` (context).
+2. \`watch_arrivals()\` — sets an "approach" watch on every signal (fires while a train is still a few
+   tiles away; "reach" = arrived; "pass" = tail cleared).
+3. **Sweep now**: \`get_infrastructure\` lists, for each signal, any train **waiting** at it (its type
+   and which way it wants to go). For every waiting train, route it (set switches) and clear its
+   signal per your instructions. Use \`list_trains\` to see where ALL trains are and which way each is
+   headed if you need the bigger picture.
+4. Loop:
+   - \`await_events\` and block. It returns when a watched train approaches/arrives, or when an
+     operator messages you, or empty after the timeout.
+   - For an APPROACHING train: look up your instructions for that train type + element, set the
+     switches, and clear the entry signal NOW, before it arrives.
+   - Then **sweep again** (\`get_infrastructure\`): clear any signal that still has a waiting train —
+     including ones \`await_events\` didn't tell you about. Also re-try any clear that was refused
+     earlier (the conflicting train may have passed).
+   - Go back to \`await_events\`. Do this even when \`await_events\` returns nothing — a quick sweep
+     each cycle is what stops trains getting stranded.
 
 ## Talking to the operator
 The human operator can message you; those arrive from \`await_events\` as \`mode: "message"\` with the
@@ -324,6 +331,12 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/stations" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       return sendJSON(res, 200, { ok: true, stations: lg.engine.stationsReport() });
+    }
+
+    // Where every train is + which way it's about to go (incl. trains waiting at signals).
+    if (url === "/api/trains" && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: true, trains: lg.engine.trainsReport() });
     }
 
     if ((m = url.match(/^\/api\/stations\/([^\/]+)$/)) && req.method === "GET"){

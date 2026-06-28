@@ -1146,8 +1146,44 @@
       const hit = tilesInStation(st).find(i => i.tile.name && i.tile.name.toLowerCase() === s);
       return hit ? {station: st, x: hit.x, y: hit.y, tile: hit.tile} : null;
     }
-    // Full status of every station for the Station Master API: its instructions plus the
-    // switches and signals inside it, by station-local name, with live settings.
+    const DIRNAMES = ["N","NE","E","SE","S","SW","W","NW"];
+    function trainStopped(t){ return !(trainMoving(t) || (t.speed || 0) > 0); }
+    // Why a train is sitting still (best effort), so a master can see what to do about it.
+    function trainWaitReason(t){
+      if (!trainStopped(t)) return null;
+      const tile = getTile(t.x, t.y);
+      if (!tile) return "off track";
+      const ex = exitFor(tile, t.from);
+      if (ex == null) return "no exit (switch set against / dead end)";
+      if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
+        const mk = mkMain(t.x, t.y, ex);
+        if (manualDirs(tile).includes(ex)) return state.manualGreen.has(mk) ? null : "held at a red MANUAL signal";
+        if (!mainIsGreenFor(t, mk)) return "held at a red automatic signal";
+      }
+      if (tile.kind === "stop" && ex === tile.dir && state.simFrame < t.releaseFrame) return "dwelling at stop";
+      const nx = t.x + DIRS[ex].dx, ny = t.y + DIRS[ex].dy;
+      if (occupied(nx, ny, t.id)) return "train ahead";
+      const nt = getTile(nx, ny);
+      if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return "switch set against ahead";
+      return null;
+    }
+    // Where every train is and which way it is about to go — the whole-board view a master needs to
+    // spot trains already waiting (which fire no fresh approach event).
+    function trainsReport(){
+      return state.trains.map(t => {
+        const tile = getTile(t.x, t.y);
+        const ex = tile ? exitFor(tile, t.from) : null;
+        const tt = trainTypeById(t.type);
+        const st = stationContaining(t.x, t.y);
+        return {
+          id: t.id, type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
+          x: t.x, y: t.y, station: st ? st.name : null, at: tile && tile.name ? tile.name : null,
+          heading: ex != null ? DIRNAMES[ex] : null, moving: !trainStopped(t), waitingFor: trainWaitReason(t)
+        };
+      });
+    }
+    // Full status of every station for the Station Master API: its instructions plus the switches
+    // and signals inside it, by station-local name, with live settings AND any train waiting there.
     function stationsReport(){
       if (!state.sys) updateSignals();
       const sys = state.sys;
@@ -1155,16 +1191,24 @@
         const items = tilesInStation(st);
         const switches = items.filter(i => i.tile.kind === "switch").map(i => ({
           name: i.tile.name || null, x: i.x, y: i.y,
-          stem: i.tile.stem, branches: i.tile.branches,
-          current: switchCurrent(i.tile), locked: switchLocked(i.x,i.y)
+          stem: i.tile.stem, branches: i.tile.branches, branchDirs: i.tile.branches.map(b => DIRNAMES[b]),
+          current: switchCurrent(i.tile), setTo: DIRNAMES[switchCurrent(i.tile)], locked: switchLocked(i.x,i.y)
         }));
-        const signals = items.filter(i => i.tile.kind === "signal").map(i => ({
-          name: i.tile.name || null, x: i.x, y: i.y,
-          mains: signalDirs(i.tile).map(d => {
-            const manual = manualDirs(i.tile).includes(d);
-            return {dir: d, type: manual ? "manual" : "automatic", green: mainRenderGreen(mkMain(i.x,i.y,d), sys, manual)};
-          })
-        }));
+        const signals = items.filter(i => i.tile.kind === "signal").map(i => {
+          // trains stopped ON this signal tile are waiting for it — report their type + wanted way.
+          const waiting = state.trains.filter(t => t.x === i.x && t.y === i.y && trainStopped(t)).map(t => {
+            const ex = exitFor(i.tile, t.from); const tt = trainTypeById(t.type);
+            return { trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`, wantsDir: ex != null ? DIRNAMES[ex] : null };
+          });
+          return {
+            name: i.tile.name || null, x: i.x, y: i.y,
+            mains: signalDirs(i.tile).map(d => {
+              const manual = manualDirs(i.tile).includes(d);
+              return {dir: d, type: manual ? "manual" : "automatic", green: mainRenderGreen(mkMain(i.x,i.y,d), sys, manual)};
+            }),
+            waiting
+          };
+        });
         return {id: st.id, name: st.name, instructions: st.instructions || "", rect: st.rect, switches, signals};
       });
     }
@@ -1312,7 +1356,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, snapshot, applySnapshot, deserialize, applyLayout, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, snapshot, applySnapshot, deserialize, applyLayout, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
   }
   return { createEngine };
 });

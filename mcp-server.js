@@ -71,9 +71,14 @@ const TOOLS = [
     run: async () => ((await api("GET", "/api/stations")).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) },
 
   { name: "get_infrastructure",
-    description: "Your station's switches and signals with their LIVE state: each switch's branches and current set direction (and whether it is locked by a route), and each signal's mains (manual/automatic, green/red). Use station-local element names from here.",
+    description: "Your station's switches and signals with their LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (with its type and which way it wants to go). Check this regularly to find waiting trains and route them — not every waiting train fires a fresh event.",
     inputSchema: { type: "object", properties: { station: { type: "string" } } },
     run: async (a) => (await api("GET", `/api/stations/${encodeURIComponent(need(a.station))}`)).body.station },
+
+  { name: "list_trains",
+    description: "Where EVERY train on the railway is right now and which way it is about to go: its type, the station/element it is at, its heading (compass), whether it is moving, and (if stopped) why it is waiting. Use it to understand the situation and spot trains already stuck at signals.",
+    inputSchema: { type: "object", properties: {} },
+    run: async () => (await api("GET", "/api/trains")).body.trains },
 
   { name: "set_switch",
     description: "Set one of your switches so its stem connects to the given branch. direction is a compass bearing: N, NE, E, SE, S, SW, W, NW (it must be one of the switch's branches). Refused if the switch is locked by a route in progress.",
