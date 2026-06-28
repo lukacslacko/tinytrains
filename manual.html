@@ -193,7 +193,7 @@
   }
   canvas{display:block;width:100%;height:100%;cursor:grab}
   canvas.dragging{cursor:grabbing}
-  #contextMenu,#ioPanel{
+  #contextMenu,#stationMenu,#ioPanel{
     position:absolute;
     z-index:5;
     background:#151b22;
@@ -201,8 +201,29 @@
     border-radius:8px;
     box-shadow:0 16px 40px #0008;
   }
-  #contextMenu{min-width:250px;max-width:270px;max-height:calc(100vh - 24px);overflow:auto;padding:12px;display:none;gap:10px}
-  #contextMenu.open{display:grid}
+  #contextMenu,#stationMenu{min-width:250px;max-width:290px;max-height:calc(100vh - 24px);overflow:auto;padding:12px;display:none;gap:10px}
+  #contextMenu.open,#stationMenu.open{display:grid}
+  #stationMenu textarea{height:130px;line-height:1.4}
+  /* The station pop-up is movable (drag its header) and resizable both ways (drag its corner), so
+     you can shove it aside to see the station while writing instructions. */
+  #stationMenu{width:300px;max-width:min(92vw,760px);resize:both}
+  #stationMenu.open{display:flex;flex-direction:column}
+  #stationMenu h2{cursor:move;user-select:none}
+  #stationMenu h2::after{content:" ⠿";color:var(--muted);font-weight:400}
+  #stationMenu .field.grow{flex:1 1 auto;min-height:0;grid-template-rows:auto 1fr}
+  #stationMenu .field.grow textarea{height:auto;min-height:110px;resize:none}
+  .type-row .type-notes{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;text-align:center}
+  .type-row .type-notes.has-notes{border-color:var(--accent);color:var(--accent)}
+  .srv-status{font-weight:700}
+  .srv-off{color:var(--muted)}
+  .srv-on{color:var(--accent-2,#f0c86a)}
+  .srv-live{color:var(--accent)}
+  #serverGames{display:flex;flex-direction:column;gap:5px;margin-top:6px}
+  #serverGames .srv-game{display:flex;align-items:center;gap:6px}
+  #serverGames .srv-game .srv-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  #serverGames .srv-game .srv-meta{flex:0 0 auto;color:var(--muted);font-size:11px}
+  #serverGames .srv-game button{flex:0 0 auto;min-height:26px;padding:3px 10px;font-size:12px;text-align:center}
+  .srv-game.srv-active{outline:1px solid var(--accent);border-radius:7px;padding:3px}
   #notifyPanel{
     position:absolute;left:12px;bottom:12px;z-index:4;
     width:min(340px,calc(100% - 24px));
@@ -227,7 +248,7 @@
   .note-info{border-left-color:var(--green)}
   .note-warn{border-left-color:#ff9f1c;background:#211a0f}
   .note-alert{border-left-color:var(--red);background:#241318}
-  #contextMenu h2,#ioPanel h2{font-size:14px;margin:0}
+  #contextMenu h2,#stationMenu h2,#ioPanel h2{font-size:14px;margin:0}
   .field{display:grid;gap:5px}
   .field span{color:var(--muted);font-size:12px}
   .field input,.field select,.field textarea{
@@ -304,23 +325,27 @@
       </section>
       <section class="group">
         <div class="label">Stations</div>
-        <p class="help">Pick the <strong>Station</strong> tool and drag a rectangle to mark a named region. Name the stops, switches and signals inside it (right-click an element &rarr; Name) using station-local labels like <code>1E</code>, <code>2W</code>, <code>A</code>, <code>2</code> &mdash; these are how a station master refers to the infrastructure. Rename or remove stations below.</p>
+        <p class="help">Pick the <strong>Station</strong> tool and drag a rectangle to mark a named region. Name the stops, switches and signals inside it (right-click an element &rarr; Name) using station-local labels like <code>1E</code>, <code>2W</code>, <code>A</code>, <code>2</code> &mdash; these are how a station master refers to the infrastructure. <strong>Right-click a station's name</strong> on the map (or the <code>✎</code> below) to rename it and write <strong>Station Master instructions</strong>. Rename or remove stations below.</p>
         <div id="stationList"></div>
       </section>
       <section class="group">
-        <div class="label">Save / Load</div>
+        <div class="label">Game</div>
+        <p class="help">The game runs on the <strong>server</strong> (authoritative &mdash; keeps running with no tab open) so it can be driven from outside via the API, e.g. the Station Master. Everything you do is <strong>autosaved</strong> into the current game. <span id="serverStatus" class="srv-status srv-off">connecting&hellip;</span></p>
+        <label class="field"><span>Current game (autosaved)</span><input id="gameName" type="text" maxlength="40" placeholder="game name"></label>
         <div class="row">
-          <button id="saveBtn">Save Browser</button>
-          <button id="loadBtn">Load Browser</button>
+          <select id="loadGameSelect" title="Load a saved game"><option value="">Load game&hellip;</option></select>
+        </div>
+        <div class="row">
+          <button id="saveAsBtn" title="Fork the current state into a new saved game">Save as new game</button>
+        </div>
+        <div class="row">
+          <select id="presetSelect" title="Start a new game from a pre-made layout">
+            <option value="">New from template&hellip;</option>
+          </select>
         </div>
         <div class="row">
           <button id="exportBtn">Export JSON</button>
-          <button id="importBtn">Import JSON</button>
-        </div>
-        <div class="row">
-          <select id="presetSelect" title="Replace the layout with a pre-made one">
-            <option value="">Pre-made layouts&hellip;</option>
-          </select>
+          <button id="importBtn" title="Start a new game from pasted JSON">Import JSON</button>
         </div>
       </section>
     </div>
@@ -332,6 +357,7 @@
   <main id="stage">
     <canvas id="canvas"></canvas>
     <form id="contextMenu"></form>
+    <form id="stationMenu"></form>
     <section id="ioPanel" aria-label="Import export panel">
       <h2 id="ioTitle">Export JSON</h2>
       <textarea id="ioText" spellcheck="false"></textarea>
@@ -352,6 +378,7 @@
     </section>
   </main>
 </div>
+<script src="engine.js"></script>
 <script>
 (() => {
   "use strict";
@@ -368,192 +395,43 @@
   // A layout has a list of train *types*. A type is a numeric id (ids start at 1) with a
   // display colour and optional name. In the manual builder routing is decided by switch
   // settings, not by train type, so types are purely cosmetic — they colour spawned trains.
-  const DEFAULT_TYPE_COLORS = ["#f05264","#58a8ff","#f1ca57","#43d17b","#b58cff"];
-  const DEFAULT_TYPE_NAMES  = ["red","blue","yellow","green","violet"];
-  // Old saves stored colour-name strings; map them to the default ids on load.
-  const LEGACY_COLOR_IDS = {red:1, blue:2, yellow:3, green:4, violet:5};
-  const UNKNOWN_TYPE_COLOR = "#9aa6b2";
-  function defaultTrainTypes(){
-    return DEFAULT_TYPE_COLORS.map((color,i) => ({id:i+1, color, name:DEFAULT_TYPE_NAMES[i]}));
-  }
-  function trainTypeById(id){
-    for (const t of state.trainTypes) if (t.id === id) return t;
-    return null;
-  }
-  function typeColor(id){ const t = trainTypeById(id); return t ? t.color : UNKNOWN_TYPE_COLOR; }
-  function nextTypeId(){ let m = 0; for (const t of state.trainTypes) if (t.id > m) m = t.id; return m + 1; }
+  // The simulation lives in engine.js, shared verbatim with the Node server. This page is a
+  // CLIENT of it: it owns all rendering + input and drives a local engine instance for offline
+  // build/preview; in server mode it renders snapshots the server streams and sends operate
+  // commands to the server instead of mutating locally. Engine names are pulled into scope so the
+  // (unchanged) render/UI code below keeps referring to them directly.
+  const ENG = TinyTrainsEngine.createEngine();
+  const {
+    DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR,
+    defaultTrainTypes, trainTypeById, typeColor, nextTypeId,
+    MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH,
+    SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS,
+    STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY,
+    DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes,
+    SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES,
+    state, normRect, addStation, removeStation, stationContaining,
+    key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs,
+    mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts,
+    switchCurrent, switchOther, switchLocked, switchAccepts,
+    getTile, setTile, removeTile, defaultSwitch, makeTile,
+    sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex,
+    centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
+    trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor,
+    buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion,
+    updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied,
+    maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed,
+    formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
+    moveTrain, spawnTrains, simStep, serialize, migrateTile,
+    command, snapshot, applySnapshot, setPaused, stationsReport
+  } = ENG;
   function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
   // Movement is speed-based: trains accelerate up to MAX_SPEED and brake along a sqrt curve so
   // they coast to a stop exactly on the tile they must halt at. DECEL is tuned so a train at
   // full speed can stop within one tile, so it halts cleanly before an occupied tile or a red main.
-  const MAX_SPEED = 0.018;
-  const ACCEL = 0.0008;
-  const DECEL = 0.0002;
-  const MIN_SPEED = 0.0016;
-  // Multi-part trains: an engine plus cars, each a length in tile units, joined by a small
-  // gap. Bodies trail the head along its path; block occupancy follows the whole body.
-  const DEFAULT_CARS = [0.6, 0.5, 0.5];
-  const CAR_GAP = 0.12;
-  const CAR_WIDTH = 0.42;
-  // Short pause after a held train's main signal turns green, so the clear is visible
-  // before the train pulls away.
-  const SIGNAL_REACTION_SECONDS = 0.5;
-  // Signals are drawn beside the track, to the right of the direction they face.
-  const SIGNAL_SIDE_OFFSET = 0.26;
-  const SPAWN_TICK_FRAMES = 14;
-  const FRAMES_PER_SECOND = 60;
-  const DEFAULT_DWELL_SECONDS = 2;
-  const STOP_BROWN = "#8b5a2b";
-  const SIGNAL_GREEN = "#16a34a";
-  const SIGNAL_RED = "#ff2a2a";
-  const SIGNAL_RED_DARK = "#3a0a0a";
-  const MANUAL_RING = "#ffd24a"; // manual mains carry a yellow ring to set them apart from automatic ones
-  const INACTIVE_BRANCH = "#39424e"; // the set-against branch of a switch, drawn darker than the live route
-  const LOCK_GREEN = "#43d17b";      // green outline of a locked manual route / disc on a locked switch
-  const BLOCK_GREY = "#8f9aa5";      // grey outline of an occupied automatic block
   function blinkOn(){ return Math.floor(performance.now() / 250) % 2 === 0; }
-  const DIRS = [
-    {name:"N", dx:0, dy:-1, px:.5, py:0},
-    {name:"NE", dx:1, dy:-1, px:1, py:0},
-    {name:"E", dx:1, dy:0, px:1, py:.5},
-    {name:"SE", dx:1, dy:1, px:1, py:1},
-    {name:"S", dx:0, dy:1, px:.5, py:1},
-    {name:"SW", dx:-1, dy:1, px:0, py:1},
-    {name:"W", dx:-1, dy:0, px:0, py:.5},
-    {name:"NW", dx:-1, dy:-1, px:0, py:0}
-  ];
-  const TRACK_SHAPES = [
-    {label:"Straight E-W", route:[6,2]},
-    {label:"Straight N-S", route:[0,4]},
-    {label:"Straight NE-SW", route:[1,5]},
-    {label:"Straight NW-SE", route:[7,3]},
-    {label:"Turn W to NE", route:[6,1]},
-    {label:"Turn W to SE", route:[6,3]},
-    {label:"Turn E to NW", route:[2,7]},
-    {label:"Turn E to SW", route:[2,5]},
-    {label:"Turn N to SE", route:[0,3]},
-    {label:"Turn N to SW", route:[0,5]},
-    {label:"Turn S to NE", route:[4,1]},
-    {label:"Turn S to NW", route:[4,7]},
-    {label:"Buffer E", route:[2]},
-    {label:"Buffer W", route:[6]},
-    {label:"Buffer N", route:[0]},
-    {label:"Buffer S", route:[4]}
-  ];
-  function buildDirectionalShapes(kind){
-    const shapes = [];
-    for (const shape of TRACK_SHAPES){
-      for (const dir of shape.route){
-        shapes.push({
-          label: `${shape.label} ${kind} ${DIRS[dir].name}`,
-          route: cloneRoute(shape.route),
-          dir
-        });
-      }
-    }
-    return shapes;
-  }
-  function switchShape(stem, branches){
-    return {
-      label: `${DIRS[stem].name} to ${branches.map(b => DIRS[b].name).join(" / ")}`,
-      stem,
-      branches,
-      defaultBranch: branches[0]
-    };
-  }
-  function buildSwitchShapes(){
-    const shapes = [];
-    const seen = new Set();
-    function add(stem, branches){
-      const id = `${stem}:${branches.join(",")}`;
-      if (seen.has(id)) return;
-      seen.add(id);
-      shapes.push(switchShape(stem, branches));
-    }
-    for (let stem=0; stem<DIRS.length; stem++){
-      const oppositeDir = opposite(stem);
-      add(stem, [oppositeDir, (oppositeDir + 7) % 8]);
-      add(stem, [oppositeDir, (oppositeDir + 1) % 8]);
-    }
-    for (let stem=0; stem<DIRS.length; stem++){
-      const oppositeDir = opposite(stem);
-      add(stem, [(oppositeDir + 1) % 8, (oppositeDir + 7) % 8]);
-    }
-    return shapes;
-  }
-  const SWITCH_SHAPES = buildSwitchShapes();
-  const SPAWN_SHAPES = buildDirectionalShapes("spawn");
-  const STOP_SHAPES = buildDirectionalShapes("stop");
-  const SIGNAL_SHAPES = buildDirectionalShapes("signal");
-  const TOOLS = [
-    ["operate","Operate"],
-    ["select","Select"],
-    ["station","Station"],
-    ["erase","Erase"]
-  ];
-  const CROSSING_SHAPES = [
-    {label:"Cross +", tool:"crossPlus"},
-    {label:"Cross X", tool:"crossX"}
-  ];
 
-  const state = {
-    tiles: new Map(),
-    trains: [],
-    nextTrainId: 1,
-    stations: [],      // named regions {id,name,rect}; element names live on tiles
-    nextStationId: 1,
-    tick: 0,
-    frame: 0,
-    simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second)
-    paused: false,
-    selectedTool: "operate",
-    lastTool: "track",   // the build tool to return to when Tab leaves Operate
-    trainTypes: defaultTrainTypes(),
-    selectedType: 1,
-    selectedShape: 0,
-    selectedSpawnShape: 0,
-    selectedStopShape: 0,
-    selectedSignalShape: 0,
-    selectedSwitchShape: 0,
-    view: {x: 0, y: 0, zoom: 1},
-    drag: null,
-    hover: null,
-    selection: null,   // committed rectangle {x0,y0,x1,y1} in world cells
-    selecting: null,   // rectangle being dragged out
-    // ---- manual control (transient runtime state, not saved with the layout) ----
-    manualGreen: new Set(),     // mainKeys "x,y,dir" of manual signals the operator has cleared
-    routeLocks: [],             // active locked routes set up by clearing a manual signal
-    lockedSwitchKeys: new Set(),// switch tile keys "x,y" currently locked by a routeLock
-    message: ""
-  };
-
-  // Undo/redo history of the tile map, plus a clipboard for copy/cut/paste.
-  const history = { undo: [], redo: [] };
+  // Clipboard for copy/cut/paste. (Undo/redo is server-side now — see serverUndo/serverRedo.)
   let clipboard = null;
-  function tilesToString(){ return JSON.stringify([...state.tiles]); }
-  function applyTilesString(s){ state.tiles = new Map(JSON.parse(s)); updateSignals(); }
-  function pushHistory(){
-    history.undo.push(tilesToString());
-    if (history.undo.length > 200) history.undo.shift();
-    history.redo.length = 0;
-  }
-  function undo(){
-    if (!history.undo.length){ state.message = "Nothing to undo"; draw(); return; }
-    history.redo.push(tilesToString());
-    applyTilesString(history.undo.pop());
-    state.message = "Undo";
-    draw();
-  }
-  function redo(){
-    if (!history.redo.length){ state.message = "Nothing to redo"; draw(); return; }
-    history.undo.push(tilesToString());
-    applyTilesString(history.redo.pop());
-    state.message = "Redo";
-    draw();
-  }
-  function normRect(s){
-    return s && {x0:Math.min(s.x0,s.x1), y0:Math.min(s.y0,s.y1), x1:Math.max(s.x0,s.x1), y1:Math.max(s.y0,s.y1)};
-  }
   function forSelection(fn){
     const r = normRect(state.selection); if (!r) return false;
     for (let y=r.y0; y<=r.y1; y++) for (let x=r.x0; x<=r.x1; x++) fn(x,y,r);
@@ -569,144 +447,21 @@
   }
   function deleteSelection(){
     const r = normRect(state.selection); if (!r) return;
-    pushHistory();
-    forSelection((x,y) => removeTile(x,y));
-    state.trains = state.trains.filter(t => !(t.x>=r.x0 && t.x<=r.x1 && t.y>=r.y0 && t.y<=r.y1));
-    updateSignals();
+    const keys = [];
+    forSelection((x,y) => { if (getTile(x,y)) keys.push(key(x,y)); });
+    if (keys.length) mutate({type:"removeTiles", keys, andTrains:true});
     state.message = "Deleted selection";
-    draw();
   }
   function cutSelection(){ copySelection(); deleteSelection(); }
   function pasteClipboard(){
     if (!clipboard || !clipboard.tiles.length || !state.hover){ state.message = "Nothing to paste"; draw(); return; }
-    pushHistory();
     const ax = state.hover.x, ay = state.hover.y;
-    for (const it of clipboard.tiles) setTile(ax+it.dx, ay+it.dy, JSON.parse(JSON.stringify(it.tile)));
-    updateSignals();
-    state.message = `Pasted ${clipboard.tiles.length} tiles`;
-    draw();
+    const tiles = clipboard.tiles.map(it => ({x:ax+it.dx, y:ay+it.dy, tile:JSON.parse(JSON.stringify(it.tile))}));
+    mutate({type:"pasteTiles", tiles});
+    state.message = `Pasted ${tiles.length} tiles`;
   }
 
-  // Stations are named rectangular regions. Membership is geometric: a stop,
-  // switch or signal "belongs" to a station when its tile lies inside the rect.
-  // The station-local names of those elements live on the tiles themselves
-  // (tile.name) — a station master enumerates the tiles within its rect.
-  function addStation(rect){
-    const r = normRect(rect);
-    const id = state.nextStationId++;
-    const st = {id, name:`Station ${id}`, rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
-    state.stations.push(st);
-    return st;
-  }
-  function removeStation(id){ state.stations = state.stations.filter(s => s.id !== id); }
-  // The topmost station whose rect contains (x,y), or null.
-  function stationContaining(x,y){
-    for (let i = state.stations.length-1; i >= 0; i--){
-      const r = normRect(state.stations[i].rect);
-      if (r && x>=r.x0 && x<=r.x1 && y>=r.y0 && y<=r.y1) return state.stations[i];
-    }
-    return null;
-  }
 
-  function key(x,y){ return `${x},${y}`; }
-  function readKey(k){ const [x,y] = k.split(",").map(Number); return {x,y}; }
-  function opposite(d){ return (d + 4) % 8; }
-  function cloneRoute(route){ return route.slice(); }
-  // A signal tile can carry main signals in several directions (e.g. one each way so two
-  // blocks meet on one tile). signalDirs() reads the list, falling back to the legacy
-  // single `dir`. A "main" is identified by tile position plus its direction.
-  function signalDirs(tile){ return tile && tile.dirs ? tile.dirs : (tile && tile.dir != null ? [tile.dir] : []); }
-  function mkMain(x,y,dir){ return `${x},${y},${dir}`; }
-  function parseMain(mk){ const [x,y,dir] = mk.split(",").map(Number); return {x,y,dir}; }
-  // A main signal is either *automatic* (default green when its block is clear) or *manual*
-  // (default red, cleared by the operator). manualDirs lists the directions on a signal tile
-  // whose main is manual; any signal direction not in it is automatic.
-  function manualDirs(tile){ return (tile && tile.manualDirs) ? tile.manualDirs : []; }
-  function mainIsManual(x,y,dir){ const t = getTile(x,y); return !!(t && t.kind === "signal" && manualDirs(t).includes(dir)); }
-  function mainIsManualKey(mk){ const {x,y,dir} = parseMain(mk); return mainIsManual(x,y,dir); }
-  // True when a train sits stopped on a RED manual main, wanting to leave via its direction.
-  function manualMainHasWaiter(x,y,dir){
-    if (state.manualGreen.has(mkMain(x,y,dir))) return false; // it's cleared, not red
-    const tile = getTile(x,y);
-    for (const t of state.trains)
-      if (t.x === x && t.y === y && !trainMoving(t) && exitFor(tile, t.from) === dir) return true;
-    return false;
-  }
-  function routesFor(tile){
-    if (!tile) return [];
-    if (tile.kind === "track") return [tile.route];
-    if (tile.kind === "crossPlus") return [[6,2],[0,4]];
-    if (tile.kind === "crossX") return [[7,3],[1,5]];
-    if (tile.kind === "stop" || tile.kind === "signal" || tile.kind === "spawn") return [tile.route];
-    if (tile.kind === "switch") return [[tile.stem, tile.branches[0]],[tile.stem, tile.branches[1]]];
-    return [];
-  }
-  function tileAccepts(tile, enterDir){
-    return routesFor(tile).some(route => route.includes(enterDir));
-  }
-  // ---- Switch helpers (manual builder) -------------------------------------------------
-  // A switch has a stem and two branches. `current` is the branch the stem is connected to;
-  // the switch is fixed at it (the other branch is set against and impassable). Throw it in
-  // Operate mode (left-click) or in the right-click pop-up.
-  function switchCurrent(tile){ return (tile.current != null) ? tile.current : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]); }
-  function switchOther(tile){ return tile.branches.find(b => b !== switchCurrent(tile)); }
-  function switchLocked(x,y){ return state.lockedSwitchKeys.has(key(x,y)); }
-  // Whether a train arriving at a switch from direction `enterDir` may traverse it.
-  function switchAccepts(tile, enterDir){
-    if (!tile || tile.kind !== "switch") return true;
-    if (enterDir === tile.stem) return true;                 // from the stem → exits the set branch
-    if (!tile.branches.includes(enterDir)) return false;     // not a port of this switch
-    return enterDir === switchCurrent(tile);                 // only the set branch connects to the stem
-  }
-  function getTile(x,y){ return state.tiles.get(key(x,y)); }
-  function setTile(x,y,tile){ state.tiles.set(key(x,y), tile); }
-  function removeTile(x,y){ state.tiles.delete(key(x,y)); }
-
-  function defaultSwitch(){
-    const shape = SWITCH_SHAPES[state.selectedSwitchShape];
-    return {
-      kind: "switch",
-      stem: shape.stem,
-      branches: shape.branches.slice(),
-      current: shape.branches[0]     // branch the stem is set to
-    };
-  }
-  function makeTile(tool){
-    const route = cloneRoute(TRACK_SHAPES[state.selectedShape].route);
-    if (tool === "track") return {kind:"track", route};
-    if (tool === "crossPlus") return {kind:"crossPlus"};
-    if (tool === "crossX") return {kind:"crossX"};
-    if (tool === "switch") return defaultSwitch();
-    if (tool === "spawn"){
-      const shape = SPAWN_SHAPES[state.selectedSpawnShape];
-      return {kind:"spawn", route:cloneRoute(shape.route), dir:shape.dir, type:state.selectedType};
-    }
-    if (tool === "stop"){
-      const shape = STOP_SHAPES[state.selectedStopShape];
-      return {kind:"stop", route:cloneRoute(shape.route), dir:shape.dir, dwellSeconds:DEFAULT_DWELL_SECONDS};
-    }
-    if (tool === "signal"){
-      const shape = SIGNAL_SHAPES[state.selectedSignalShape];
-      return {kind:"signal", route:cloneRoute(shape.route), dir:shape.dir};
-    }
-    return null;
-  }
-
-  function sortedRouteKey(route){ return route.slice().sort((a,b) => a - b).join("-"); }
-  function findTrackShapeIndex(route){
-    const r = sortedRouteKey(route);
-    const i = TRACK_SHAPES.findIndex(s => sortedRouteKey(s.route) === r);
-    return i < 0 ? state.selectedShape : i;
-  }
-  function findDirShapeIndex(shapes, route, dir){
-    const r = sortedRouteKey(route);
-    return shapes.findIndex(s => s.dir === dir && sortedRouteKey(s.route) === r);
-  }
-  function findSwitchShapeIndex(tile){
-    const b = tile.branches.slice().sort((a,b) => a - b).join(",");
-    return SWITCH_SHAPES.findIndex(s =>
-      s.stem === tile.stem && s.branches.slice().sort((x,y) => x - y).join(",") === b);
-  }
 
   function resize(){
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -1120,92 +875,6 @@
     strokeBand(orangeSegs, "rgba(255,184,0,.95)", w);  // obstacle: bright, near-saturated orange-yellow
   }
 
-  // ---- Multi-part train bodies ------------------------------------------------------
-  function centerW(x,y){ return {x:x+0.5, y:y+0.5}; }
-  function endpointW(x,y,d){ return {x:x+DIRS[d].px, y:y+DIRS[d].py}; }
-  function lerpW(a,b,t){ return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t}; }
-  function headWorld(train){
-    if (!trainMoving(train)) return centerW(train.x, train.y);
-    const start = centerW(train.prevX, train.prevY);
-    const joint = endpointW(train.prevX, train.prevY, train.moveDir);
-    const end = centerW(train.x, train.y);
-    return train.progress < .5 ? lerpW(start, joint, train.progress*2) : lerpW(joint, end, (train.progress-.5)*2);
-  }
-  function trainCars(train){ return train.cars && train.cars.length ? train.cars : DEFAULT_CARS; }
-  function trainTotalLength(train){
-    const cars = trainCars(train);
-    return cars.reduce((a,c)=>a+c,0) + (cars.length-1)*CAR_GAP;
-  }
-  // Prepend the head's world position to the trail and trim it to the body length.
-  function updateTrail(train){
-    if (!train.trail) train.trail = [];
-    const h = headWorld(train);
-    const t0 = train.trail[0];
-    if (!t0 || Math.hypot(h.x-t0.x, h.y-t0.y) > 0.004) train.trail.unshift(h);
-    const keep = trainTotalLength(train) + 0.6;
-    let acc = 0, cut = train.trail.length;
-    for (let i=0; i<train.trail.length-1; i++){
-      acc += Math.hypot(train.trail[i+1].x-train.trail[i].x, train.trail[i+1].y-train.trail[i].y);
-      if (acc > keep){ cut = i+2; break; }
-    }
-    if (cut < train.trail.length) train.trail.length = cut;
-  }
-  function seedTrail(train, dir){
-    // straight back-fill so a freshly spawned train shows its body immediately
-    const h = headWorld(train);
-    const back = DIRS[dir];
-    const n = Math.ceil((trainTotalLength(train)+0.6) / 0.1);
-    train.trail = [];
-    for (let i=0; i<=n; i++) train.trail.push({x:h.x - back.dx*0.1*i, y:h.y - back.dy*0.1*i});
-  }
-  function computeBodyTiles(train){
-    const set = new Set();
-    const trail = train.trail;
-    if (!trail || trail.length < 1){
-      set.add(key(train.x,train.y));
-      if (trainMoving(train)) set.add(key(train.prevX,train.prevY));
-      return set;
-    }
-    const total = trainTotalLength(train);
-    const add = pt => set.add(key(Math.floor(pt.x), Math.floor(pt.y)));
-    add(trail[0]);
-    let acc = 0;
-    for (let i=0; i<trail.length-1 && acc<total; i++){
-      const a = trail[i], b = trail[i+1];
-      const seg = Math.hypot(b.x-a.x, b.y-a.y);
-      const steps = Math.max(1, Math.ceil(seg/0.2));
-      for (let s=1; s<=steps; s++){
-        if (acc + seg*(s/steps) > total) break;
-        add(lerpW(a,b,s/steps));
-      }
-      acc += seg;
-    }
-    return set;
-  }
-  // collect trail points between distances d0..d1 behind the head (inclusive endpoints)
-  function trailSpan(trail, d0, d1){
-    const pts = [];
-    let acc = 0, started = false;
-    const at = dist => { // point at a given distance back
-      let a2 = 0;
-      for (let i=0; i<trail.length-1; i++){
-        const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
-        if (a2 + seg >= dist) return lerpW(trail[i], trail[i+1], seg ? (dist-a2)/seg : 0);
-        a2 += seg;
-      }
-      return trail[trail.length-1];
-    };
-    if (!trail.length) return pts;
-    pts.push(at(d0));
-    for (let i=0; i<trail.length-1; i++){
-      const seg = Math.hypot(trail[i+1].x-trail[i].x, trail[i+1].y-trail[i].y);
-      if (acc+seg > d0 && acc+seg < d1) pts.push(trail[i+1]);
-      acc += seg;
-      if (acc >= d1) break;
-    }
-    pts.push(at(d1));
-    return pts;
-  }
 
   function drawTrains(){
     const s = tileSize();
@@ -1265,16 +934,24 @@
       ctx.restore();
     }
   }
+  // The text drawn for a station's on-map label: its name, plus a pencil mark when it carries
+  // Station Master instructions (so they are discoverable). Used for both drawing and hit-testing
+  // so the clickable box matches exactly.
+  function stationLabelText(st){
+    const name = st.name || `Station ${st.id}`;
+    return (st.instructions && st.instructions.trim()) ? `${name} ✎` : name;
+  }
+  function stationLabelFont(s){ return `600 ${Math.max(10, Math.min(16, s*.34))}px system-ui, sans-serif`; }
   // Station names (top-left of each region) drawn over the tiles.
   function drawStationLabels(){
     const s = tileSize();
     ctx.save();
-    ctx.font = `600 ${Math.max(10, Math.min(16, s*.34))}px system-ui, sans-serif`;
+    ctx.font = stationLabelFont(s);
     ctx.textBaseline = "top";
     for (const st of state.stations){
       const r = normRect(st.rect); if (!r) continue;
       const a = worldToScreen(r.x0, r.y0);
-      const label = st.name || `Station ${st.id}`;
+      const label = stationLabelText(st);
       const tw = ctx.measureText(label).width;
       const bh = Math.max(14, s*.42);
       ctx.fillStyle = "rgba(22,30,44,.82)";
@@ -1368,9 +1045,6 @@
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
   }
 
-  function trainMoving(train){
-    return train.progress != null && train.progress < 1 && train.prevX != null && train.prevY != null;
-  }
 
   function trainPoint(train){
     if (!trainMoving(train)) return centerPoint(train.x, train.y);
@@ -1381,425 +1055,6 @@
     return lerpPoint(joint, end, (train.progress - .5) * 2);
   }
 
-  function exitFor(tile, from){
-    if (!tile) return null;
-    if (tile.kind === "switch"){
-      if (from === tile.stem) return switchCurrent(tile);          // stem → the set branch
-      if (tile.branches.includes(from)) return from === switchCurrent(tile) ? tile.stem : null; // only the set branch connects
-      return null;
-    }
-    for (const route of routesFor(tile)){
-      if (!route.includes(from)) continue;
-      if (route.length < 2) return null;
-      return route[0] === from ? route[1] : route[0];
-    }
-    return null;
-  }
-
-  function exitsForBlock(tile, from){
-    if (!tile) return [];
-    if (tile.kind === "switch"){
-      const dirs = [tile.stem, ...tile.branches];
-      if (!dirs.includes(from)) return [];
-      return dirs.filter(d => d !== from);
-    }
-    const exits = [];
-    for (const route of routesFor(tile)){
-      if (!route.includes(from) || route.length < 2) continue;
-      for (const d of route){
-        if (d !== from && !exits.includes(d)) exits.push(d);
-      }
-    }
-    return exits;
-  }
-
-  function collectProtectedBlock(x,y,dir,ignoreId){
-    const nx = x + DIRS[dir].dx;
-    const ny = y + DIRS[dir].dy;
-    return scanProtectedBlock(nx, ny, opposite(dir), ignoreId);
-  }
-
-  function scanProtectedBlock(x,y,from,ignoreId){
-    const seen = new Set();
-    const tiles = new Set();
-    const todo = [{x,y,from}];
-    let blocked = false;
-    while (todo.length){
-      const n = todo.pop();
-      const id = `${n.x},${n.y},${n.from}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const tile = getTile(n.x,n.y);
-      if (!tile) continue;
-      // A signal bounds the block: it is a wall, not part of the protected run of
-      // track, so it is never flooded through *and* never counts as occupancy. If a
-      // boundary signal tile counted, two trains each waiting on the other's signal
-      // would each see the other inside their block and deadlock forever.
-      if (tile.kind === "signal") continue;
-      tiles.add(key(n.x,n.y));
-      if (state.trains.some(t => t.id !== ignoreId && trainOccupies(t,n.x,n.y))) blocked = true;
-      for (const ex of exitsForBlock(tile,n.from)){
-        todo.push({x:n.x + DIRS[ex].dx, y:n.y + DIRS[ex].dy, from:opposite(ex)});
-      }
-    }
-    return {blocked, tiles};
-  }
-
-  // ---- Blocks & block reservation ---------------------------------------------------
-  // Only AUTOMATIC mains define blocks. Each automatic main guards a block (the run of
-  // track up to the next signal) with at most one holder, and carries an INVISIBLE distant
-  // on the tile immediately before it (point 2): a train approaching commits to the block as
-  // it steps onto the main from that tile and, if the block was free, rolls straight through;
-  // if the block is taken it brakes to a stop at the main and waits for green. MANUAL mains
-  // have NO block and no occupancy state — they are pure operator-cleared route gates (see
-  // followManualRoute / toggleManualSignal), and trains run on sight between them.
-  // buildSignalSystem() recomputes the static topology each tick.
-  function regionIdFor(x,y,dir){
-    const tiles = scanProtectedBlock(x + DIRS[dir].dx, y + DIRS[dir].dy, opposite(dir), null).tiles;
-    return {id: [...tiles].sort().join("|"), tiles};
-  }
-  function buildSignalSystem(){
-    const blockOfMain = new Map();    // AUTOMATIC mainKey "x,y,dir" -> blockId
-    const tileOfMain = new Map();     // AUTOMATIC mainKey -> the signal tile key "x,y"
-    const blockTiles = new Map();     // blockId -> Set of tile keys
-    const mainsOfBlock = new Map();   // blockId -> [automatic mainKey]
-    const distantCommit = new Map();  // before-tile "bx,by,dir" -> {blockId, mainKey, mainTile, approach:Set}
-    const errorMains = new Set();
-    for (const [k,tile] of state.tiles){
-      if (tile.kind !== "signal") continue;
-      const {x,y} = readKey(k);
-      for (const dir of signalDirs(tile)){
-        if (manualDirs(tile).includes(dir)) continue; // automatic mains only define blocks
-        const mk = mkMain(x,y,dir);
-        const {id, tiles} = regionIdFor(x,y,dir);
-        blockOfMain.set(mk, id);
-        tileOfMain.set(mk, k);
-        if (!blockTiles.has(id)) blockTiles.set(id, tiles);
-        if (!mainsOfBlock.has(id)) mainsOfBlock.set(id, []);
-        mainsOfBlock.get(id).push(mk);
-        const bx = x - DIRS[dir].dx, by = y - DIRS[dir].dy;
-        distantCommit.set(mkMain(bx,by,dir), {blockId: id, mainKey: mk, mainTile: k, approach: new Set([key(bx,by), k])});
-      }
-    }
-    // Point 8: an automatic block fed by a MANUAL entry can be entered on sight (no grant),
-    // so its automatic mains can't keep it exclusive → they go into the blinking-red error.
-    for (const [k,tile] of state.tiles){
-      if (tile.kind !== "signal") continue;
-      const {x,y} = readKey(k);
-      for (const dir of signalDirs(tile)){
-        if (!manualDirs(tile).includes(dir)) continue; // manual entries
-        const {id} = regionIdFor(x,y,dir);
-        for (const mk of (mainsOfBlock.get(id) || [])) errorMains.add(mk);
-      }
-    }
-    // Idea 1: an automatic main must not lead out of a protected block into open track — it
-    // requires an opposing-direction main (auto OR manual) on the SAME tile (the other end of
-    // its route), making a complete block boundary. Without it, it blinks red and is impassable.
-    for (const [k,tile] of state.tiles){
-      if (tile.kind !== "signal") continue;
-      const {x,y} = readKey(k);
-      for (const dir of signalDirs(tile)){
-        if (manualDirs(tile).includes(dir)) continue;
-        if (!signalDirs(tile).includes(opposite(dir))) errorMains.add(mkMain(x,y,dir));
-      }
-    }
-    return {blockOfMain, tileOfMain, blockTiles, mainsOfBlock, distantCommit, errorMains, holder:new Map()};
-  }
-
-  // Only AUTOMATIC, non-errored mains use the block-grant system. Manual mains never get a
-  // hold — a train passes them purely on the operator's cleared green (checked in moveTrain).
-  function mainEligible(mk, sys){
-    if (mainIsManualKey(mk)) return false;
-    return !sys.errorMains.has(mk);
-  }
-
-  // The block+main a train is reserving.
-  function approachInfo(train, sys){
-    // The invisible distant commits the block as the train moves OFF the tile before the main.
-    if (trainMoving(train) && train.prevX != null){
-      const dc = sys.distantCommit.get(mkMain(train.prevX, train.prevY, train.moveDir));
-      if (dc) return {blockId: dc.blockId, mainKey: dc.mainKey, mainTile: dc.mainTile, approach: dc.approach, rollThrough: true};
-    }
-    const tile = getTile(train.x, train.y);
-    if (!tile) return null;
-    const ex = exitFor(tile, train.from);
-    if (ex == null) return null;
-    if (tile.kind === "signal"){
-      const mk = mkMain(train.x, train.y, ex);
-      if (sys.blockOfMain.has(mk)) return {blockId: sys.blockOfMain.get(mk), mainKey: mk, mainTile: sys.tileOfMain.get(mk), rollThrough: false};
-    }
-    return null;
-  }
-
-  function nextWantSeq(){ state.wantSeq = (state.wantSeq || 0) + 1; return state.wantSeq; }
-  function trainHolds(train, blockId){ return train.holds && train.holds.some(h => h.blockId === blockId); }
-  // Physical occupancy of a block's tiles (a safety net for trains that are inside a block
-  // without holding it, e.g. spawned in or placed by an edit).
-  function blockOccupiedByOther(blockId, sys, ignoreId){
-    const tiles = sys.blockTiles.get(blockId);
-    if (!tiles) return false;
-    for (const t of state.trains){
-      if (t.id === ignoreId) continue;
-      const bt = t._tiles || computeBodyTiles(t);
-      for (const tk of bt) if (tiles.has(tk)) return true;
-    }
-    return false;
-  }
-  function inBlockRegion(train, h, sys){
-    const here = key(train.x, train.y);
-    const tiles = sys.blockTiles.get(h.blockId);
-    if (tiles && tiles.has(here)) return true;
-    if (here === h.entryMainTile) return true;
-    if (h.approach && h.approach.has(here)) return true; // tiles from the distant up to the main
-    return false;
-  }
-
-  // Recomputes blocks and re-derives occupancy from live train bodies every call (and it is
-  // called on every tile edit). Because occupancy is recounted from real positions rather
-  // than a stored counter, changing the signalling never leaves "virtual" trains in a block.
-  function updateSignals(){
-    const sys = buildSignalSystem();
-    for (const t of state.trains) t._tiles = computeBodyTiles(t);
-    maintainManualState(sys);
-    // release holds once the train has left the block's protected tiles and entry approach
-    for (const t of state.trains){
-      if (!t.holds) t.holds = [];
-      t.holds = t.holds.filter(h => sys.blockTiles.has(h.blockId) && inBlockRegion(t, h, sys));
-    }
-    for (const t of state.trains) for (const h of t.holds) sys.holder.set(h.blockId, t.id);
-    // gather contenders, then grant each free block to its longest-waiting contender
-    const contenders = new Map();
-    for (const t of state.trains){
-      const ap = approachInfo(t, sys);
-      t._ap = ap;
-      if (!ap || trainHolds(t, ap.blockId)){ t.wantSince = null; continue; }
-      if (!mainEligible(ap.mainKey, sys)){ t.wantSince = null; continue; } // red manual / errored automatic
-      if (!contenders.has(ap.blockId)) contenders.set(ap.blockId, []);
-      contenders.get(ap.blockId).push({train:t, ap});
-    }
-    for (const [blockId, list] of contenders){
-      for (const c of list) if (c.train.wantSince == null) c.train.wantSince = nextWantSeq();
-      if (sys.holder.has(blockId)) continue; // reserved: everyone keeps waiting
-      list.sort((a,b) => (a.train.wantSince - b.train.wantSince) || (a.train.id - b.train.id));
-      const win = list[0];
-      if (blockOccupiedByOther(blockId, sys, win.train.id)) continue; // physically obstructed
-      win.train.holds.push({blockId, entryMainKey: win.ap.mainKey, entryMainTile: win.ap.mainTile, approach: win.ap.approach, rollThrough: win.ap.rollThrough});
-      win.train.wantSince = null;
-      sys.holder.set(blockId, win.train.id);
-    }
-    state.sys = sys;
-  }
-
-  function holdForMain(train, mainKey){ return train.holds && train.holds.find(h => h.entryMainKey === mainKey); }
-  // A main is "green" for a train that holds its block via that main.
-  function mainIsGreenFor(train, mainKey){ return !!holdForMain(train, mainKey); }
-  // A block is free when no train holds it and none is physically inside it.
-  function blockFree(id, sys){
-    return !sys.holder.has(id) && !blockOccupiedByOther(id, sys, null);
-  }
-  // Whether a main shows green. AUTOMATIC mains are default-green: green whenever the block
-  // ahead is clear (and for the train holding it while still approaching), red when taken,
-  // never green while in the error state. MANUAL mains are default-red: green only while the
-  // operator has them cleared.
-  function mainRenderGreen(mainKey, sys, manual){
-    if (manual) return state.manualGreen.has(mainKey);
-    if (sys.errorMains.has(mainKey)) return false;
-    const id = sys.blockOfMain.get(mainKey);
-    if (blockFree(id, sys)) return true;
-    const tiles = sys.blockTiles.get(id);
-    for (const t of state.trains){
-      if (!t.holds) continue;
-      for (const h of t.holds){
-        if (h.blockId === id && h.entryMainKey === mainKey && tiles && !tiles.has(key(t.x,t.y))) return true;
-      }
-    }
-    return false;
-  }
-  // True if this train may pass main `mk` without stopping (it reserved the block early at the
-  // invisible distant). A train that had to stop at a red main reacts briefly before pulling away.
-  function mayRollThrough(train, mk){
-    const h = holdForMain(train, mk);
-    return !!(h && h.rollThrough);
-  }
-
-  function occupied(x,y,ignoreId){
-    return state.trains.some(t => t.id !== ignoreId && trainOccupies(t,x,y));
-  }
-
-  // ---- Manual signals & route locks -------------------------------------------------
-  // Prune cleared greens / spent route locks and recompute which switches are locked. Called
-  // from updateSignals each tick (and on every edit), after train body tiles are computed.
-  // Each path tile (and the switches among them) is released the instant the cleared train's
-  // LAST AXLE leaves it — tracked per tile, so the green outline and switch locks both shrink
-  // behind the train and the route lock ends once the train has fully cleared the path.
-  function maintainManualState(sys){
-    for (const mk of [...state.manualGreen])
-      if (!mainIsManualKey(mk)) state.manualGreen.delete(mk);
-    state.routeLocks = state.routeLocks.filter(rl => {
-      if (!mainIsManualKey(rl.mk)) return false;               // the manual signal is gone/changed
-      if (!rl.armed) return state.manualGreen.has(rl.mk);      // awaiting a train: hold while still cleared
-      const tr = state.trains.find(t => t.id === rl.trainId);
-      if (!tr) return false;                                   // the cleared train vanished → release
-      const bt = tr._tiles || computeBodyTiles(tr);
-      for (const s of rl.path){
-        if (rl.passedTile.has(s.k)) continue;
-        if (bt.has(s.k)) rl.enteredTile.add(s.k);              // body is on this path tile
-        else if (rl.enteredTile.has(s.k)) rl.passedTile.add(s.k); // last axle just left it
-      }
-      return !rl.path.every(s => rl.passedTile.has(s.k));      // done once the whole path is behind the train
-    });
-    state.lockedSwitchKeys = new Set();
-    for (const rl of state.routeLocks)
-      for (const sk of rl.switchKeys)
-        if (!rl.passedTile.has(sk)) state.lockedSwitchKeys.add(sk);
-  }
-  // Trace the route a cleared manual signal opens: follow the live track (current switch
-  // settings) from the signal to the next signal facing the way we travel, checking that
-  // (2a) it crosses no already-locked switch and (2c) no axle sits anywhere on the path up to
-  // and including that signal. On success returns the switch tiles it crosses plus the per-tile
-  // path segments (the manual signal tile and every tile up to, but not including, the terminus
-  // signal); otherwise a reason and the obstacle tile.
-  function followManualRoute(sx,sy,dir){
-    const switchKeys = [];
-    const path = [];
-    const st = getTile(sx,sy);
-    if (st && st.route) path.push({k: key(sx,sy), seg: st.route.slice()}); // the signal tile itself
-    let cx = sx, cy = sy, d = dir;
-    for (let i=0; i<256; i++){
-      const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
-      const nt = getTile(nx,ny);
-      const from = opposite(d);
-      const here = key(nx,ny);
-      if (!nt || !tileAccepts(nt, from) || !switchAccepts(nt, from)) return {ok:false, reason:"the path is broken", obstacle:here};
-      if (occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied", obstacle:here}; // 2c (incl. the terminus signal)
-      if (nt.kind === "signal"){
-        // 2b: the route is only complete at a main facing the WAY WE ARE GOING — one that will
-        // actually stop/hand off the train. A signal facing the other way is transparent to it.
-        const sx2 = exitFor(nt, from);
-        if (sx2 != null && signalDirs(nt).includes(sx2)) return {ok:true, switchKeys, path};
-        return {ok:false, reason:"the path runs into a signal facing the other way", obstacle:here};
-      }
-      if (nt.kind === "switch"){
-        if (switchLocked(nx,ny)) return {ok:false, reason:"the path crosses a switch locked by another route", obstacle:here}; // 2a
-        switchKeys.push(here);
-      }
-      const ex = exitFor(nt, from);
-      if (ex == null) return {ok:false, reason: nt.kind === "switch" ? "the path runs into a switch set against it" : "the path reaches a dead end before any signal", obstacle:here};
-      path.push({k: here, seg: [from, ex]});
-      cx = nx; cy = ny; d = ex;
-    }
-    return {ok:false, reason:"the path is too long"};
-  }
-  // Operator clears (or cancels) a manual main. Clearing needs a clear route to a forward
-  // signal (followManualRoute); it then locks every switch on that route. The main drops back
-  // to red the moment a train passes it, and each switch unlocks as the train's last axle
-  // clears it. While a main is green and no train has taken it yet, clicking it cancels (a
-  // train that has already taken the route holds it red, so a re-clear is blocked by occupancy).
-  function toggleManualSignal(x,y,dir){
-    const tile = getTile(x,y);
-    if (!tile || tile.kind !== "signal" || !manualDirs(tile).includes(dir)) return;
-    const mk = mkMain(x,y,dir);
-    if (state.manualGreen.has(mk)){
-      state.manualGreen.delete(mk);
-      state.routeLocks = state.routeLocks.filter(r => r.mk !== mk);
-      state.message = `Signal ${placeLabel(x,y)} set back to red`;
-      updateSignals(); draw();
-      return;
-    }
-    const route = followManualRoute(x,y,dir);
-    if (!route.ok){
-      // Refused: flash the signal's tile and the obstacle tile red for a second.
-      flashTiles([key(x,y), route.obstacle]);
-      state.message = `Cannot clear ${placeLabel(x,y)}: ${route.reason}`;
-      draw(); return;
-    }
-    state.flash = null;
-    state.manualGreen.add(mk);
-    state.routeLocks.push({mk, switchKeys: route.switchKeys, path: route.path, trainId:null, armed:false, enteredTile:new Set(), passedTile:new Set()});
-    state.message = `Cleared ${placeLabel(x,y)}`;
-    updateSignals(); draw();
-  }
-
-  function trainOccupies(train,x,y){
-    if (train._tiles) return train._tiles.has(key(x,y));
-    return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
-  }
-
-  // True if a train arriving at (x,y) via `from` can immediately continue onward; its
-  // negation is what tells a moving train to brake to a stop on the tile it is entering.
-  function canLeave(train, x, y, from){
-    const tile = getTile(x,y);
-    if (!tile) return false;
-    const ex = exitFor(tile, from);
-    if (ex == null) return false;
-    if (tile.kind === "stop" && ex === tile.dir){
-      if (train.stopKey !== key(x,y)) return false;          // hasn't docked yet
-      if (state.simFrame < train.releaseFrame) return false; // still dwelling
-    }
-    if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
-      const mk = mkMain(x,y,ex);
-      if (mainIsManual(x,y,ex)){
-        if (!state.manualGreen.has(mk)) return false;          // red manual main: hold
-      } else {
-        // automatic main: needs the block, reserved early at the invisible distant (roll
-        // through) or reacted to while stopped here.
-        if (!mainIsGreenFor(train, mk)) return false;
-        if (!mayRollThrough(train, mk) && train.reactedMain !== mk) return false;
-      }
-    }
-    const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
-    const nt = getTile(nx,ny);
-    if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return false;
-    // All trains proceed with caution: never roll onto an occupied tile, brake to a stop.
-    if (occupied(nx,ny,train.id)) return false;
-    return true;
-  }
-
-  // Advance a moving train by its current speed, easing toward MAX_SPEED or braking along
-  // a sqrt curve so it coasts to a stop exactly on the tile it cannot continue past.
-  function advanceWithSpeed(train){
-    if (!trainMoving(train)) return false;
-    const d = DIRS[train.moveDir];
-    const seg = Math.hypot(d.dx,d.dy) || 1;
-    const halt = !canLeave(train, train.x, train.y, train.from);
-    const remaining = (1 - train.progress) * seg;
-    let target = MAX_SPEED;
-    if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
-    if (train.speed < target) train.speed = Math.min(target, train.speed + ACCEL);
-    else train.speed = target;
-    if (halt && train.speed < MIN_SPEED && remaining < 0.5){
-      train.progress = 1; // crawling and almost there: dock on the tile centre
-    } else {
-      train.progress = Math.min(1, train.progress + train.speed / seg);
-    }
-    if (train.progress >= 1){
-      delete train.prevX; delete train.prevY; delete train.moveDir;
-      if (halt) train.speed = 0;
-    }
-    return true;
-  }
-
-  // ---- Sim clock and notifications -------------------------------------------------
-  // The sim advances one simFrame per simStep (60 = one sim-second).
-  function formatClock(frame){
-    const s = Math.max(0, Math.floor(frame / FRAMES_PER_SECOND));
-    const m = Math.floor(s / 60);
-    return `${String(m).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
-  }
-  // A human label for a cell: "<station> <element-name>" when known, else its coordinates.
-  function placeLabel(x,y){
-    const t = getTile(x,y);
-    const st = stationContaining(x,y);
-    const parts = [];
-    if (st) parts.push(st.name);
-    if (t && t.name) parts.push(t.name);
-    return parts.length ? parts.join(" ") : `${x},${y}`;
-  }
-  function trainDesc(train){
-    const t = trainTypeById(train.type);
-    const nm = t && t.name ? t.name : `type ${train.type}`;
-    return `Train ${train.id} (${nm})`;
-  }
   // Push a line into the scrolling notification window. level: info | warn | alert.
   function notify(level, text){
     if (!notifyLog) return;
@@ -1809,125 +1064,6 @@
     notifyLog.appendChild(row);
     while (notifyLog.children.length > 200) notifyLog.removeChild(notifyLog.firstChild);
     notifyLog.scrollTop = notifyLog.scrollHeight;
-  }
-  // Called the first frame a train docks at a stop: records when it may leave (arrival + dwell).
-  function registerStopArrival(train, tile){
-    train.stopKey = key(train.x, train.y);
-    train.releaseFrame = state.simFrame + Math.ceil(stopDwellSeconds(tile) * FRAMES_PER_SECOND);
-  }
-  // Called when a train pulls away from a named stop: a plain departure line (silent otherwise).
-  function notifyDeparture(train, tile, x, y){
-    if (tile.name) notify("info", `${trainDesc(train)} departed ${placeLabel(x,y)}`);
-  }
-
-  function stopDwellSeconds(tile){
-    if (tile.dwellSeconds != null){
-      const seconds = Number(tile.dwellSeconds);
-      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
-    }
-    if (tile.dwell != null){
-      const seconds = Number(tile.dwell) / 40;
-      return Number.isFinite(seconds) ? Math.max(.25, Math.min(30, seconds)) : DEFAULT_DWELL_SECONDS;
-    }
-    return DEFAULT_DWELL_SECONDS;
-  }
-
-  function moveTrain(train){
-    if (train.speed == null) train.speed = 0;
-    if (trainMoving(train)){ advanceWithSpeed(train); return; }
-    if (train.wait > 0){ train.wait--; train.speed = 0; return; }
-    const tile = getTile(train.x,train.y);
-    const ex = exitFor(tile, train.from);
-    if (ex == null){ train.speed = 0; return; }
-    if (tile.kind === "stop" && ex === tile.dir){
-      const stopKey = key(train.x,train.y);
-      if (train.stopKey !== stopKey){
-        registerStopArrival(train, tile);
-        train.speed = 0;
-        return;
-      }
-      if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
-    }
-    if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
-      const mk = mkMain(train.x, train.y, ex);
-      if (mainIsManual(train.x, train.y, ex)){
-        if (!state.manualGreen.has(mk)){ train.speed = 0; return; } // red: wait for the operator
-        // A train that was stopped here (speed 0) lingers a moment when the main clears, like an
-        // automatic main turning green; a train that rolls up to an already-green one does not.
-        if (train.speed === 0 && train.reactedMain !== mk){
-          train.reactedMain = mk;
-          train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
-          return;
-        }
-        // otherwise roll straight through (drive on sight)
-      } else {
-        if (!mainIsGreenFor(train, mk)){ train.speed = 0; return; } // red: hold until the block clears
-        if (!mayRollThrough(train, mk) && train.reactedMain !== mk){
-          // had to stop at the main (block was taken on approach): pause to react before leaving
-          train.reactedMain = mk;
-          train.wait = Math.ceil(SIGNAL_REACTION_SECONDS * FRAMES_PER_SECOND);
-          train.speed = 0; return;
-        }
-      }
-    }
-    const nx = train.x + DIRS[ex].dx;
-    const ny = train.y + DIRS[ex].dy;
-    const nf = opposite(ex);
-    const nextTile = getTile(nx,ny);
-    if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf)){ train.speed = 0; return; }
-    if (occupied(nx,ny,train.id)){ train.speed = 0; return; } // proceed with caution: never collide
-    // Passing a cleared MANUAL main drops it back to red and arms its route lock to this train,
-    // so the switches it set stay locked until this train has fully passed them.
-    if (tile.kind === "signal" && signalDirs(tile).includes(ex) && state.manualGreen.has(mkMain(train.x,train.y,ex))){
-      const mk = mkMain(train.x,train.y,ex);
-      state.manualGreen.delete(mk);
-      const rl = state.routeLocks.find(r => r.mk === mk && !r.armed);
-      if (rl){ rl.armed = true; rl.trainId = train.id; }
-    }
-    if (train.stopKey === key(train.x, train.y) && tile.kind === "stop") notifyDeparture(train, tile, train.x, train.y);
-    delete train.stopKey;
-    train.reactedMain = null; // leaving this tile; the next main needs its own reaction
-    train.prevX = train.x;
-    train.prevY = train.y;
-    train.moveDir = ex;
-    train.progress = 0;
-    train.x = nx;
-    train.y = ny;
-    train.from = nf;
-    advanceWithSpeed(train);
-  }
-
-  function spawnTrains(){
-    const spent = [];
-    for (const [k,tile] of state.tiles){
-      if (tile.kind !== "spawn") continue;
-      const {x,y} = readKey(k);
-      const nx = x + DIRS[tile.dir].dx;
-      const ny = y + DIRS[tile.dir].dy;
-      const nf = opposite(tile.dir);
-      const nextTile = getTile(nx,ny);
-      if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
-      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, type:tile.type, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
-      seedTrail(train, tile.dir);
-      train._tiles = computeBodyTiles(train);
-      state.trains.push(train);
-      spent.push({x, y, route:cloneRoute(tile.route)});
-    }
-    for (const tile of spent) setTile(tile.x,tile.y,{kind:"track",route:tile.route});
-  }
-
-  function simStep(){
-    state.simFrame++;
-    spawnTrains();
-    updateSignals();
-    for (const train of state.trains) moveTrain(train);
-    for (const train of state.trains) updateTrail(train);
-    // Re-evaluate holders/grants against the post-move positions before drawing. Without
-    // this, a block that a train just vacated reads as momentarily free for one frame
-    // (the waiting train is granted only next frame), flickering every main green.
-    updateSignals();
-    state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
-    if (state.frame === 0) state.tick++;
   }
 
   // FIXED-TIMESTEP loop. One simStep == 1/60 s of SIM time, no matter the display's refresh
@@ -1942,58 +1078,140 @@
   let simAccumulatorMs = 0;
   let lastFrameMs = null;
   let loggedSimError = false;
-  function animation(now){
-    if (now == null) now = performance.now();
+  // Render loop only — the server ticks the authoritative sim and streams snapshots (applied in
+  // onServerSnapshot). We just redraw each frame so train motion, flashes and blinking animate.
+  function animation(){
     try {
-      if (lastFrameMs == null) lastFrameMs = now;
-      let elapsed = now - lastFrameMs;
-      lastFrameMs = now;
-      if (state.paused){
-        simAccumulatorMs = 0; // don't bank time while paused; resume cleanly
-      } else {
-        if (elapsed > 250) elapsed = 250; // clamp background-tab / hitch gaps
-        simAccumulatorMs += elapsed;
-        let steps = 0;
-        while (simAccumulatorMs >= SIM_STEP_MS && steps < MAX_CATCHUP_STEPS){
-          simStep();
-          simAccumulatorMs -= SIM_STEP_MS;
-          steps++;
-        }
-        if (steps >= MAX_CATCHUP_STEPS) simAccumulatorMs = 0; // drop a backlog we can't catch up
-      }
       draw();
     } catch (err){
-      // never let a single bad frame freeze the loop; surface it once
-      if (!loggedSimError){ console.error("simStep failed:", err); loggedSimError = true; }
+      if (!loggedSimError){ console.error("render failed:", err); loggedSimError = true; }
       state.message = "Error: " + (err && err.message ? err.message : err);
     }
     requestAnimationFrame(animation);
+  }
+
+  // Surface new engine events (e.g. stop departures) in the notification log. The engine no
+  // longer touches the DOM; it buffers events on state.events and the client drains them here.
+  let lastEventSeq = 0;
+  function drainEvents(){
+    for (const ev of state.events){ if (ev.seq > lastEventSeq){ lastEventSeq = ev.seq; notify(ev.level, ev.text); } }
   }
 
   // Flash the given tiles red for ~1s (used when an operation is refused). Wall-clock timed
   // so it shows even while paused; draw() clears it once it expires.
   function flashTiles(keys){ state.flash = {keys: keys.filter(Boolean), until: performance.now() + 1000}; }
 
-  // Operate tool: left-click throws a switch or clears/cancels a manual signal.
+  // ================= Server-only mode =================
+  // This page is a thin client of the authoritative game server (server.js, which runs the same
+  // engine.js). It renders the streamed snapshot of the ONE live game and sends every change —
+  // operate AND edit — to the server as a command; the server applies it, autosaves, and streams
+  // the result back. There is no offline mode and no local simulation: the server is the truth.
+  const server = { connected: false, es: null, meta: null };
+  let serverGamesCache = [];
+  const SERVER_DOWN = "Game server unreachable — start it with: node server.js";
+
+  async function apiFetch(path, opts){
+    const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+    let body = null; try { body = await res.json(); } catch {}
+    return { ok: res.ok, status: res.status, body };
+  }
+
+  // Subscribe to the live game's snapshot stream. Each message replaces our rendered state.
+  function serverConnect(){
+    if (server.es) server.es.close();
+    lastEventSeq = 0;
+    server.es = new EventSource("/api/events");
+    server.es.onmessage = (e) => { try { onServerSnapshot(JSON.parse(e.data)); } catch {} };
+    server.es.onerror = () => { server.connected = false; state.message = SERVER_DOWN; syncServerUI(); draw(); };
+    refreshServerGames();
+  }
+  async function refreshServerGames(){
+    try { const r = await apiFetch("/api/games"); serverGamesCache = (r.body && r.body.games) || []; }
+    catch { serverGamesCache = []; }
+    syncServerUI();
+  }
+  function onServerSnapshot(payload){
+    const gameChanged = !server.meta || !payload.game || server.meta.id !== payload.game.id;
+    server.connected = true;
+    server.meta = payload.game;
+    if (payload.snapshot){ applySnapshot(payload.snapshot); drainEvents(); }
+    state.paused = !!(payload.game && !payload.game.running);
+    updatePauseButton();
+    if (!trainTypeById(state.selectedType) && state.trainTypes.length) state.selectedType = state.trainTypes[0].id;
+    if (gameChanged){ refreshColorUI(); refreshStationsUI(); refreshServerGames(); } // sync side panels + list
+    syncServerUI();
+    draw();
+  }
+
+  // The single mutation path: send a command (edit OR operate) to the authoritative game. The
+  // change is reflected by the snapshot that streams back (no local mutation — server is the truth).
+  function mutate(cmd){
+    apiFetch("/api/command", { method: "POST", body: JSON.stringify(cmd) }).then(r => {
+      if (r.body && r.body.flash) flashTiles(r.body.flash);
+      if (r.body && !r.body.ok && r.body.error){ state.message = r.body.error; draw(); }
+    }).catch(() => { server.connected = false; state.message = SERVER_DOWN; draw(); });
+  }
+  function serverPost(path, body){
+    return apiFetch(path, { method: "POST", body: body ? JSON.stringify(body) : undefined })
+      .then(r => { refreshServerGames(); return r; })
+      .catch(() => { server.connected = false; state.message = SERVER_DOWN; draw(); return { ok:false }; });
+  }
+  function serverUndo(){ serverPost("/api/game/undo"); }
+  function serverRedo(){ serverPost("/api/game/redo"); }
+  function togglePauseServer(){ serverPost("/api/game/pause", { paused: !!(server.meta && server.meta.running) }); }
+  function stepServer(){ serverPost("/api/game/step"); }
+  // Start a brand-new game from a layout (premade templates / Import JSON), switching to it.
+  async function serverNewFromLayout(name, layout){
+    const r = await serverPost("/api/game/new", { name, layout });
+    if (r && r.body && r.body.ok) state.message = `New game "${r.body.name}"`;
+    else if (r && r.body) state.message = "Server rejected layout: " + (r.body.error || "");
+    draw();
+  }
+  async function serverLoadGame(id){
+    const r = await serverPost("/api/game/load", { id });
+    if (r && r.body && r.body.ok) state.message = `Loaded "${r.body.name}"`;
+  }
+  async function serverSaveAs(){
+    const name = (prompt("Save as a new game — name:", (server.meta && server.meta.name) || "New game") || "").trim();
+    if (!name) return;
+    const r = await serverPost("/api/game/save-as", { name });
+    if (r && r.body && r.body.ok) state.message = `Saved as new game "${r.body.name}"`;
+    draw();
+  }
+  function serverRename(name){ const n = (name || "").trim(); if (n) serverPost("/api/game/rename", { name: n }); }
+
+  function clockFromFrames(f){ return formatClock(f || 0); }
+  // Reflect connection + current game in the Game panel and (re)build the load-game dropdown.
+  function syncServerUI(){
+    const statusEl = document.getElementById("serverStatus");
+    if (statusEl){
+      if (server.connected){ statusEl.textContent = server.meta ? `live${server.meta.running ? "" : " · paused"}` : "live"; statusEl.className = "srv-status srv-live"; }
+      else { statusEl.textContent = SERVER_DOWN; statusEl.className = "srv-status srv-off"; }
+    }
+    const nameInput = document.getElementById("gameName");
+    if (nameInput && document.activeElement !== nameInput) nameInput.value = (server.meta && server.meta.name) || "";
+    const sel = document.getElementById("loadGameSelect");
+    if (sel && document.activeElement !== sel){
+      const cur = server.meta && server.meta.id;
+      sel.innerHTML = `<option value="">Load game&hellip;</option>` +
+        serverGamesCache.map(g => `<option value="${g.id}"${g.id===cur?" disabled":""}>${escapeHtml(g.name||g.id)} · ${clockFromFrames(g.simFrame)}${g.id===cur?" (current)":""}</option>`).join("");
+    }
+  }
+
+  // Operate tool: left-click throws a switch or clears/cancels a manual signal. The action is a
+  // command to the authoritative server game (the same one the Station Master API issues); the
+  // result returns on the next streamed snapshot.
   function operateClick(x,y){
     closeContext();
     const tile = getTile(x,y);
     if (!tile) return;
     if (tile.kind === "switch"){
-      if (switchLocked(x,y)){ flashTiles([key(x,y)]); state.message = "Switch is locked by a cleared route"; draw(); return; }
-      const other = switchOther(tile);
-      if (other != null){
-        tile.current = other;
-        state.message = `Switch ${placeLabel(x,y)} → ${DIRS[other].name}`;
-      }
-      updateSignals();
-      draw();
+      mutate({ type: "throwSwitch", x, y });
       return;
     }
     if (tile.kind === "signal"){
-      const dirs = manualDirs(tile);
-      if (!dirs.length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
-      for (const dir of dirs) toggleManualSignal(x,y,dir);
+      if (!manualDirs(tile).length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      mutate({ type: "toggleSignal", x, y });
       return;
     }
   }
@@ -2003,17 +1221,12 @@
     if (state.selectedTool === "select" || state.selectedTool === "operate") return;
     if (state.selectedTool === "erase"){
       if (!getTile(x,y) && !state.trains.some(t => trainOccupies(t,x,y))) return;
-      pushHistory();
-      removeTile(x,y);
-      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
-    } else {
-      const tile = makeTile(state.selectedTool);
-      if (!tile) return;
-      pushHistory();
-      setTile(x,y,tile);
+      mutate({type:"removeTile", x, y});
+      return;
     }
-    updateSignals();
-    draw();
+    const tile = makeTile(state.selectedTool);
+    if (!tile) return;
+    mutate({type:"setTile", x, y, tile});
   }
 
   // Middle-click eyedropper: make the active tool match the tile under the cursor
@@ -2059,6 +1272,7 @@
     draw();
   }
   canvas.addEventListener("pointerdown", event => {
+    closeStationContext();
     if (event.button === 1){
       event.preventDefault();
       const p = pointerPos(event);
@@ -2112,9 +1326,8 @@
     if (state.drag.select){
       if (state.drag.station){
         if (state.drag.moved){
-          const st = addStation(normRect(state.selecting));
+          const st = createStation(normRect(state.selecting));
           state.message = `Created ${st.name}`;
-          refreshStationsUI();
         }
         state.selecting = null;
         state.drag = null;
@@ -2159,6 +1372,11 @@
   canvas.addEventListener("contextmenu", event => {
     event.preventDefault();
     const p = pointerPos(event);
+    // Right-clicking a station's name label opens the station pop-up (rename + Station Master
+    // instructions), taking priority over the tile underneath it.
+    const st = stationLabelAt(p.x, p.y);
+    if (st){ closeContext(); openStationContext(st, event.clientX, event.clientY); return; }
+    closeStationContext();
     const w = screenToWorld(p.x,p.y);
     const tile = getTile(w.x,w.y);
     if (!tile) return closeContext();
@@ -2244,79 +1462,147 @@
     contextMenu.classList.add("open");
   }
   function closeContext(){ contextMenu.classList.remove("open"); }
+
+  // ---- Station pop-up: rename + Station Master instructions -------------------------------
+  // The Station Master is the operator (human or, soon, an external API) responsible for setting
+  // a station's switches and manual signals; `instructions` is the free-text brief it works from.
+  const stationMenu = document.getElementById("stationMenu");
+  function stationById(id){ return state.stations.find(s => s.id === id); }
+  // Station edits are layout changes → send the whole (small) stations array to the server.
+  function commitStations(stations){ mutate({ type: "setStations", stations }); }
+  function patchStation(id, patch){ commitStations(state.stations.map(s => s.id === id ? { ...s, ...patch } : s)); }
+  function deleteStation(id){ commitStations(state.stations.filter(s => s.id !== id)); }
+  function createStation(rect){
+    const r = normRect(rect);
+    const id = state.nextStationId;
+    commitStations(state.stations.concat([{ id, name:`Station ${id}`, instructions:"", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1} }]));
+    return { id, name:`Station ${id}` };
+  }
+  // The station whose on-map name label contains canvas point (px,py), or null. Mirrors
+  // drawStationLabels' geometry exactly; later stations draw on top, so the last match wins.
+  function stationLabelAt(px,py){
+    const s = tileSize();
+    ctx.save();
+    ctx.font = stationLabelFont(s);
+    let hit = null;
+    for (const st of state.stations){
+      const r = normRect(st.rect); if (!r) continue;
+      const a = worldToScreen(r.x0, r.y0);
+      const tw = ctx.measureText(stationLabelText(st)).width;
+      const bh = Math.max(14, s*.42);
+      if (px >= a.x+2 && px <= a.x+2+tw+10 && py >= a.y+2 && py <= a.y+2+bh) hit = st;
+    }
+    ctx.restore();
+    return hit;
+  }
+  function openStationContext(st, clientX, clientY){
+    stationMenu.dataset.id = st.id;
+    stationMenu.innerHTML =
+      `<h2>Station</h2>` +
+      `<label class="field"><span>Name</span><input name="name" type="text" maxlength="32" value="${escapeHtml(st.name||"")}" placeholder="Station ${st.id}"></label>` +
+      `<label class="field grow"><span>Station Master instructions</span>` +
+        `<textarea name="instructions" placeholder="Free-text orders for the Station Master — who sets this station's switches and manual signals.">${escapeHtml(st.instructions||"")}</textarea></label>` +
+      `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>`;
+    stationMenu.classList.add("open");
+    // Place near the click, clamped to the stage using the pop-up's actual (possibly resized) size.
+    const rect = stage.getBoundingClientRect();
+    const w = stationMenu.offsetWidth, h = stationMenu.offsetHeight;
+    stationMenu.style.left = Math.max(8, Math.min(clientX - rect.left, rect.width - w - 8)) + "px";
+    stationMenu.style.top = Math.max(8, Math.min(clientY - rect.top, rect.height - h - 8)) + "px";
+    const f = stationMenu.querySelector("input[name=name]"); if (f) f.focus();
+  }
+  function closeStationContext(){ stationMenu.classList.remove("open"); }
+  // Drag the pop-up by its header so it doesn't cover the station you're writing instructions for.
+  let stationDrag = null;
+  stationMenu.addEventListener("pointerdown", event => {
+    if (event.target.tagName !== "H2") return;
+    const r = stationMenu.getBoundingClientRect();
+    stationDrag = { dx: event.clientX - r.left, dy: event.clientY - r.top };
+    stationMenu.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  stationMenu.addEventListener("pointermove", event => {
+    if (!stationDrag) return;
+    const s = stage.getBoundingClientRect();
+    stationMenu.style.left = Math.max(0, Math.min(event.clientX - s.left - stationDrag.dx, s.width - 60)) + "px";
+    stationMenu.style.top  = Math.max(0, Math.min(event.clientY - s.top  - stationDrag.dy, s.height - 30)) + "px";
+  });
+  const endStationDrag = event => { if (stationDrag){ stationDrag = null; try { stationMenu.releasePointerCapture(event.pointerId); } catch (e) {} } };
+  stationMenu.addEventListener("pointerup", endStationDrag);
+  stationMenu.addEventListener("pointercancel", endStationDrag);
+  stationMenu.addEventListener("submit", event => {
+    event.preventDefault();
+    const st = stationById(Number(stationMenu.dataset.id));
+    if (!st){ closeStationContext(); return; }
+    const data = new FormData(stationMenu);
+    const name = (data.get("name") || "").trim() || `Station ${st.id}`;
+    const instructions = (data.get("instructions") || "").trim();
+    patchStation(st.id, { name, instructions });
+    state.message = `Updated ${name}`;
+    closeStationContext();
+  });
+  stationMenu.addEventListener("click", event => {
+    if (event.target.name !== "remove") return;
+    const st = stationById(Number(stationMenu.dataset.id));
+    closeStationContext();
+    if (st){ deleteStation(st.id); state.message = `Removed ${st.name}`; }
+  });
   contextMenu.addEventListener("click", event => {
     const t = event.target;
-    if (t.name === "delete"){
-      pushHistory();
-      removeTile(Number(contextMenu.dataset.x),Number(contextMenu.dataset.y));
-      closeContext();
-      updateSignals();
-      draw();
-      return;
-    }
-    const action = t.dataset && t.dataset.action;
-    if (!action) return;
     const x = Number(contextMenu.dataset.x);
     const y = Number(contextMenu.dataset.y);
+    if (t.name === "delete"){ mutate({type:"removeTile", x, y}); closeContext(); return; }
+    const action = t.dataset && t.dataset.action;
+    if (!action) return;
     const dir = Number(t.dataset.dir);
     const tile = getTile(x,y);
     if (!tile){ closeContext(); return; }
     const route = cloneRoute(tile.route || []);
+    let cmd = null;                                       // every config action is a setTile / removeTrain
     if (action === "spawn"){
       if (tile.kind !== "track"){ closeContext(); return; }
-      pushHistory();
-      setTile(x,y,{kind:"spawn", route, dir, type: state.selectedType});
+      cmd = {type:"setTile", x, y, tile:{kind:"spawn", route, dir, type: state.selectedType}};
       state.message = `Spawn heading ${DIRS[dir].name}`;
     } else if (action === "addstop"){
       if (tile.kind !== "track"){ closeContext(); return; }
-      pushHistory();
-      setTile(x,y,{kind:"stop", route, dir, dwellSeconds:DEFAULT_DWELL_SECONDS});
+      cmd = {type:"setTile", x, y, tile:{kind:"stop", route, dir, dwellSeconds:DEFAULT_DWELL_SECONDS}};
       state.message = `Stop facing ${DIRS[dir].name}`;
     } else if (action === "signal"){
-      pushHistory();
       const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
       if (!dirs.includes(dir)) dirs.push(dir);
-      setTile(x,y,{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()});
+      cmd = {type:"setTile", x, y, tile:{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()}};
       state.message = `Signal facing ${DIRS[dir].name}`;
     } else if (action === "unsignal"){
       if (tile.kind !== "signal"){ closeContext(); return; }
-      pushHistory();
       const dirs = signalDirs(tile).filter(d => d !== dir);
       const man = manualDirs(tile).filter(d => d !== dir);
-      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, manualDirs: man});
-      else setTile(x,y,{kind:"track", route});
+      cmd = {type:"setTile", x, y, tile: dirs.length ? {kind:"signal", route, dirs, manualDirs: man} : {kind:"track", route}};
       state.message = `Removed signal facing ${DIRS[dir].name}`;
     } else if (action === "togglemanual"){
       if (tile.kind !== "signal"){ closeContext(); return; }
-      pushHistory();
       const man = manualDirs(tile).slice();
-      const i = man.indexOf(dir);
-      if (i >= 0) man.splice(i,1); else man.push(dir);
-      if (man.length) tile.manualDirs = man; else delete tile.manualDirs;
+      const i = man.indexOf(dir); if (i >= 0) man.splice(i,1); else man.push(dir);
+      const nt = {kind:"signal", route, dirs: signalDirs(tile).slice()};
+      if (man.length) nt.manualDirs = man;
+      cmd = {type:"setTile", x, y, tile: nt};
       state.message = `${DIRS[dir].name} main is now ${man.includes(dir) ? "manual" : "automatic"}`;
     } else if (action === "signalboth"){
-      pushHistory();
       const dirs = tile.kind === "signal" ? signalDirs(tile).slice() : [];
       for (const d of route) if (!dirs.includes(d)) dirs.push(d);
-      setTile(x,y,{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()});
+      cmd = {type:"setTile", x, y, tile:{kind:"signal", route, dirs, manualDirs: manualDirs(tile).slice()}};
       state.message = `Signals both ways`;
     } else if (action === "unsignalboth"){
       if (tile.kind !== "signal"){ closeContext(); return; }
-      pushHistory();
       const dirs = signalDirs(tile).filter(d => !route.includes(d));
       const man = manualDirs(tile).filter(d => !route.includes(d));
-      if (dirs.length) setTile(x,y,{kind:"signal", route, dirs, manualDirs: man});
-      else setTile(x,y,{kind:"track", route});
+      cmd = {type:"setTile", x, y, tile: dirs.length ? {kind:"signal", route, dirs, manualDirs: man} : {kind:"track", route}};
       state.message = `Removed signals both ways`;
     } else if (action === "removetrain"){
-      const before = state.trains.length;
-      state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
-      const removed = before - state.trains.length;
-      state.message = removed > 1 ? `Removed ${removed} trains` : (removed ? `Removed train` : `No train here`);
+      cmd = {type:"removeTrain", x, y};
+      state.message = `Removed train`;
     }
+    if (cmd) mutate(cmd);
     closeContext();
-    updateSignals();
-    draw();
   });
   contextMenu.addEventListener("submit", event => {
     event.preventDefault();
@@ -2324,27 +1610,20 @@
     const y = Number(contextMenu.dataset.y);
     const tile = getTile(x,y);
     const data = new FormData(contextMenu);
-    if (!tile) return;
-    pushHistory();
+    if (!tile){ closeContext(); return; }
+    const nt = JSON.parse(JSON.stringify(tile));         // edit a copy, then send it to the server
     const routeShape = data.get("routeShape");
-    if (routeShape != null) tile.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
-    if (data.get("dir") != null) tile.dir = Number(data.get("dir"));
-    if (data.get("type")) tile.type = Number(data.get("type"));
-    if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) tile.name = v; else delete tile.name; }
-    if (data.get("dwellSeconds")){
-      tile.dwellSeconds = Number(data.get("dwellSeconds"));
-      delete tile.dwell;
+    if (routeShape != null) nt.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
+    if (data.get("dir") != null) nt.dir = Number(data.get("dir"));
+    if (data.get("type")) nt.type = Number(data.get("type"));
+    if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) nt.name = v; else delete nt.name; }
+    if (data.get("dwellSeconds")){ nt.dwellSeconds = Number(data.get("dwellSeconds")); delete nt.dwell; }
+    if (nt.kind === "switch"){
+      if (data.get("switchCurrent") != null){ const c = Number(data.get("switchCurrent")); if (nt.branches.includes(c)) nt.current = c; }
+      if (!nt.branches.includes(switchCurrent(nt))) nt.current = nt.branches[0];
     }
-    if (tile.kind === "switch"){
-      if (data.get("switchCurrent") != null){
-        const c = Number(data.get("switchCurrent"));
-        if (tile.branches.includes(c)) tile.current = c;
-      }
-      if (!tile.branches.includes(switchCurrent(tile))) tile.current = tile.branches[0];
-    }
+    mutate({type:"setTile", x, y, tile: nt});
     closeContext();
-    updateSignals();
-    draw();
   });
 
   let syncControls = () => draw();
@@ -2352,11 +1631,6 @@
   let refreshStationsUI = () => {};
   function updatePauseButton(){
     document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";
-  }
-  function togglePause(){
-    state.paused = !state.paused;
-    updatePauseButton();
-    draw();
   }
   function closeAllPalettes(){
     for (const palette of document.querySelectorAll("details.palette")) palette.open = false;
@@ -2467,20 +1741,19 @@
       for (const tr of state.trains) if (tr.type === id) return true;
       return false;
     }
+    // Train types are layout state → send the whole list to the server. `selectedType` (which
+    // type new spawns use) is a local UI choice the snapshot does not overwrite.
+    function commitTypes(types){ mutate({ type: "setTrainTypes", trainTypes: types, selectedType: state.selectedType }); }
     function addTrainType(){
       const id = nextTypeId();
-      state.trainTypes.push({id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:""});
       state.selectedType = id;
-      buildTypeEditor();
-      draw();
+      commitTypes(state.trainTypes.concat([{id, color: DEFAULT_TYPE_COLORS[(id-1) % DEFAULT_TYPE_COLORS.length], name:""}]));
     }
     function removeTrainType(id){
       if (state.trainTypes.length <= 1){ state.message = "Keep at least one train type"; draw(); return; }
       if (typeInUse(id)){ state.message = `Type #${id} is in use — can't remove`; draw(); return; }
-      state.trainTypes = state.trainTypes.filter(t => t.id !== id);
-      if (state.selectedType === id) state.selectedType = state.trainTypes[0].id;
-      buildTypeEditor();
-      draw();
+      if (state.selectedType === id){ const left = state.trainTypes.filter(t => t.id !== id); state.selectedType = left[0].id; }
+      commitTypes(state.trainTypes.filter(t => t.id !== id));
     }
     // Build the train-types editor: one row per type (swatch=select-for-spawn,
     // colour picker, name field, delete) plus an "add type" button.
@@ -2498,10 +1771,11 @@
         swatch.addEventListener("click", () => { state.selectedType = t.id; buildTypeEditor(); draw(); });
         const col = document.createElement("input");
         col.type = "color"; col.value = t.color; col.title = "Display colour";
-        col.addEventListener("input", () => { t.color = col.value; swatch.style.background = col.value; draw(); });
+        col.addEventListener("input", () => { swatch.style.background = col.value; }); // live preview
+        col.addEventListener("change", () => commitTypes(state.trainTypes.map(x => x.id === t.id ? { ...x, color: col.value } : x)));
         const nm = document.createElement("input");
         nm.type = "text"; nm.className = "type-name"; nm.value = t.name || ""; nm.placeholder = "name"; nm.maxLength = 16;
-        nm.addEventListener("change", () => { t.name = nm.value.trim(); });
+        nm.addEventListener("change", () => commitTypes(state.trainTypes.map(x => x.id === t.id ? { ...x, name: nm.value.trim() } : x)));
         const del = document.createElement("button");
         del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove type";
         del.addEventListener("click", () => removeTrainType(t.id));
@@ -2531,30 +1805,31 @@
         row.className = "type-row";
         const nm = document.createElement("input");
         nm.type = "text"; nm.className = "type-name"; nm.value = st.name || ""; nm.placeholder = "station name"; nm.maxLength = 32;
-        nm.addEventListener("change", () => { st.name = nm.value.trim() || `Station ${st.id}`; draw(); });
+        nm.addEventListener("change", () => patchStation(st.id, { name: nm.value.trim() || `Station ${st.id}` }));
+        const notes = document.createElement("button");
+        notes.type = "button"; notes.className = "type-notes" + (st.instructions && st.instructions.trim() ? " has-notes" : "");
+        notes.textContent = "✎"; notes.title = "Station Master instructions";
+        notes.addEventListener("click", () => {
+          const r = notes.getBoundingClientRect();
+          openStationContext(st, r.right, r.bottom);
+        });
         const del = document.createElement("button");
         del.type = "button"; del.className = "type-del"; del.textContent = "×"; del.title = "Remove station";
-        del.addEventListener("click", () => { removeStation(st.id); buildStationList(); draw(); });
-        row.append(nm, del);
+        del.addEventListener("click", () => deleteStation(st.id));
+        row.append(nm, notes, del);
         stationList.appendChild(row);
       }
     }
     refreshStationsUI = buildStationList;
     buildStationList();
     updatePauseButton();
-    document.getElementById("pauseBtn").addEventListener("click", togglePause);
-    document.getElementById("stepBtn").addEventListener("click", simStep);
-    document.getElementById("undoBtn").addEventListener("click", undo);
-    document.getElementById("redoBtn").addEventListener("click", redo);
-    document.getElementById("saveBtn").addEventListener("click", () => {
-      localStorage.setItem("tinytrains-manual-layout", serialize());
-      state.message = "Saved in this browser";
-      draw();
-    });
-    document.getElementById("loadBtn").addEventListener("click", () => {
-      loadBrowserSave();
-      draw();
-    });
+    document.getElementById("pauseBtn").addEventListener("click", togglePauseServer);
+    document.getElementById("stepBtn").addEventListener("click", stepServer);
+    document.getElementById("undoBtn").addEventListener("click", serverUndo);
+    document.getElementById("redoBtn").addEventListener("click", serverRedo);
+    document.getElementById("gameName").addEventListener("change", e => serverRename(e.target.value));
+    document.getElementById("loadGameSelect").addEventListener("change", e => { const id = e.target.value; e.target.value = ""; if (id) serverLoadGame(id); });
+    document.getElementById("saveAsBtn").addEventListener("click", serverSaveAs);
     document.getElementById("exportBtn").addEventListener("click", () => openIO("export"));
     document.getElementById("importBtn").addEventListener("click", () => openIO("import"));
     document.getElementById("notifyClear").addEventListener("click", () => { notifyLog.innerHTML = ""; });
@@ -2579,19 +1854,20 @@
       ioText.value = serialize();
     } else {
       try {
-        deserialize(ioText.value);
+        const layout = JSON.parse(ioText.value);
+        if (!layout || !Array.isArray(layout.tiles)) throw new Error("missing tiles array");
+        serverNewFromLayout((layout.name || "Imported"), layout); // import starts a new server game
         ioPanel.classList.remove("open");
-        state.message = "Imported JSON";
       } catch (err) {
         state.message = "Import failed: " + err.message;
+        draw();
       }
-      draw();
     }
   });
 
   // ---- Pre-made layouts (offered in the Save / Load dropdown) ----
   // Each entry's `data` is a full layout object in the same shape serialize()
-  // emits; selecting one runs it through deserialize(), replacing everything.
+  // emits; selecting one starts a new server game from that layout (serverNewFromLayout).
   const PREMADE_LAYOUTS = [
     {
       name: "Loopy",
@@ -4994,92 +4270,13 @@
     });
     sel.addEventListener("change", () => {
       const layout = PREMADE_LAYOUTS[Number(sel.value)];
-      sel.value = ""; // back to the "Pre-made layouts…" placeholder, so it can be picked again
+      sel.value = ""; // back to the "New from template…" placeholder, so it can be picked again
       if (!layout) return;
-      if (!confirm(`Replace the current layout with the pre-made "${layout.name}"? This cannot be undone.`)) return;
-      try {
-        deserialize(JSON.stringify(layout.data));
-        state.message = `Loaded "${layout.name}"`;
-      } catch (err) {
-        state.message = "Load failed: " + err.message;
-      }
-      draw();
+      // Templates start a NEW server game (the current game is already autosaved and stays listed).
+      serverNewFromLayout(layout.name, layout.data);
     });
   })();
 
-  function serialize(){
-    return JSON.stringify({
-      version: 3,
-      trainTypes: state.trainTypes.map(t => ({id: t.id, color: t.color, name: t.name || ""})),
-      stations: state.stations,
-      tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
-      view: state.view
-    }, null, 2);
-  }
-  // Bring a tile up to the manual-builder model. Imports of older / modern layouts are
-  // simplified: distants become plain track, caution flags drop, stop filters & timetables
-  // and switch type-filters are discarded, and every switch becomes a plain manual switch
-  // set to its old default branch.
-  function migrateTile(tile){
-    delete tile.caution;
-    if (tile.kind === "distant") return {kind: "track", route: tile.route};
-    if (tile.kind === "spawn" && tile.type == null && tile.color != null){
-      tile.type = LEGACY_COLOR_IDS[tile.color] || 1;
-      delete tile.color;
-    }
-    if (tile.kind === "stop"){ delete tile.filter; delete tile.timetable; }
-    if (tile.kind === "switch"){
-      if (tile.current == null) tile.current = (tile.default != null ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]));
-      delete tile.mode; delete tile.default; delete tile.filters; delete tile.defaultBranch;
-    }
-    return tile;
-  }
-  function deserialize(text){
-    const data = JSON.parse(text);
-    if (!data || !Array.isArray(data.tiles)) throw new Error("Missing tiles array");
-    state.trainTypes = (Array.isArray(data.trainTypes) && data.trainTypes.length)
-      ? data.trainTypes.map(t => ({id: t.id, color: t.color || UNKNOWN_TYPE_COLOR, name: t.name || ""}))
-      : defaultTrainTypes();
-    state.tiles = new Map();
-    for (const item of data.tiles){
-      if (!Number.isFinite(item.x) || !Number.isFinite(item.y) || !item.tile) continue;
-      setTile(item.x,item.y, migrateTile(item.tile));
-    }
-    if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
-    state.stations = (Array.isArray(data.stations) ? data.stations : [])
-      .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
-    state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
-    state.trains = [];
-    state.nextTrainId = 1;
-    state.tick = 0;
-    state.frame = 0;
-    state.simFrame = 0;
-    state.manualGreen = new Set();
-    state.routeLocks = [];
-    state.lockedSwitchKeys = new Set();
-    if (notifyLog) notifyLog.innerHTML = "";
-    if (data.view) state.view = {...state.view, ...data.view};
-    refreshColorUI();
-    refreshStationsUI();
-    updateSignals();
-  }
-
-  function loadBrowserSave(){
-    const saved = localStorage.getItem("tinytrains-manual-layout");
-    if (!saved){
-      state.message = "No browser save found";
-      return false;
-    }
-    try {
-      deserialize(saved);
-      state.message = "Loaded browser save";
-      return true;
-    } catch (err) {
-      state.message = "Browser save failed: " + err.message;
-      return false;
-    }
-  }
 
   window.addEventListener("keydown", event => {
     if (event.target && ["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName)) return;
@@ -5096,16 +4293,17 @@
       syncControls();
       return;
     }
-    if (mod && (event.key === "z" || event.key === "Z")){ event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
-    if (mod && (event.key === "y" || event.key === "Y")){ event.preventDefault(); redo(); return; }
+    if (mod && (event.key === "z" || event.key === "Z")){ event.preventDefault(); event.shiftKey ? serverRedo() : serverUndo(); return; }
+    if (mod && (event.key === "y" || event.key === "Y")){ event.preventDefault(); serverRedo(); return; }
     if (mod && (event.key === "c" || event.key === "C")){ event.preventDefault(); copySelection(); return; }
     if (mod && (event.key === "x" || event.key === "X")){ event.preventDefault(); cutSelection(); return; }
     if (mod && (event.key === "v" || event.key === "V")){ event.preventDefault(); pasteClipboard(); return; }
     if ((event.key === "Delete" || event.key === "Backspace") && state.selection){ event.preventDefault(); deleteSelection(); return; }
-    if (event.code === "Space"){ event.preventDefault(); togglePause(); }
-    if (event.key === "s"){ simStep(); draw(); } // manual single-step (simStep no longer self-draws)
+    if (event.code === "Space"){ event.preventDefault(); togglePauseServer(); }
+    if (event.key === "s"){ stepServer(); } // manual single-step (server advances one frame)
     if (event.key === "Escape"){
       closeContext();
+      closeStationContext();
       ioPanel.classList.remove("open");
       if (state.selection || state.selecting){
         state.selection = null; state.selecting = null;
@@ -5121,10 +4319,10 @@
   });
 
   setupControls();
-  loadBrowserSave();
   updateSignals();
   resize();
-  notify("info", "Manual control ready — switch to Operate to throw switches and clear manual signals.");
+  notify("info", "Connecting to the game server…");
+  serverConnect(); // server-only: subscribe to the live game and render its streamed state
   animation();
 })();
 </script>
