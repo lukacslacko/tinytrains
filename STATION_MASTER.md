@@ -118,12 +118,17 @@ Two ready-made launchers (start `node server.js` first; load a game with station
 
 **Claude (via the MCP server):**
 ```
-./station-master.sh <station> [game]            # e.g. ./station-master.sh Tiszai Miskolc
+./station-master.sh <station[,station2,…]> [game]   # e.g. ./station-master.sh Tiszai Miskolc
+./station-master.sh Tiszai,Foter,Szikra Miskolc     # one AI managing three stations
 MODEL=haiku EFFORT=low ./station-master.sh Tiszai Miskolc
 ```
 Defaults to the cheapest model + lowest reasoning effort (the task is easy). It launches `claude`
-with the station's MCP server, allows only the station tools, and tells it to loop on `await_events`.
-Run one per station in its own terminal.
+with the MCP server, allows only the station tools, and tells it to loop on `await_events`.
+
+**One master, many stations (and games).** `--station` is a comma list; each entry is `Station` (in
+`--game`) or `Game:Station` to be explicit. The MCP server then polls all of them, and **every
+`await_events` event is tagged with its `station` and `game`** — the master acts on it at that station
+and passes the station to each tool. (A master with a single station may omit the station argument.)
 
 **A local model (via Ollama) — no API, runs on your Mac:**
 ```

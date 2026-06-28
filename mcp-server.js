@@ -1,22 +1,22 @@
 // Tiny Trains — Station Master MCP server (Node, zero dependencies).
 //
-// Exposes one station's controls to an AI as MCP tools, so you can run ONE AI instance per station,
-// each acting as that station's master. It is a thin client of the game server (server.js) over
-// HTTP, scoped to a single station.
+// Exposes station controls to an AI as MCP tools. ONE instance can manage one OR several stations
+// (and even stations in different games). It is a thin client of the game server (server.js) over HTTP.
 //
-//   node mcp-server.js --station <name|id> [--server http://localhost:8765]
-//   (env: TINYTRAINS_STATION, TINYTRAINS_SERVER)
+//   node mcp-server.js --station Tiszai[,Foter,...] [--game Miskolc] [--server http://localhost:8765]
+//   (env: TINYTRAINS_STATION, TINYTRAINS_GAME, TINYTRAINS_SERVER)
+//   --station is a comma list; each entry is "Station" (in --game) or "Game:Station" to be explicit.
 //
-// Configure it in an MCP host (e.g. Claude Code) as a stdio server, one per station:
-//   "tinytrains-tiszai": { "command": "node",
-//     "args": ["/abs/path/mcp-server.js", "--station", "Tiszai"],
+// Configure it in an MCP host (e.g. Claude Code) as a stdio server:
+//   "tinytrains": { "command": "node",
+//     "args": ["/abs/path/mcp-server.js", "--station", "Tiszai,Foter,Szikra", "--game", "Miskolc"],
 //     "env": { "TINYTRAINS_SERVER": "http://localhost:8765" } }
 //
 // Transport: MCP over stdio = newline-delimited JSON-RPC 2.0 (one message per line) on stdin/stdout.
-// The notification mechanism: the AI calls `await_events`, which long-polls the server and BLOCKS
-// until a watched train approaches/arrives, then returns the event. Keep calling it — it is the
-// station master's event loop. (MCP has no reliable way to spontaneously wake an idle model; a
-// blocking tool the agent waits inside is the robust, host-agnostic pattern.)
+// Notifications: the AI calls `await_events`, which long-polls the server and BLOCKS until something
+// happens at one of its stations, then returns the event TAGGED with its station and game. Keep
+// calling it — it is the master's event loop. (MCP can't reliably wake an idle model; a blocking
+// tool the agent waits inside is the robust, host-agnostic pattern.)
 
 "use strict";
 
@@ -27,144 +27,151 @@ function arg(name, envName, def){
   return def;
 }
 const SERVER = (arg("server", "TINYTRAINS_SERVER", "http://localhost:8765")).replace(/\/$/, "");
-const STATION = arg("station", "TINYTRAINS_STATION", "");
-const GAME = arg("game", "TINYTRAINS_GAME", ""); // which game on the server this station belongs to
+const DEFAULT_GAME = arg("game", "TINYTRAINS_GAME", "");
+// POSTS = the {game, station} assignments this master holds.
+const POSTS = arg("station", "TINYTRAINS_STATION", "").split(",").map(s => s.trim()).filter(Boolean).map(entry => {
+  const i = entry.indexOf(":");
+  return i >= 0 ? { game: entry.slice(0, i).trim(), station: entry.slice(i + 1).trim() } : { game: DEFAULT_GAME, station: entry };
+});
+const cursors = {};       // game -> last seen watch-event seq, advanced by await_events
 
-let cursor = 0; // last seen watch-event seq, advanced by await_events
+function log(...a){ process.stderr.write("[station-master] " + a.join(" ") + "\n"); } // stderr: never the protocol stream
 
-function log(...a){ process.stderr.write("[station-master] " + a.join(" ") + "\n"); } // stderr: never on the protocol stream
-
-// Every call is scoped to this server's GAME: appended to the query for GET, merged into the body
-// for POST/DELETE. So this MCP instance only ever touches its own game.
-async function api(method, path, body){
+async function api(method, path, body, game){
   let url = SERVER + path;
-  if (method === "GET" && GAME) url += (path.includes("?") ? "&" : "?") + "game=" + encodeURIComponent(GAME);
-  const res = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: method !== "GET" ? JSON.stringify(Object.assign({ game: GAME }, body || {})) : undefined
-  });
+  if (method === "GET" && game) url += (path.includes("?") ? "&" : "?") + "game=" + encodeURIComponent(game);
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" },
+    body: method !== "GET" ? JSON.stringify(Object.assign({ game }, body || {})) : undefined });
   let json = null; try { json = await res.json(); } catch {}
   return { ok: res.ok, status: res.status, body: json };
 }
-function need(station){
-  const s = station || STATION;
-  if (!s) throw new Error("no station configured — start with --station <name> or pass a station argument");
-  return s;
+// Which {game, station} a tool call targets: from the station arg (+ optional game). A master with
+// exactly one post may omit the station; one managing several must name it.
+function post(a){
+  const station = a && a.station, game = a && a.game;
+  if (station){
+    const m = POSTS.filter(p => p.station.toLowerCase() === String(station).toLowerCase() && (!game || p.game.toLowerCase() === String(game).toLowerCase()));
+    if (m.length === 1) return m[0];
+    if (m.length > 1) throw new Error(`station "${station}" is in several games — also pass game`);
+    return { game: game || DEFAULT_GAME, station };           // not one of mine: act on it anyway
+  }
+  if (POSTS.length === 1) return POSTS[0];
+  throw new Error(`you manage ${POSTS.length} stations — pass the station argument (${POSTS.map(p => p.station).join(", ")})`);
 }
+function someGame(a){ return (a && a.game) || DEFAULT_GAME || (POSTS[0] && POSTS[0].game); }
 
 // ---- Tools --------------------------------------------------------------------------------
+// Every per-station tool takes an optional `station` (and `game`); a master with one post may omit
+// it, one with several must name the station each event told it about.
+const STATION_PROP = { station: { type: "string", description: "which of your stations (omit if you manage only one)" }, game: { type: "string", description: "game name (only if a station name is ambiguous across games)" } };
 const TOOLS = [
   { name: "get_guide",
-    description: "Read the global Station Master operating brief FIRST: how the railway works, how to read your instructions, and the proactive routing loop (watch arrivals → await_events → set route + clear signal before the train arrives).",
+    description: "Read the global Station Master operating brief FIRST: how the railway works, set_path, and the proactive loop. If you manage several stations, you run the same loop for each.",
     inputSchema: { type: "object", properties: {} },
     run: async () => (await api("GET", "/api/guide")).body.guide },
 
   { name: "get_my_instructions",
-    description: "Your station's free-text orders: which switches to set and signals to clear for each arriving train (by line/type and entry point). Read this after the guide.",
-    inputSchema: { type: "object", properties: { station: { type: "string", description: "station override (defaults to this server's station)" } } },
-    run: async (a) => (await api("GET", `/api/stations/${encodeURIComponent(need(a.station))}/instructions`)).body },
+    description: "A station's free-text orders: which switches to set / signals to clear for each arriving train. Read it for EACH station you manage.",
+    inputSchema: { type: "object", properties: STATION_PROP },
+    run: async (a) => { const p = post(a); return { station: p.station, game: p.game, ...(await api("GET", `/api/stations/${encodeURIComponent(p.station)}/instructions`, null, p.game)).body }; } },
 
   { name: "list_stations",
-    description: "List all stations on the railway (names) for context. You only operate your own.",
-    inputSchema: { type: "object", properties: {} },
-    run: async () => ((await api("GET", "/api/stations")).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) },
+    description: "List all stations in a game (names). Also reports which stations YOU manage.",
+    inputSchema: { type: "object", properties: { game: { type: "string" } } },
+    run: async (a) => ({ youManage: POSTS, stations: ((await api("GET", "/api/stations", null, someGame(a))).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) }) },
 
   { name: "get_infrastructure",
-    description: "Your station's switches and signals with their LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (with its type and which way it wants to go). Check this regularly to find waiting trains and route them — not every waiting train fires a fresh event.",
-    inputSchema: { type: "object", properties: { station: { type: "string" } } },
-    run: async (a) => (await api("GET", `/api/stations/${encodeURIComponent(need(a.station))}`)).body.station },
+    description: "A station's switches and signals with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type + which way it wants to go). Check regularly to find waiting trains and route them.",
+    inputSchema: { type: "object", properties: STATION_PROP },
+    run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station; } },
 
   { name: "list_trains",
-    description: "Where EVERY train on the railway is right now and which way it is about to go: its type, the station/element it is at, its heading (compass), whether it is moving, and (if stopped) why it is waiting. Use it to understand the situation and spot trains already stuck at signals.",
-    inputSchema: { type: "object", properties: {} },
-    run: async () => (await api("GET", "/api/trains")).body.trains },
+    description: "Where EVERY train in a game is and which way it is about to go: type, station/element, heading (compass), moving?, and (if stopped) why it is waiting. Spot trains already stuck at signals.",
+    inputSchema: { type: "object", properties: { game: { type: "string" } } },
+    run: async (a) => (await api("GET", "/api/trains", null, someGame(a))).body.trains },
 
   { name: "set_switch",
-    description: "Set one of your switches so its stem connects to the given branch. direction is a compass bearing: N, NE, E, SE, S, SW, W, NW (it must be one of the switch's branches). Refused if the switch is locked by a route in progress.",
-    inputSchema: { type: "object", properties: {
-      element: { type: "string", description: "station-local switch name, e.g. '1'" },
-      direction: { type: "string", description: "compass bearing: N/NE/E/SE/S/SW/W/NW" },
-      station: { type: "string" }
-    }, required: ["element", "direction"] },
-    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/switch`, { name: a.element, to: a.direction })).body },
+    description: "Set one switch so its stem connects to the given branch. direction is a compass bearing (N/NE/E/SE/S/SW/W/NW) and must be one of the switch's branches. Refused if locked by a route in progress.",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "switch name, e.g. '1'" }, direction: { type: "string", description: "compass N/NE/E/SE/S/SW/W/NW" }, ...STATION_PROP }, required: ["element", "direction"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/switch`, { name: a.element, to: a.direction }, p.game)).body; } },
 
   { name: "clear_signal",
-    description: "Clear one of your manual signals to green, opening (and locking) the route ahead following the current switch settings. Set the switches FIRST. Refused (with a reason) if the path is broken, occupied, or conflicts with another locked route.",
-    inputSchema: { type: "object", properties: { element: { type: "string", description: "station-local signal name, e.g. 'A'" }, station: { type: "string" } }, required: ["element"] },
-    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/signal`, { name: a.element, action: "clear" })).body },
+    description: "Clear one manual signal to green, opening (and locking) the route ahead by the current switch settings. Set the switches FIRST. Refused (with a reason) if the path is broken/occupied/conflicting.",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal name, e.g. 'A'" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "clear" }, p.game)).body; } },
 
   { name: "set_signal_red",
-    description: "Set one of your manual signals back to red (only works before a train has taken the cleared route).",
-    inputSchema: { type: "object", properties: { element: { type: "string" }, station: { type: "string" } }, required: ["element"] },
-    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/signal`, { name: a.element, action: "red" })).body },
+    description: "Set one manual signal back to red (only before a train has taken the cleared route).",
+    inputSchema: { type: "object", properties: { element: { type: "string" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "red" }, p.game)).body; } },
 
   { name: "set_path",
-    description: "Set a whole route at once — the EASY way to follow a 'set path …' instruction (you don't have to work out each switch's direction). Give the path as element names: the entry SIGNAL the train arrives at, then the SWITCHES to thread through in order, and optionally a final signal or compass direction (N/NE/E/SE/S/SW/W/NW) to fix the last switch's exit. The system lines up every switch so the route passes, then clears the entry signal. Your instructions imply the entry signal: 'a train arrives at A: set path 1,2,3' → set_path(path=[\"A\",\"1\",\"2\",\"3\"]); 'set path 4 East' at B → set_path(path=[\"B\",\"4\",\"E\"]). Returns which switches were set, or why it couldn't satisfy the path.",
-    inputSchema: { type: "object", properties: {
-      path: { type: "array", items: { type: "string" }, description: "[entry signal, switch, switch, …, optional final signal or compass direction]" },
-      station: { type: "string" }
-    }, required: ["path"] },
-    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/path`, { path: a.path })).body },
+    description: "Route a train in one call — the EASY way to follow a 'set path …' instruction. Give the path as element names: the entry SIGNAL the train arrives at, then the SWITCHES in order, and optionally a final signal or compass direction. It lines up every switch and clears the entry signal. The entry signal is implied by your instruction: 'arrives at A: set path 1,2,3' → set_path(path=[\"A\",\"1\",\"2\",\"3\"]); 'set path 4 East' at B → set_path(path=[\"B\",\"4\",\"E\"]). Returns which switches were set, or why it couldn't.",
+    inputSchema: { type: "object", properties: { path: { type: "array", items: { type: "string" }, description: "[entry signal, switch, …, optional final signal or compass]" }, ...STATION_PROP }, required: ["path"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/path`, { path: a.path }, p.game)).body; } },
 
   { name: "watch",
-    description: "Ask to be notified about a train at one of your elements — a SIGNAL or a SWITCH. mode: 'approach' (fires EARLY, while the train is still a few tiles away and heading toward it — route proactively), 'reach' (train arrives on it), or 'pass' (the train's tail has CLEARED it). Use 'pass' on a SWITCH to learn the moment it is free to re-throw for the next train, and on a SIGNAL to learn when the block behind it has cleared so a following train may enter. Returns a watch id; await_events then delivers the events.",
-    inputSchema: { type: "object", properties: {
-      element: { type: "string", description: "station-local element name (signal or switch)" },
-      mode: { type: "string", enum: ["approach", "reach", "pass"], description: "default 'approach'" },
-      tiles: { type: "number", description: "for 'approach': how many tiles of lead (default 6)" },
-      station: { type: "string" }
-    }, required: ["element"] },
-    run: async (a) => { const st = need(a.station); return (await api("POST", "/api/watches", { station: st, owner: st, element: a.element, mode: a.mode || "approach", tiles: a.tiles })).body.watch; } },
+    description: "Be notified about a train at one of a station's elements — a SIGNAL or a SWITCH. mode: 'approach' (EARLY, while still a few tiles away — route proactively), 'reach' (arrives on it), 'pass' (its tail has CLEARED it). Use 'pass' on a SWITCH to learn when it's free to re-throw, on a SIGNAL to learn when the block behind cleared. Returns a watch id.",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal or switch name" }, mode: { type: "string", enum: ["approach", "reach", "pass"], description: "default 'approach'" }, tiles: { type: "number", description: "for 'approach': tiles of lead (default 6)" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", "/api/watches", { station: p.station, owner: p.station, element: a.element, mode: a.mode || "approach", tiles: a.tiles }, p.game)).body.watch; } },
 
   { name: "watch_arrivals",
-    description: "Convenience: set an 'approach' watch on EVERY signal in your station at once, so you are warned about all incoming trains. Call this once at startup, then loop on await_events.",
-    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["approach", "reach", "pass"] }, station: { type: "string" } } },
+    description: "Set an 'approach' watch on EVERY signal in a station at once. Call it once per station you manage at startup, then loop on await_events.",
+    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["approach", "reach", "pass"] }, ...STATION_PROP } },
     run: async (a) => {
-      const st = need(a.station);
-      const station = (await api("GET", `/api/stations/${encodeURIComponent(st)}`)).body.station;
+      const p = post(a);
+      const station = (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station;
       const made = [];
-      for (const sig of (station.signals || [])) {
-        if (!sig.name) continue;
-        const w = (await api("POST", "/api/watches", { station: st, owner: st, element: sig.name, mode: a.mode || "approach" })).body.watch;
+      for (const sig of (station.signals || [])){ if (!sig.name) continue;
+        const w = (await api("POST", "/api/watches", { station: p.station, owner: p.station, element: sig.name, mode: a.mode || "approach" }, p.game)).body.watch;
         if (w) made.push(w);
       }
-      return { watching: made.map(w => ({ element: w.element, mode: w.mode, id: w.id })) };
+      return { station: p.station, watching: made.map(w => ({ element: w.element, mode: w.mode, id: w.id })) };
     } },
 
   { name: "await_events",
-    description: "BLOCK until something happens for you, then return it: a watched TRAIN (the train's type number/name + which element + approach/reach/pass), or a MESSAGE from the human operator (mode 'message', with the text). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on what it returns (route trains per your instructions; answer operator messages with send_message), then call it again. If nothing happens within timeout_seconds it returns no events; just call it again to keep waiting.",
-    inputSchema: { type: "object", properties: { timeout_seconds: { type: "number", description: "how long to block, default 25, max 55" }, station: { type: "string" } } },
+    description: "BLOCK until something happens at ANY of your stations, then return the event(s), EACH TAGGED with its station and game: a watched TRAIN (type + element + approach/reach/pass) or a MESSAGE from the operator (mode 'message', with text). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on each event at the station it names (route per that station's instructions; answer messages with send_message), then call it again. Empty after the timeout just means call it again.",
+    inputSchema: { type: "object", properties: { timeout_seconds: { type: "number", description: "how long to block, default 25, max 55" } } },
     run: async (a) => {
-      const owner = need(a.station);
+      if (!POSTS.length) throw new Error("no stations configured — start with --station");
       const wait = Math.min(Math.max(Number(a.timeout_seconds) || 25, 1), 55);
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), (wait + 5) * 1000);
-      try {
-        const res = await fetch(`${SERVER}/api/notifications?owner=${encodeURIComponent(owner)}&after=${cursor}&wait=${wait}${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
-        const j = await res.json();
-        if (typeof j.cursor === "number") cursor = j.cursor;
-        const events = (j.events || []).map(e => e.mode === "message"
-          ? { mode: "message", from: e.from || "operator", message: e.text, clock: e.clock }
-          : { mode: e.mode, train: e.trainTypeName, trainType: e.trainType, trainId: e.trainId, element: e.element, clock: e.clock });
-        return events.length ? { events } : { events: [], note: "nothing within " + wait + "s — call await_events again to keep watching" };
-      } finally { clearTimeout(to); }
+      const byGame = {};
+      for (const p of POSTS) (byGame[p.game] = byGame[p.game] || []).push(p.station);
+      const ctrls = [];
+      const polls = Object.entries(byGame).map(([game, stations]) => {
+        const ctrl = new AbortController(); ctrls.push(ctrl);
+        const owner = stations.map(encodeURIComponent).join(",");
+        return fetch(`${SERVER}/api/notifications?owner=${owner}&after=${cursors[game] || 0}&wait=${wait}${game ? "&game=" + encodeURIComponent(game) : ""}`, { signal: ctrl.signal })
+          .then(r => r.json()).then(j => ({ game, j })).catch(() => ({ game, j: { events: [] } }));
+      });
+      // Resolve as soon as one game returns events (so we don't wait the full timeout); else when all do.
+      const winner = await new Promise(resolve => {
+        let pending = polls.length, lastEmpty = { game: Object.keys(byGame)[0], j: { events: [] } };
+        polls.forEach(pp => pp.then(r => { if (r.j.events && r.j.events.length) resolve(r); else { lastEmpty = r; if (--pending === 0) resolve(lastEmpty); } }));
+      });
+      ctrls.forEach(c => { try { c.abort(); } catch (e) {} });
+      const { game, j } = winner;
+      if (typeof j.cursor === "number") cursors[game] = j.cursor;
+      const events = (j.events || []).map(e => e.mode === "message"
+        ? { game, station: e.owner, mode: "message", from: e.from || "operator", message: e.text, clock: e.clock }
+        : { game, station: e.owner, mode: e.mode, train: e.trainTypeName, trainType: e.trainType, trainId: e.trainId, element: e.element, clock: e.clock });
+      return events.length ? { events } : { events: [], note: "nothing within " + wait + "s — call await_events again to keep watching" };
     } },
 
   { name: "send_message",
-    description: "Send a message to the human operator (it pops up in the game's notifications and highlights your station). Use it to report status, ask a question, reply to an operator message, or — once you've worked the station a while — SUGGEST A CLARIFICATION to your instructions when you find a gap, ambiguity, or improvement (prefix it 'Suggestion:').",
-    inputSchema: { type: "object", properties: { text: { type: "string" }, station: { type: "string" } }, required: ["text"] },
-    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/operator-message`, { text: a.text })).body },
+    description: "Send a message to the human operator (pops up in the game and highlights the station). Report status, ask a question, reply to an operator message, or — once you've worked a while — SUGGEST A CLARIFICATION to a station's instructions when you find a gap/ambiguity/improvement (prefix 'Suggestion:').",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/operator-message`, { text: a.text }, p.game)).body; } },
 
   { name: "list_watches",
-    description: "List the watches you currently have registered.",
-    inputSchema: { type: "object", properties: { station: { type: "string" } } },
-    run: async (a) => (await api("GET", `/api/watches?owner=${encodeURIComponent(need(a.station))}`)).body.watches },
+    description: "List the watches registered for a station.",
+    inputSchema: { type: "object", properties: STATION_PROP },
+    run: async (a) => { const p = post(a); return (await api("GET", `/api/watches?owner=${encodeURIComponent(p.station)}`, null, p.game)).body.watches; } },
 
   { name: "cancel_watch",
-    description: "Remove a watch by its id.",
-    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
-    run: async (a) => (await api("DELETE", `/api/watches/${Number(a.id)}`)).body }
+    description: "Remove a watch by its id (id is within a game).",
+    inputSchema: { type: "object", properties: { id: { type: "number" }, ...STATION_PROP }, required: ["id"] },
+    run: async (a) => { const p = post(a); return (await api("DELETE", `/api/watches/${Number(a.id)}`, null, p.game)).body; } }
 ];
 const TOOL_BY_NAME = Object.fromEntries(TOOLS.map(t => [t.name, t]));
 
@@ -176,11 +183,13 @@ function replyError(id, code, message){ send({ jsonrpc: "2.0", id, error: { code
 async function handle(msg){
   const { id, method, params } = msg;
   if (method === "initialize"){
+    const list = POSTS.map(p => p.station + (p.game ? ` (game ${p.game})` : "")).join(", ") || "(none configured)";
+    const multi = POSTS.length > 1;
     return reply(id, {
       protocolVersion: (params && params.protocolVersion) || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "tinytrains-station-master" + (STATION ? ":" + STATION : ""), version: "0.1.0" },
-      instructions: `You are the Station Master for station "${STATION || "(unset)"}" in game "${GAME || "(default)"}". Call get_guide and get_my_instructions, then watch_arrivals, then loop on await_events — acting on each notification.`
+      serverInfo: { name: "tinytrains-station-master", version: "0.2.0" },
+      instructions: `You are the Station Master for: ${list}. Call get_guide once, then get_my_instructions and watch_arrivals for EACH station you manage. Then loop on await_events — it returns each event TAGGED with its station${multi ? " and game" : ""}; act on it at that station (pass the station argument to every tool${multi ? "" : "; you have just one, so you may omit it"}).`
     });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return; // no response
@@ -214,4 +223,4 @@ process.stdin.on("data", chunk => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-log(`ready — station="${STATION || "(unset)"}" game="${GAME || "(default)"}" server=${SERVER}`);
+log(`ready — managing [${POSTS.map(p => p.station + (p.game ? "@" + p.game : "")).join(", ") || "none"}] server=${SERVER}`);

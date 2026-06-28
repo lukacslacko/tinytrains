@@ -1384,8 +1384,13 @@
     function publicWatch(w){ return {id:w.id, owner:w.owner, x:w.x, y:w.y, mode:w.mode, tiles:w.tiles, element:w.element||null, label:w.label||null}; }
     function addWatch(opts){
       opts = opts || {};
-      const w = {id: ++watchIdSeq, owner: opts.owner || "", x: Number(opts.x), y: Number(opts.y),
-        mode: (opts.mode === "reach" || opts.mode === "pass") ? opts.mode : "approach",
+      const owner = opts.owner || "", x = Number(opts.x), y = Number(opts.y);
+      const mode = (opts.mode === "reach" || opts.mode === "pass") ? opts.mode : "approach";
+      // Dedupe: re-registering the same watch (e.g. a master that reconnects) returns the existing
+      // one instead of stacking duplicate notifications.
+      const dup = state.watches.find(w => w.owner === owner && w.x === x && w.y === y && w.mode === mode);
+      if (dup) return publicWatch(dup);
+      const w = {id: ++watchIdSeq, owner, x, y, mode,
         tiles: opts.tiles != null ? Number(opts.tiles) : DEFAULT_APPROACH_TILES,
         element: opts.element || null, label: opts.label || null, _on: new Set()};
       state.watches.push(w);
@@ -1399,7 +1404,8 @@
     // reloaded and the counter reset), start from 0 so the poller resynchronises.
     function watchEventsSince(owner, after){
       const a = (after > watchEventSeq) ? 0 : (after || 0);
-      return state.watchEvents.filter(e => (!owner || e.owner === owner) && e.seq > a);
+      const set = owner == null ? null : new Set(Array.isArray(owner) ? owner : [owner]); // one or many owners
+      return state.watchEvents.filter(e => (!set || set.has(e.owner)) && e.seq > a);
     }
     // ---- Operator <-> Station Master chat ----
     // notifyOwner: a message FOR a station master — queued on its event stream so await_events

@@ -224,10 +224,14 @@ function parseDir(v){
 // for every station; the station-specific orders come from GET /api/stations/:id/instructions.
 const STATION_MASTER_GUIDE = `# Tiny Trains — Station Master
 
-You run ONE station: route trains through it by setting its switches and clearing its manual signals,
-following your station's instructions. Your tools act ONLY on your station. Elements have short local
-names (A, B, 1, 2 …) — the names your instructions use. Trains run on sight and never crash; a train
-stops only at a red signal, a switch set against it, or an occupied tile.
+You run one or more stations: route trains through them by setting switches and clearing manual
+signals, following each station's instructions. Elements have short local names (A, B, 1, 2 …) — the
+names the instructions use. Trains run on sight and never crash; a train stops only at a red signal, a
+switch set against it, or an occupied tile.
+
+If you manage SEVERAL stations, do the setup (get_my_instructions, watch_arrivals) for EACH, then run
+the one loop below: every await_events event is tagged with the station (and game) it belongs to —
+act on it at that station, and pass that station to each tool.
 
 ## The easy way to route a train: set_path
 Your instructions read like "when a train arrives at A: set path 1,2,3" or "train 2 → set path 5,3".
@@ -480,7 +484,8 @@ const server = http.createServer(async (req, res) => {
     // or `wait` seconds pass. How a Station Master AI receives notifications (via await_events).
     if (url === "/api/notifications" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
-      const owner = query.get("owner") || undefined;
+      const ownerParam = query.get("owner");                 // one station, or a comma-list of stations
+      const owner = ownerParam ? ownerParam.split(",").map(s => s.trim()).filter(Boolean) : undefined;
       const after = Number(query.get("after") || 0);
       const waitMs = Math.min(Math.max(Number(query.get("wait") || 25), 0), 55) * 1000;
       const deadline = Date.now() + waitMs;

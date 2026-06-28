@@ -9,8 +9,8 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-STATION="${1:-}"; GAME="${2:-}"
-if [ -z "$STATION" ]; then echo "usage: $0 <station> [game]   (env: OLLAMA_MODEL, TINYTRAINS_SERVER, OLLAMA_URL)" >&2; exit 1; fi
+STATION="${1:-}"; GAME="${2:-}"   # <station> may be a comma list, e.g. Tiszai,Foter,Szikra
+if [ -z "$STATION" ]; then echo "usage: $0 <station[,station2,...]> [game]   (env: OLLAMA_MODEL, TINYTRAINS_SERVER, OLLAMA_URL)" >&2; exit 1; fi
 
 MODEL="${OLLAMA_MODEL:-qwen2.5:7b}"
 OLLAMA="${OLLAMA_URL:-http://localhost:11434}"
