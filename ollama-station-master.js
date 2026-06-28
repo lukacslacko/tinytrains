@@ -121,11 +121,18 @@ ambiguous), do your best and also send_message a short "Suggestion: ..." for the
       if (ev.mode === "message"){
         console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
         await act(st, `The operator sent you a message: "${ev.text}". Reply with send_message if warranted, and take any switch/signal actions they ask for.`);
+      } else if (ev.mode === "waiting"){
+        // A train already stuck at a red signal, surfaced by the long-poll (no fresh edge event fires
+        // for it). Cooldown-dedupe so an un-clearable train isn't re-decided every poll.
+        const key = `${st}:${ev.element}:${ev.trainType}:${ev.wantsDir}`;
+        if (handled[key] && Date.now() - handled[key] < 10000) continue;
+        handled[key] = Date.now();
+        console.error(`\n→ [${st}] waiting ${ev.waitedSeconds}s: train "${ev.trainTypeName}" at ${ev.element} wants ${ev.wantsDir}`);
+        await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") has been WAITING ${ev.waitedSeconds}s at ${ev.element} wanting to go ${ev.wantsDir}. Set its route and clear ${ev.element} per your instructions.`);
       } else {
         console.error(`\n→ [${st}] ${ev.mode}: train "${ev.trainTypeName}" at ${ev.element} (${ev.clock})`);
         await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.`);
       }
     }
-    await sweepWaiting();
   }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -130,7 +130,7 @@ const TOOLS = [
     } },
 
   { name: "await_events",
-    description: "BLOCK until something happens at ANY of your stations, then return the event(s), EACH TAGGED with its station and game: a watched TRAIN (type + element + approach/reach/pass) or a MESSAGE from the operator (mode 'message', with text). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on each event at the station it names (route per that station's instructions; answer messages with send_message), then call it again. Empty after the timeout just means call it again.",
+    description: "BLOCK until something happens at ANY of your stations, then return the event(s), EACH TAGGED with its station and game: a watched TRAIN approaching/reaching/passing (mode approach/reach/pass), a MESSAGE from the operator (mode 'message'), or a train currently STUCK at a red signal (mode 'waiting', with waitedSeconds — these are surfaced even though no fresh event fired, so trains never get stranded; handle the highest waitedSeconds FIRST). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on each event at the station it names (route per that station's instructions; answer messages with send_message), then call it AGAIN immediately. Empty just means call it again.",
     inputSchema: { type: "object", properties: { timeout_seconds: { type: "number", description: "how long to block, default 25, max 55" } } },
     run: async (a) => {
       if (!POSTS.length) throw new Error("no stations configured — start with --station");
@@ -152,8 +152,9 @@ const TOOLS = [
       ctrls.forEach(c => { try { c.abort(); } catch (e) {} });
       const { game, j } = winner;
       if (typeof j.cursor === "number") cursors[game] = j.cursor;
-      const events = (j.events || []).map(e => e.mode === "message"
-        ? { game, station: e.owner, mode: "message", from: e.from || "operator", message: e.text, clock: e.clock }
+      const events = (j.events || []).map(e =>
+        e.mode === "message" ? { game, station: e.owner, mode: "message", from: e.from || "operator", message: e.text, clock: e.clock }
+        : e.mode === "waiting" ? { game, station: e.owner, mode: "waiting", train: e.trainTypeName, trainType: e.trainType, trainId: e.trainId, element: e.element, wantsDir: e.wantsDir, waitedSeconds: e.waitedSeconds, clock: e.clock }
         : { game, station: e.owner, mode: e.mode, train: e.trainTypeName, trainType: e.trainType, trainId: e.trainId, element: e.element, clock: e.clock });
       return events.length ? { events } : { events: [], note: "nothing within " + wait + "s — call await_events again to keep watching" };
     } },

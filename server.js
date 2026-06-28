@@ -252,14 +252,18 @@ signal with clear_signal / set_signal_red when an instruction is that specific.
 ## Your job, in a loop
 1. Once: get_my_instructions, get_infrastructure (your switches + signals, and any train WAITING at
    each signal), then watch_arrivals (be told when trains approach).
-2. Loop with await_events — it blocks until a train approaches (or the operator messages you):
-   - APPROACHING train → route it with set_path NOW, before it arrives, so it doesn't stop.
-   - EVERY cycle also check get_infrastructure and route any train already WAITING at a signal —
-     waiting trains fire no fresh event, so this is what stops them getting stranded. Re-try anything
-     refused earlier (a conflicting train may have passed). list_trains shows where all trains are.
-   - Each waiting train reports waitedSeconds (how long it has been stuck at a red signal). When
-     several are waiting, clear the one with the HIGHEST waitedSeconds FIRST — never let a train sit
-     a long time while you serve newer arrivals. Treat a large waitedSeconds as urgent.
+2. Loop with await_events — call it, act on every event it returns, then call it AGAIN immediately.
+   It returns three kinds of event, each tagged with its station:
+   - mode "approach"/"reach"/"pass" → a train at a watched element. Route an approaching train with
+     set_path NOW, before it arrives, so it doesn't stop.
+   - mode "waiting" → a train already STUCK at a red signal (it carries waitedSeconds). await_events
+     surfaces these on its own (a stopped train fires no fresh event), so you never need to leave one
+     stranded. Route it. When several are returned they come longest-wait first — clear the HIGHEST
+     waitedSeconds FIRST; treat a large waitedSeconds as urgent.
+   - mode "message" → the operator; reply with send_message.
+   Re-try anything refused earlier (a conflicting route may have cleared). get_infrastructure (which
+   also lists each signal's waiting train + waitedSeconds) and list_trains give the fuller picture.
+   Don't go idle while any train is waiting — keep looping on await_events.
 
 ## Notes
 - A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train
@@ -512,12 +516,18 @@ const server = http.createServer(async (req, res) => {
       smlog(`${gname(lg)} ${ownerParam || ""} | await_events (poll)`);
       const after = Number(query.get("after") || 0);
       const waitMs = Math.min(Math.max(Number(query.get("wait") || 25), 0), 55) * 1000;
-      const deadline = Date.now() + waitMs;
+      const start = Date.now(), deadline = start + waitMs;
+      const softMs = Math.min(4000, waitMs); // after this, surface trains already stuck (no edge event fires for them)
       let timer = null;
       const tick = () => {
         const events = lg.engine.watchEventsSince(owner, after);
-        if (events.length || Date.now() >= deadline)
-          return sendJSON(res, 200, { ok: true, events, cursor: lg.engine.watchCursor() });
+        if (events.length) return sendJSON(res, 200, { ok: true, events, cursor: lg.engine.watchCursor() });
+        const now = Date.now();
+        if (now >= start + softMs){
+          const waiting = lg.engine.waitingTrainsReport(owner); // currently-stranded trains, longest wait first
+          if (waiting.length || now >= deadline)
+            return sendJSON(res, 200, { ok: true, events: waiting, cursor: lg.engine.watchCursor() });
+        }
         timer = setTimeout(tick, 150);
       };
       req.on("close", () => { if (timer) clearTimeout(timer); });
