@@ -917,6 +917,7 @@
     // this, a block that a train just vacated reads as momentarily free for one frame
     // (the waiting train is granted only next frame), flickering every main green.
     updateSignals();
+    if (checkWatches) checkWatches();   // fire train-arrival / pass notifications (added below)
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
   }
@@ -1166,6 +1167,90 @@
       });
     }
 
+    // ---- Train-location watches (notifications) ----
+    // A watch fires events when a train interacts with a tile, so an external Station Master can be
+    // notified instead of polling the whole board. Three modes:
+    //   "approach" — the train is heading toward the tile and is within `tiles` cells of it (live
+    //                switch settings). Fires EARLY so the master can set the route / clear the
+    //                signal before the train has to brake — proactive routing.
+    //   "reach"    — the train's head arrives ON the tile.
+    //   "pass"     — the train's tail clears the tile (whole body gone).
+    // Edge-detected per train id, so each visit fires once. Watches are tagged with an `owner`
+    // (the station) so each station master only sees its own. Events queue on state.watchEvents.
+    const DEFAULT_APPROACH_TILES = 6;
+    state.watches = state.watches || [];
+    state.watchEvents = state.watchEvents || [];
+    let watchIdSeq = 0, watchEventSeq = 0;
+    // Tiles the train will roll onto next, in order, following the LIVE switch settings (so a
+    // diverging switch ahead is honoured). Traces through red signals (the point is lead time).
+    function forwardPath(train, maxTiles){
+      const out = [];
+      let cx = train.x, cy = train.y, from = train.from;
+      for (let i = 0; i < maxTiles; i++){
+        const tile = getTile(cx, cy);
+        if (!tile) break;
+        const ex = exitFor(tile, from);
+        if (ex == null) break;                               // dead end / switch set against
+        const nx = cx + DIRS[ex].dx, ny = cy + DIRS[ex].dy;
+        const nt = getTile(nx, ny);
+        if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) break;
+        out.push(key(nx, ny));
+        cx = nx; cy = ny; from = opposite(ex);
+      }
+      return out;
+    }
+    function fireWatch(w, trainId){
+      const t = state.trains.find(x => x.id === trainId);
+      const type = t ? t.type : null;
+      const tt = trainTypeById(type);
+      state.watchEvents.push({
+        seq: ++watchEventSeq, frame: state.simFrame, clock: formatClock(state.simFrame),
+        watchId: w.id, owner: w.owner, label: w.label || null, element: w.element || null,
+        mode: w.mode, x: w.x, y: w.y,
+        trainId, trainType: type, trainTypeName: tt && tt.name ? tt.name : (type != null ? `type ${type}` : null)
+      });
+      if (state.watchEvents.length > 500) state.watchEvents.shift();
+    }
+    function checkWatches(){
+      if (!state.watches.length) return;
+      for (const w of state.watches){
+        const tk = key(w.x, w.y);
+        const cur = new Set();
+        for (const t of state.trains){
+          if (w.mode === "reach"){ if (t.x === w.x && t.y === w.y) cur.add(t.id); }
+          else if (w.mode === "pass"){ const bt = t._tiles || computeBodyTiles(t); if (bt.has(tk)) cur.add(t.id); }
+          else { // "approach"
+            if (t.x === w.x && t.y === w.y) continue;          // already arrived → not "approaching"
+            if (forwardPath(t, w.tiles || DEFAULT_APPROACH_TILES).includes(tk)) cur.add(t.id);
+          }
+        }
+        const prev = w._on || new Set();
+        if (w.mode === "pass"){ for (const id of prev) if (!cur.has(id)) fireWatch(w, id); }     // leaving edge
+        else { for (const id of cur) if (!prev.has(id)) fireWatch(w, id); }                       // entering edge
+        w._on = cur;
+      }
+    }
+    function publicWatch(w){ return {id:w.id, owner:w.owner, x:w.x, y:w.y, mode:w.mode, tiles:w.tiles, element:w.element||null, label:w.label||null}; }
+    function addWatch(opts){
+      opts = opts || {};
+      const w = {id: ++watchIdSeq, owner: opts.owner || "", x: Number(opts.x), y: Number(opts.y),
+        mode: (opts.mode === "reach" || opts.mode === "pass") ? opts.mode : "approach",
+        tiles: opts.tiles != null ? Number(opts.tiles) : DEFAULT_APPROACH_TILES,
+        element: opts.element || null, label: opts.label || null, _on: new Set()};
+      state.watches.push(w);
+      return publicWatch(w);
+    }
+    function removeWatch(id){ const before = state.watches.length; state.watches = state.watches.filter(w => w.id !== Number(id)); return before !== state.watches.length; }
+    function clearWatches(owner){ const before = state.watches.length; state.watches = state.watches.filter(w => owner && w.owner !== owner); return before - state.watches.length; }
+    function listWatches(owner){ return state.watches.filter(w => !owner || w.owner === owner).map(publicWatch); }
+    function watchCursor(){ return watchEventSeq; }
+    // Events for `owner` with seq > after. If `after` is ahead of the cursor (e.g. the game was
+    // reloaded and the counter reset), start from 0 so the poller resynchronises.
+    function watchEventsSince(owner, after){
+      const a = (after > watchEventSeq) ? 0 : (after || 0);
+      return state.watchEvents.filter(e => (!owner || e.owner === owner) && e.seq > a);
+    }
+
     // ---- Live snapshot for streaming + persistence (Sets/transients made JSON-safe) ----
     function serHold(h){ return {blockId:h.blockId, entryMainKey:h.entryMainKey, entryMainTile:h.entryMainTile, approach: h.approach ? [...h.approach] : null, rollThrough: !!h.rollThrough}; }
     function cleanTrain(t){
@@ -1212,7 +1297,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, snapshot, applySnapshot, deserialize, applyLayout, EDIT_COMMANDS };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, snapshot, applySnapshot, deserialize, applyLayout, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince };
   }
   return { createEngine };
 });

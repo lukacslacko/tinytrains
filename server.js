@@ -186,8 +186,85 @@ function resolveTarget(stationId, body){
   return null;
 }
 
+// Switch directions may be given by compass name (NW, W, …) or numeric index (0..7, N..NW).
+const DIR_INDEX = { N: 0, NE: 1, E: 2, SE: 3, S: 4, SW: 5, W: 6, NW: 7 };
+function parseDir(v){
+  if (v == null) return v;
+  if (typeof v === "number") return v;
+  const s = String(v).trim().toUpperCase();
+  if (s in DIR_INDEX) return DIR_INDEX[s];
+  const n = Number(s);
+  return Number.isFinite(n) ? n : v;
+}
+
+// The global operating brief every Station Master AI reads first (GET /api/guide). It is the same
+// for every station; the station-specific orders come from GET /api/stations/:id/instructions.
+const STATION_MASTER_GUIDE = `# Tiny Trains — Station Master briefing
+
+You are the **Station Master** of one station on a live model railway. Your job is to route trains
+through YOUR station by setting its switches and clearing its manual signals, following the orders
+in your station's instructions. One AI runs per station; you control only your own station's
+infrastructure.
+
+## How the railway works
+- Trains drive **on sight**: a train only stops for an occupied tile ahead, a switch set against it,
+  or a **red signal**. There are no crashes.
+- **Switches** route by their set branch. A switch points its stem at one branch; the other branch
+  is set against and a train arriving on it stops. Set a switch with \`set_switch(element, direction)\`
+  where direction is a compass bearing (N, NE, E, SE, S, SW, W, NW) — the branch you want the stem
+  connected to.
+- **Manual signals** are **red by default** and have no automatic logic. Clearing one
+  (\`clear_signal(element)\`) opens a route: the engine checks the path ahead (following the live
+  switch settings) to the next signal facing the train; if it is clear it turns the signal green and
+  **locks every switch along that route** until the train has passed. Set it back to red with
+  \`set_signal_red(element)\` (only works before a train has taken it). A clear can be refused (path
+  broken, occupied, or crosses a switch another route already locked) — read the reason and fix the
+  switches or wait.
+- Some signals are **automatic** (not yours to operate); you only ever set MANUAL signals and
+  switches that belong to your station. Elements are addressed by their **station-local name**
+  (e.g. \`A\`, \`B\`, \`1\`, \`2\`) — the labels used in your instructions.
+
+## Your instructions
+Call \`get_my_instructions\`. They are event-driven orders, e.g. "when a train of line 1 arrives at
+A, set 1 to NW and clear A" or "when a train arrives at C: for train 2 set path 5,3; for train 3 set
+path 5,2,1,4". Notation:
+- "set 1 to NW" → \`set_switch("1", "NW")\`.
+- "clear A" / "A green" → \`clear_signal("A")\`.
+- "set path 1,2,3" → set switches 1, 2, 3 to route the train along that path, **then clear the entry
+  signal** the train is arriving at. Clearing the entry signal locks the route you have set, so set
+  the switches first, then clear.
+- "line 1" / "train 2" refer to the train's **type** (reported with each notification).
+
+## Operate PROACTIVELY (this is the point)
+Don't wait for trains to stop at red signals. Set the route and clear the entry signal **while the
+train is still approaching**, so it rolls straight through without braking. The notification system
+gives you that lead time:
+
+1. Once, learn your station: \`get_my_instructions\`, \`get_infrastructure\` (your switches + signals
+   with their live state), \`list_stations\` (for context).
+2. Set an **approach watch** on each entry signal named in your instructions — easiest is
+   \`watch_arrivals()\`, which watches every signal in your station; or \`watch(element, "approach")\`
+   for specific ones. ("approach" fires while the train is still a few tiles away and heading toward
+   the point; "reach" fires when it arrives; "pass" fires when its tail clears.)
+3. Call \`await_events\` and **block**. It returns when a watched train approaches/arrives, telling
+   you the train's type and which element. (This is how notifications reach you — keep calling it;
+   it is your event loop.)
+4. For that train + element, look up your instructions, set the switches, and clear the entry signal
+   — now, before it arrives. Then go back to \`await_events\`.
+
+## Good practice
+- Be **idempotent**: setting a switch already in position or clearing an already-green signal is
+  harmless. If unsure of the current state, call \`get_infrastructure\`.
+- If \`set_switch\` is refused, the switch is locked by a route in progress — wait for that train.
+- If \`clear_signal\` is refused, the path isn't ready (wrong switch, occupied, or conflicting route);
+  fix the switches or wait, then retry.
+- Stay in your station. Other stations have their own masters; trains hand off between you.
+`;
+
 const server = http.createServer(async (req, res) => {
-  const url = req.url.split("?")[0];
+  const parsed = new URL(req.url, "http://localhost");
+  const url = parsed.pathname;
+  const query = parsed.searchParams;
   if (req.method === "OPTIONS") return sendJSON(res, 204, {});
 
   if (!url.startsWith("/api/")) return serveStatic(req, res);
@@ -215,6 +292,19 @@ const server = http.createServer(async (req, res) => {
         s.name.toLowerCase() === decodeURIComponent(m[1]).toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       return sendJSON(res, 200, { ok: true, station: st });
+    }
+
+    // The global Station Master operating brief (same for every station).
+    if (url === "/api/guide" && req.method === "GET")
+      return sendJSON(res, 200, { ok: true, guide: STATION_MASTER_GUIDE });
+
+    // A single station's free-text instructions.
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/instructions$/)) && req.method === "GET"){
+      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      const id = decodeURIComponent(m[1]);
+      const st = game.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
+      if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "" });
     }
 
     // ---- SSE state stream ----
@@ -304,7 +394,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const t = resolveTarget(id, body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
-      const result = applyCommand({ type: "setSwitch", x: t.x, y: t.y, to: body.to });
+      const result = applyCommand({ type: "setSwitch", x: t.x, y: t.y, to: parseDir(body.to) });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
@@ -317,6 +407,55 @@ const server = http.createServer(async (req, res) => {
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
       const result = applyCommand({ type, x: t.x, y: t.y, dir: body.dir });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
+    }
+
+    // ---- Station Master notifications: register a watch, list/remove, and long-poll for events ----
+    if (url === "/api/watches" && req.method === "POST"){
+      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      const body = await readBody(req);
+      let x = body.x, y = body.y;
+      if (!(Number.isFinite(x) && Number.isFinite(y))){
+        const elem = body.element != null ? body.element : body.name;
+        if (body.station == null || elem == null) return sendJSON(res, 400, { ok: false, error: "give x,y or station + element" });
+        const hit = game.engine.resolveElement(body.station, elem);
+        if (!hit) return sendJSON(res, 404, { ok: false, error: "element not found in station" });
+        x = hit.x; y = hit.y;
+      }
+      const owner = body.owner != null ? String(body.owner) : (body.station != null ? String(body.station) : "");
+      const w = game.engine.addWatch({ owner, x, y, mode: body.mode, tiles: body.tiles, element: body.element || body.name || null, label: body.label });
+      return sendJSON(res, 200, { ok: true, watch: w });
+    }
+
+    if (url === "/api/watches" && req.method === "GET"){
+      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      return sendJSON(res, 200, { ok: true, watches: game.engine.listWatches(query.get("owner") || undefined) });
+    }
+
+    if ((m = url.match(/^\/api\/watches\/(\d+)$/)) && req.method === "DELETE"){
+      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      return sendJSON(res, 200, { ok: game.engine.removeWatch(Number(m[1])) });
+    }
+
+    // Long-poll: hold the request open until a watched train fires an event for `owner` (seq > after)
+    // or `wait` seconds pass. This is how a Station Master AI receives notifications — it calls this
+    // (via the MCP await_events tool), blocks, and is woken when a train approaches/arrives.
+    if (url === "/api/notifications" && req.method === "GET"){
+      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      const owner = query.get("owner") || undefined;
+      const after = Number(query.get("after") || 0);
+      const waitMs = Math.min(Math.max(Number(query.get("wait") || 25), 0), 55) * 1000;
+      const deadline = Date.now() + waitMs;
+      let timer = null;
+      const tick = () => {
+        if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+        const events = game.engine.watchEventsSince(owner, after);
+        if (events.length || Date.now() >= deadline)
+          return sendJSON(res, 200, { ok: true, events, cursor: game.engine.watchCursor() });
+        timer = setTimeout(tick, 150);
+      };
+      req.on("close", () => { if (timer) clearTimeout(timer); });
+      tick();
+      return;
     }
 
     return sendJSON(res, 404, { ok: false, error: "unknown endpoint " + req.method + " " + url });
