@@ -761,22 +761,27 @@
   // A green disc at a tile's centre, marking a switch locked into a cleared route.
   function drawLock(x,y){
     const c = centerPoint(x,y), s = tileSize();
-    ctx.beginPath(); ctx.arc(c.x, c.y, s*0.23, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(8,12,18,.5)"; ctx.fill();   // translucent backing so it reads over a train
     const r = Math.max(4.5, s*0.17);
     ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2);
     ctx.fillStyle = LOCK_GREEN; ctx.fill();
     ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
-  // Translucent disc behind a centred signal marker (so it stays legible on top of a train).
-  function drawMarkerBack(x,y,dir,off,halo){
-    const c = centerPoint(x,y), s = tileSize();
-    const e = endpointPoint(x,y,dir);
-    let ux = e.x - c.x, uy = e.y - c.y; const L = Math.hypot(ux,uy) || 1; ux /= L; uy /= L;
-    const mx = c.x + ux*s*off, my = c.y + uy*s*off;
-    ctx.beginPath(); ctx.arc(mx, my, s*0.22, 0, Math.PI*2);
-    ctx.fillStyle = "rgba(8,12,18,.5)"; ctx.fill();
-    if (halo){ ctx.lineWidth = Math.max(2.5, s*0.055); ctx.strokeStyle = "#ffffff"; ctx.stroke(); }
+  // The id (name) of a signal/switch, drawn in the MIDDLE of its tile on top of everything (even
+  // trains) with a translucent background, so the operator can always read which element it is.
+  function drawElementId(x,y,tile){
+    if (!tile.name || (tile.kind !== "signal" && tile.kind !== "switch")) return;
+    const s = tileSize();
+    if (s < 16) return; // unreadable when zoomed far out
+    const c = centerPoint(x,y);
+    ctx.save();
+    ctx.font = `700 ${Math.max(10, Math.min(15, s*.3))}px system-ui, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const tw = ctx.measureText(tile.name).width;
+    const bw = tw + Math.max(8, s*.16), bh = Math.max(13, s*.32);
+    ctx.beginPath(); ctx.roundRect(c.x - bw/2, c.y - bh/2, bw, bh, Math.min(6, bh/2));
+    ctx.fillStyle = "rgba(10,14,20,.55)"; ctx.fill();
+    ctx.fillStyle = "#eef3f7"; ctx.fillText(tile.name, c.x, c.y + 0.5);
+    ctx.restore();
   }
   // Red flash overlay on refused-operation tiles; expires by wall clock (works while paused).
   function drawFlash(){
@@ -825,7 +830,6 @@
     if (tile.kind === "stop") drawStopMarker(x,y,tile.dir);
     if (tile.kind === "signal"){
       const blink = blinkOn();
-      const off = 0.12; // small shift along the facing direction so two opposite mains don't overlap
       for (const dir of signalDirs(tile)){
         const mk = mkMain(x,y,dir);
         const manual = manualDirs(tile).includes(dir);
@@ -833,11 +837,13 @@
         let color;
         if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
         else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
-        // Centred marker: a translucent backing disc (white halo if a train waits at a red manual main).
-        drawMarkerBack(x, y, dir, off, manual && manualMainHasWaiter(x,y,dir));
+        // A manual main with a train waiting at it (red) gets a thick white halo to flag it
+        // to the operator, drawn behind the normal yellow-outlined triangle.
+        if (manual && manualMainHasWaiter(x,y,dir))
+          drawTriangle(x,y,dir,color,.385,"#ffffff",Math.max(4, tileSize()*.25),0,SIGNAL_SIDE_OFFSET);
         // Manual mains carry a yellow outline; automatic mains a dark one.
         const stroke = manual ? MANUAL_RING : "#0b0e12";
-        drawTriangle(x,y,dir,color,.34,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)), off, 0);
+        drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
       }
     }
   }
@@ -1026,6 +1032,7 @@
     ctx.textBaseline = "top";
     for (const [k,t] of state.tiles){
       if (!t.name) continue;
+      if (t.kind === "signal" || t.kind === "switch") continue; // their id is drawn centred (drawElementId)
       const {x,y} = readKey(k);
       const p = worldToScreen(x,y);
       const bh = Math.max(11, s*.3);
@@ -1090,14 +1097,14 @@
     drawOccupiedBlockOutlines();  // orange halo on occupied automatic blocks
     drawManualRouteOutlines();    // set-route green/black halo over it
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); } // aspects: under trains
     drawSelectionOverlay();
     drawPlacementGhost();
     drawElementNames();
     drawStationLabels();
     drawTrains();
-    // Switch/signal markers are drawn LAST — centred on their tile, on top of trains — so the
-    // operator can always read a signal's state and a locked switch even under a train.
-    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
+    // Only the signal/switch IDS are drawn last — centred, on top of everything (even trains).
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawElementId(x,y,t); }
     drawFlash();
     stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
