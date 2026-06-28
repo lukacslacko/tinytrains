@@ -990,6 +990,11 @@
     state.events = state.events || [];
     let eventSeq = 0;
     function emit(level, text, meta){
+      // Keep seq monotonic across a reload: a freshly-created engine restarts eventSeq at 0, but
+      // applySnapshot/deserialize restore state.events with their original (higher) seqs. Without
+      // this, new emits would reuse low seqs that collide with the restored ones, and clients that
+      // dedupe by seq (drainEvents) would silently drop every new notification (chat, departures, …).
+      for (const ev of state.events) if (ev.seq > eventSeq) eventSeq = ev.seq;
       const e = {seq: ++eventSeq, frame: state.simFrame, level, text};
       if (meta) Object.assign(e, meta);
       state.events.push(e);
