@@ -40,7 +40,7 @@ async function runTool(station, name, a){
   if (name === "clear_signal") return gp(`/api/stations/${encodeURIComponent(station)}/signal`, { name: a.element, action: "clear" });
   if (name === "send_message") return gp(`/api/stations/${encodeURIComponent(station)}/operator-message`, { text: a.text });
   if (name === "done") return { ok: true, done: true };
-  return { ok: false, error: "unknown tool " + name };
+  return { ok: false, error: `no such tool "${name}". You may ONLY call: set_path, set_switch, clear_signal, send_message, done. Events are delivered to you automatically — there is no await_events/watch/poll tool. Handle THIS event with the allowed tools, then call done.` };
 }
 async function ollamaChat(messages){
   const r = await fetch(OLLAMA + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -54,8 +54,19 @@ A: set path 1,2,3" -> set_path(["A","1","2","3"]). For a single switch use set_s
 Then call "done". Only use THIS station's elements. If the instructions don't cover the case (or are
 ambiguous), do your best and also send_message a short "Suggestion: ..." for the operator, then "done".`;
 
+// The Ollama model only makes ONE per-event decision — the script owns the loop. So it gets THIS
+// focused brief, NOT the /api/guide text (that guide is for the MCP master and tells it to "loop with
+// await_events / watch_arrivals", tools this agent does not expose — which makes literal models like
+// qwen3.5 try to call await_events and get refused).
+const OLLAMA_BRIEF = `You are an automated railway Station Master controlling one station. For the SINGLE
+event described below, set the switches and clear the signals to route that train through your station,
+following YOUR INSTRUCTIONS, then call done.
+TOOLS YOU MAY CALL: set_path, set_switch, clear_signal, send_message, done — and NOTHING else. There is
+NO await_events, watch_arrivals, get_infrastructure, list_trains or any polling/notification tool:
+events are delivered to you automatically, so never try to wait for, watch, or fetch them. Just handle
+THIS one event with the tools above and call done.`;
+
 (async () => {
-  const guide = (await gj("/api/guide")).guide || "";
   const ctx = {};   // station -> system prompt
   for (const st of STATIONS){
     const station = (await gj(`/api/stations/${encodeURIComponent(st)}`)).station;
@@ -63,7 +74,7 @@ ambiguous), do your best and also send_message a short "Suggestion: ..." for the
     const instructions = (await gj(`/api/stations/${encodeURIComponent(st)}/instructions`)).instructions || "";
     const switches = station.switches.map(s => `${s.name} (branches ${s.branches.map(b => DIRS[b]).join("/")})`).join(", ");
     const signals = station.signals.filter(s => s.name).map(s => s.name).join(", ");
-    ctx[st] = `${guide}\n\nYOU ARE THE STATION MASTER OF "${st}".\nSwitches: ${switches}.\nSignals: ${signals}.\n\nYOUR INSTRUCTIONS:\n${instructions}\n\n${SHARED_NOTE}`;
+    ctx[st] = `${OLLAMA_BRIEF}\n\nYOU ARE THE STATION MASTER OF "${st}".\nSwitches: ${switches}.\nSignals: ${signals}.\n\nYOUR INSTRUCTIONS:\n${instructions}\n\n${SHARED_NOTE}`;
     for (const sig of station.signals) if (sig.name) await gp("/api/watches", { station: st, owner: st, element: sig.name, mode: "approach" });
   }
   console.error(`[ollama master] game=${GAME || "(default)"} model=${MODEL} — managing ${STATIONS.join(", ")}`);
