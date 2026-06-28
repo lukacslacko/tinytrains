@@ -301,6 +301,15 @@
         <button id="undoBtn">Undo</button>
         <button id="redoBtn">Redo</button>
       </div>
+      <label class="field" style="margin-top:6px"><span>Train speed (slower = more time to react)</span>
+        <select id="speedSelect" title="Scale how fast trains run">
+          <option value="2">2× fast</option>
+          <option value="1" selected>1× normal</option>
+          <option value="0.5">0.5× slow</option>
+          <option value="0.25">0.25× slower</option>
+          <option value="0.1">0.1× crawl</option>
+        </select>
+      </label>
     </div>
     <div class="toolbar">
       <section class="group">
@@ -1244,6 +1253,8 @@
     }
     const nameInput = document.getElementById("gameName");
     if (nameInput && document.activeElement !== nameInput) nameInput.value = (server.meta && server.meta.name) || "";
+    const speedSel = document.getElementById("speedSelect");
+    if (speedSel && document.activeElement !== speedSel && state.speedScale != null) speedSel.value = String(state.speedScale);
     const sel = document.getElementById("loadGameSelect");
     if (sel && document.activeElement !== sel){
       const cur = server.gameId;
@@ -1918,6 +1929,7 @@
     document.getElementById("stepBtn").addEventListener("click", stepServer);
     document.getElementById("undoBtn").addEventListener("click", serverUndo);
     document.getElementById("redoBtn").addEventListener("click", serverRedo);
+    document.getElementById("speedSelect").addEventListener("change", e => mutate({ type: "setSpeed", scale: Number(e.target.value) }));
     document.getElementById("gameName").addEventListener("change", e => serverRename(e.target.value));
     document.getElementById("loadGameSelect").addEventListener("change", e => { const id = e.target.value; e.target.value = ""; if (id) serverLoadGame(id); });
     document.getElementById("saveAsBtn").addEventListener("click", serverSaveAs);

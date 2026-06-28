@@ -284,6 +284,14 @@ you must also **sweep your signals every cycle**.
    - Go back to \`await_events\`. Do this even when \`await_events\` returns nothing — a quick sweep
      each cycle is what stops trains getting stranded.
 
+## Knowing when a switch or block frees up
+A switch you set for one train can't be re-thrown until that train has cleared it; a signal's block
+can't take a following train until the first has passed. Ask to be told the moment that happens with
+a **pass watch**: \`watch(element, "pass")\` on a SWITCH fires when a train's tail clears it (so you
+can re-throw it for the next movement), and on a SIGNAL fires when the train has passed it (so the
+block behind is free for a following train). Use these so you don't re-throw a switch under a train
+or admit a train into an occupied block.
+
 ## Talking to the operator
 The human operator can message you; those arrive from \`await_events\` as \`mode: "message"\` with the
 text. Read them as instructions or questions, act if appropriate, and reply with \`send_message\`

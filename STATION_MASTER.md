@@ -51,7 +51,9 @@ Operate (by station-local element name, or `x,y`):
 
 Notify:
 - `POST /api/watches` `{ station, element, mode, tiles? }` (or `{ owner, x, y, mode }`) → `{ watch }`.
-  `mode` ∈ `approach` | `reach` | `pass`; `tiles` is the approach lead distance (default 6).
+  `mode` ∈ `approach` | `reach` | `pass`; `tiles` is the approach lead distance (default 6). `element`
+  may be a SIGNAL or a SWITCH — a `pass` watch on a switch tells the master when it's free to re-throw,
+  and on a signal when the block behind has cleared for a following train.
 - `GET  /api/watches?owner=:id` · `DELETE /api/watches/:id`.
 - `GET  /api/notifications?owner=:id&after=:seq&wait=:secs` — **long-poll**; returns
   `{ events, cursor }` when a matching event exists (or after `wait` seconds). Each event:
@@ -59,6 +61,10 @@ Notify:
   from the previous response to get only new events.
 
 (All other game endpoints — state, command, save/load, SSE — are in `server.js`.)
+
+**Train speed.** The sidebar has a *Train speed* control (0.1×–2×); it sends `{type:"setSpeed",scale}`
+to `/api/command`, scaling the whole fleet so a (slower) operator or AI has more real time to act. The
+value is per game and saved.
 
 ## MCP server
 

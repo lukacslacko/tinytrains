@@ -100,9 +100,9 @@ const TOOLS = [
     run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/signal`, { name: a.element, action: "red" })).body },
 
   { name: "watch",
-    description: "Ask to be notified about a train at one of your elements. mode: 'approach' (fires EARLY, while the train is still heading toward it a few tiles away — use this to route proactively), 'reach' (train arrives on it), or 'pass' (train's tail clears it). Returns a watch id. Then call await_events to receive the notifications.",
+    description: "Ask to be notified about a train at one of your elements — a SIGNAL or a SWITCH. mode: 'approach' (fires EARLY, while the train is still a few tiles away and heading toward it — route proactively), 'reach' (train arrives on it), or 'pass' (the train's tail has CLEARED it). Use 'pass' on a SWITCH to learn the moment it is free to re-throw for the next train, and on a SIGNAL to learn when the block behind it has cleared so a following train may enter. Returns a watch id; await_events then delivers the events.",
     inputSchema: { type: "object", properties: {
-      element: { type: "string", description: "station-local element name" },
+      element: { type: "string", description: "station-local element name (signal or switch)" },
       mode: { type: "string", enum: ["approach", "reach", "pass"], description: "default 'approach'" },
       tiles: { type: "number", description: "for 'approach': how many tiles of lead (default 6)" },
       station: { type: "string" }

@@ -760,15 +760,19 @@
   // a sqrt curve so it coasts to a stop exactly on the tile it cannot continue past.
   function advanceWithSpeed(train){
     if (!trainMoving(train)) return false;
+    // state.speedScale (UI-adjustable, default 1) slows the whole fleet so an operator/AI has more
+    // real time to act. It scales top speed + acceleration; DECEL is left so braking stays safe.
+    const ss = state.speedScale || 1;
+    const maxV = MAX_SPEED * ss, accV = ACCEL * ss, minV = MIN_SPEED * ss;
     const d = DIRS[train.moveDir];
     const seg = Math.hypot(d.dx,d.dy) || 1;
     const halt = !canLeave(train, train.x, train.y, train.from);
     const remaining = (1 - train.progress) * seg;
-    let target = MAX_SPEED;
+    let target = maxV;
     if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
-    if (train.speed < target) train.speed = Math.min(target, train.speed + ACCEL);
+    if (train.speed < target) train.speed = Math.min(target, train.speed + accV);
     else train.speed = target;
-    if (halt && train.speed < MIN_SPEED && remaining < 0.5){
+    if (halt && train.speed < minV && remaining < 0.5){
       train.progress = 1; // crawling and almost there: dock on the tile centre
     } else {
       train.progress = Math.min(1, train.progress + train.speed / seg);
@@ -992,6 +996,8 @@
     }
 
     function setPaused(p){ state.paused = !!p; return {ok:true, paused: state.paused}; }
+    state.speedScale = state.speedScale || 1;
+    function setSpeed(scale){ const s = Number(scale); state.speedScale = Number.isFinite(s) ? Math.max(0.05, Math.min(3, s)) : 1; return {ok:true, speedScale: state.speedScale}; }
 
     // ---- Operate commands (return {ok, ...} or {ok:false, error}) ----
     function cmdThrowSwitch(x,y){
@@ -1122,6 +1128,7 @@
         case "pasteTiles":    return cmdPasteTiles(cmd.tiles);
         case "removeTiles":   return cmdRemoveTiles(cmd.keys, cmd.andTrains);
         case "setPaused":     return setPaused(cmd.paused);
+        case "setSpeed":      return setSpeed(cmd.scale);
         case "step":          simStep(); return {ok:true, simFrame: state.simFrame};
         default:              return {ok:false, error:"unknown command type: " + cmd.type};
       }
@@ -1321,7 +1328,7 @@
     function snapshot(){
       return {
         version: 3,
-        simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused,
+        simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused, speedScale: state.speedScale || 1,
         nextTrainId: state.nextTrainId, nextStationId: state.nextStationId, selectedType: state.selectedType,
         trainTypes: state.trainTypes, stations: state.stations,
         tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
@@ -1340,6 +1347,7 @@
       if (!s) return;
       state.simFrame = s.simFrame||0; state.frame = s.frame||0; state.tick = s.tick||0;
       state.paused = !!s.paused;
+      state.speedScale = s.speedScale || 1;
       state.nextTrainId = s.nextTrainId||1; state.nextStationId = s.nextStationId||1;
       state.trainTypes = (Array.isArray(s.trainTypes) && s.trainTypes.length)
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
