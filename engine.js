@@ -922,6 +922,7 @@
     // (the waiting train is granted only next frame), flickering every main green.
     updateSignals();
     if (checkWatches) checkWatches();   // fire train-arrival / pass notifications (added below)
+    if (updateHaltTimers) updateHaltTimers();   // track how long each train has been stopped
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
   }
@@ -1156,6 +1157,17 @@
     }
     const DIRNAMES = ["N","NE","E","SE","S","SW","W","NW"];
     function trainStopped(t){ return !(trainMoving(t) || (t.speed || 0) > 0); }
+    // Track when each train last became stopped, so masters can see how long one has been waiting
+    // and clear the longest-waiting first. (haltedSince is a simFrame; null when moving.)
+    function updateHaltTimers(){
+      for (const t of state.trains){
+        if (trainStopped(t)){ if (t.haltedSince == null) t.haltedSince = state.simFrame; }
+        else t.haltedSince = null;
+      }
+    }
+    // Seconds a train has been continuously stopped (0 if moving). simFrame advances ~real-time, so
+    // this is real seconds regardless of the train-speed setting.
+    function waitedSecs(t){ return (t.haltedSince != null && trainStopped(t)) ? Math.round((state.simFrame - t.haltedSince) / FRAMES_PER_SECOND) : 0; }
     // Why a train is sitting still (best effort), so a master can see what to do about it.
     function trainWaitReason(t){
       if (!trainStopped(t)) return null;
@@ -1186,7 +1198,8 @@
         return {
           id: t.id, type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
           x: t.x, y: t.y, station: st ? st.name : null, at: tile && tile.name ? tile.name : null,
-          heading: ex != null ? DIRNAMES[ex] : null, moving: !trainStopped(t), waitingFor: trainWaitReason(t)
+          heading: ex != null ? DIRNAMES[ex] : null, moving: !trainStopped(t),
+          waitingFor: trainWaitReason(t), waitedSeconds: waitedSecs(t)
         };
       });
     }
@@ -1206,7 +1219,7 @@
           // trains stopped ON this signal tile are waiting for it — report their type + wanted way.
           const waiting = state.trains.filter(t => t.x === i.x && t.y === i.y && trainStopped(t)).map(t => {
             const ex = exitFor(i.tile, t.from); const tt = trainTypeById(t.type);
-            return { trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`, wantsDir: ex != null ? DIRNAMES[ex] : null };
+            return { trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`, wantsDir: ex != null ? DIRNAMES[ex] : null, waitedSeconds: waitedSecs(t) };
           });
           return {
             name: i.tile.name || null, x: i.x, y: i.y,

@@ -182,6 +182,10 @@ function readBody(req){
     req.on("end", () => { try { resolve(s ? JSON.parse(s) : {}); } catch { resolve({}); } });
   });
 }
+// Print every Station Master API call (the operator UI uses /api/command + /api/events instead, so
+// this stays focused on what the masters do). Set TINYTRAINS_QUIET=1 to silence.
+function smlog(summary){ if (process.env.TINYTRAINS_QUIET) return; console.log(`${new Date().toISOString().slice(11, 19)} [SM] ${summary}`); }
+function gname(lg){ return lg ? lg.name : "?"; }
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml",
@@ -253,6 +257,9 @@ signal with clear_signal / set_signal_red when an instruction is that specific.
    - EVERY cycle also check get_infrastructure and route any train already WAITING at a signal —
      waiting trains fire no fresh event, so this is what stops them getting stranded. Re-try anything
      refused earlier (a conflicting train may have passed). list_trains shows where all trains are.
+   - Each waiting train reports waitedSeconds (how long it has been stuck at a red signal). When
+     several are waiting, clear the one with the HIGHEST waitedSeconds FIRST — never let a train sit
+     a long time while you serve newer arrivals. Treat a large waitedSeconds as urgent.
 
 ## Notes
 - A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train
@@ -287,8 +294,10 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/games" && req.method === "GET")
       return sendJSON(res, 200, { ok: true, games: listGames() });
 
-    if (url === "/api/guide" && req.method === "GET")
+    if (url === "/api/guide" && req.method === "GET"){
+      smlog("get_guide");
       return sendJSON(res, 200, { ok: true, guide: STATION_MASTER_GUIDE });
+    }
 
     if (url === "/api/state" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
@@ -297,12 +306,14 @@ const server = http.createServer(async (req, res) => {
 
     if (url === "/api/stations" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      smlog(`${gname(lg)} | list_stations`);
       return sendJSON(res, 200, { ok: true, stations: lg.engine.stationsReport() });
     }
 
     // Where every train is + which way it's about to go (incl. trains waiting at signals).
     if (url === "/api/trains" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      smlog(`${gname(lg)} | list_trains`);
       return sendJSON(res, 200, { ok: true, trains: lg.engine.trainsReport() });
     }
 
@@ -311,6 +322,7 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(m[1]);
       const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      smlog(`${gname(lg)} ${st.name} | get_infrastructure`);
       return sendJSON(res, 200, { ok: true, station: st });
     }
 
@@ -319,6 +331,7 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(m[1]);
       const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      smlog(`${gname(lg)} ${st.name} | get_my_instructions`);
       return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "" });
     }
 
@@ -404,19 +417,23 @@ const server = http.createServer(async (req, res) => {
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/switch$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
-      const t = resolveTarget(lg, decodeURIComponent(m[1]), body);
+      const id = decodeURIComponent(m[1]);
+      const t = resolveTarget(lg, id, body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
       const result = applyCommand(lg, { type: "setSwitch", x: t.x, y: t.y, to: parseDir(body.to) });
+      smlog(`${gname(lg)} ${id} | set_switch ${body.name} -> ${body.to}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/signal$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
-      const t = resolveTarget(lg, decodeURIComponent(m[1]), body);
+      const id = decodeURIComponent(m[1]);
+      const t = resolveTarget(lg, id, body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
       const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: body.dir });
+      smlog(`${gname(lg)} ${id} | ${body.action === "red" ? "set_signal_red" : "clear_signal"} ${body.name}  ${result.ok ? (result.action || "ok") : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
@@ -425,7 +442,9 @@ const server = http.createServer(async (req, res) => {
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/path$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
-      const result = applyCommand(lg, { type: "setPath", station: decodeURIComponent(m[1]), path: body.path });
+      const id = decodeURIComponent(m[1]);
+      const result = applyCommand(lg, { type: "setPath", station: id, path: body.path });
+      smlog(`${gname(lg)} ${id} | set_path [${(body.path || []).join(",")}]  ${result.ok ? "set " + (result.set || []).map(s => s.name + "=" + s.dir).join(",") + (result.cleared ? " +clear " + result.entry : "") : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
 
@@ -450,6 +469,7 @@ const server = http.createServer(async (req, res) => {
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       lg.engine.notifyOperator(st.name, body.text);
       broadcast(lg);
+      smlog(`${gname(lg)} ${st.name} | send_message -> operator: "${body.text}"`);
       return sendJSON(res, 200, { ok: true, station: st.name });
     }
 
@@ -467,16 +487,19 @@ const server = http.createServer(async (req, res) => {
       }
       const owner = body.owner != null ? String(body.owner) : (body.station != null ? String(body.station) : "");
       const w = lg.engine.addWatch({ owner, x, y, mode: body.mode, tiles: body.tiles, element: body.element || body.name || null, label: body.label });
+      smlog(`${gname(lg)} ${owner} | watch ${body.element || body.name || (x + "," + y)} ${body.mode || "approach"}`);
       return sendJSON(res, 200, { ok: true, watch: w });
     }
 
     if (url === "/api/watches" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      smlog(`${gname(lg)} ${query.get("owner") || ""} | list_watches`);
       return sendJSON(res, 200, { ok: true, watches: lg.engine.listWatches(query.get("owner") || undefined) });
     }
 
     if ((m = url.match(/^\/api\/watches\/(\d+)$/)) && req.method === "DELETE"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      smlog(`${gname(lg)} | cancel_watch ${m[1]}`);
       return sendJSON(res, 200, { ok: lg.engine.removeWatch(Number(m[1])) });
     }
 
@@ -486,6 +509,7 @@ const server = http.createServer(async (req, res) => {
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       const ownerParam = query.get("owner");                 // one station, or a comma-list of stations
       const owner = ownerParam ? ownerParam.split(",").map(s => s.trim()).filter(Boolean) : undefined;
+      smlog(`${gname(lg)} ${ownerParam || ""} | await_events (poll)`);
       const after = Number(query.get("after") || 0);
       const waitMs = Math.min(Math.max(Number(query.get("wait") || 25), 0), 55) * 1000;
       const deadline = Date.now() + waitMs;

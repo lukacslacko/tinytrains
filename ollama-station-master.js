@@ -91,14 +91,15 @@ ambiguous), do your best and also send_message a short "Suggestion: ..." for the
   async function sweepWaiting(){
     for (const st of STATIONS){
       let report; try { report = (await gj(`/api/stations/${encodeURIComponent(st)}`)).station; } catch { continue; }
-      for (const sig of (report.signals || [])){
-        for (const w of (sig.waiting || [])){
-          const key = `${st}:${sig.name}:${w.trainType}:${w.wantsDir}`;
-          if (handled[key] && Date.now() - handled[key] < 12000) continue;
-          handled[key] = Date.now();
-          console.error(`\n→ [${st}] waiting: train "${w.trainTypeName}" at ${sig.name} wants ${w.wantsDir}`);
-          await act(st, `A train of type ${w.trainType} ("${w.trainTypeName}") is WAITING at ${sig.name} wanting to go ${w.wantsDir}. Set its route and clear ${sig.name} per your instructions.`);
-        }
+      const items = [];
+      for (const sig of (report.signals || [])) for (const w of (sig.waiting || [])) items.push({ sig, w });
+      items.sort((a, b) => (b.w.waitedSeconds || 0) - (a.w.waitedSeconds || 0)); // longest-waiting first
+      for (const { sig, w } of items){
+        const key = `${st}:${sig.name}:${w.trainType}:${w.wantsDir}`;
+        if (handled[key] && Date.now() - handled[key] < 12000) continue;
+        handled[key] = Date.now();
+        console.error(`\n→ [${st}] waiting ${w.waitedSeconds}s: train "${w.trainTypeName}" at ${sig.name} wants ${w.wantsDir}`);
+        await act(st, `A train of type ${w.trainType} ("${w.trainTypeName}") has been WAITING ${w.waitedSeconds}s at ${sig.name} wanting to go ${w.wantsDir}. Set its route and clear ${sig.name} per your instructions.`);
       }
     }
   }

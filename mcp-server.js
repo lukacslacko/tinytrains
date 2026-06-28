@@ -81,12 +81,12 @@ const TOOLS = [
     run: async (a) => ({ youManage: POSTS, stations: ((await api("GET", "/api/stations", null, someGame(a))).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) }) },
 
   { name: "get_infrastructure",
-    description: "A station's switches and signals with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type + which way it wants to go). Check regularly to find waiting trains and route them.",
+    description: "A station's switches and signals with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type, which way it wants to go, and waitedSeconds = how long it has been stuck). Check regularly: route waiting trains, clearing the one with the HIGHEST waitedSeconds first.",
     inputSchema: { type: "object", properties: STATION_PROP },
     run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station; } },
 
   { name: "list_trains",
-    description: "Where EVERY train in a game is and which way it is about to go: type, station/element, heading (compass), moving?, and (if stopped) why it is waiting. Spot trains already stuck at signals.",
+    description: "Where EVERY train in a game is and which way it is about to go: type, station/element, heading (compass), moving?, (if stopped) why it is waiting, and waitedSeconds (how long it has been stuck). Spot trains stranded a long time and prioritise them.",
     inputSchema: { type: "object", properties: { game: { type: "string" } } },
     run: async (a) => (await api("GET", "/api/trains", null, someGame(a))).body.trains },
 
