@@ -233,8 +233,19 @@
   #serverGames .srv-game .srv-meta{flex:0 0 auto;color:var(--muted);font-size:11px}
   #serverGames .srv-game button{flex:0 0 auto;min-height:26px;padding:3px 10px;font-size:12px;text-align:center}
   .srv-game.srv-active{outline:1px solid var(--accent);border-radius:7px;padding:3px}
-  #notifyPanel{
+  #viewControls{
     position:absolute;left:12px;bottom:12px;z-index:4;
+    display:flex;gap:6px;align-items:center;
+    background:#0f151bf2;border:1px solid #2b3742;border-radius:9px;
+    box-shadow:0 12px 32px #0008;padding:6px;
+  }
+  #viewControls button{
+    width:34px;height:34px;min-height:34px;padding:0;flex:0 0 auto;
+    font-size:20px;line-height:1;text-align:center;border-radius:7px;
+  }
+  #viewControls select{height:34px;min-height:34px;max-width:170px}
+  #notifyPanel{
+    position:absolute;left:12px;bottom:60px;z-index:4;
     width:min(340px,calc(100% - 24px));
     background:#0f151bf2;
     border:1px solid #2b3742;border-radius:9px;
@@ -384,6 +395,11 @@
         <button id="ioClose">Close</button>
       </div>
     </section>
+    <div id="viewControls" aria-label="View controls">
+      <button id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
+      <button id="zoomInBtn" type="button" title="Zoom in">+</button>
+      <select id="stationJump" title="Center the map on a station"><option value="">Go to station&hellip;</option></select>
+    </div>
     <section id="notifyPanel" aria-label="Notifications">
       <div id="notifyHead">
         <span>Notifications</span>
@@ -745,10 +761,22 @@
   // A green disc at a tile's centre, marking a switch locked into a cleared route.
   function drawLock(x,y){
     const c = centerPoint(x,y), s = tileSize();
+    ctx.beginPath(); ctx.arc(c.x, c.y, s*0.23, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(8,12,18,.5)"; ctx.fill();   // translucent backing so it reads over a train
     const r = Math.max(4.5, s*0.17);
     ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2);
     ctx.fillStyle = LOCK_GREEN; ctx.fill();
     ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
+  }
+  // Translucent disc behind a centred signal marker (so it stays legible on top of a train).
+  function drawMarkerBack(x,y,dir,off,halo){
+    const c = centerPoint(x,y), s = tileSize();
+    const e = endpointPoint(x,y,dir);
+    let ux = e.x - c.x, uy = e.y - c.y; const L = Math.hypot(ux,uy) || 1; ux /= L; uy /= L;
+    const mx = c.x + ux*s*off, my = c.y + uy*s*off;
+    ctx.beginPath(); ctx.arc(mx, my, s*0.22, 0, Math.PI*2);
+    ctx.fillStyle = "rgba(8,12,18,.5)"; ctx.fill();
+    if (halo){ ctx.lineWidth = Math.max(2.5, s*0.055); ctx.strokeStyle = "#ffffff"; ctx.stroke(); }
   }
   // Red flash overlay on refused-operation tiles; expires by wall clock (works while paused).
   function drawFlash(){
@@ -797,6 +825,7 @@
     if (tile.kind === "stop") drawStopMarker(x,y,tile.dir);
     if (tile.kind === "signal"){
       const blink = blinkOn();
+      const off = 0.12; // small shift along the facing direction so two opposite mains don't overlap
       for (const dir of signalDirs(tile)){
         const mk = mkMain(x,y,dir);
         const manual = manualDirs(tile).includes(dir);
@@ -804,13 +833,11 @@
         let color;
         if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
         else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
-        // A manual main with a train waiting at it (red) gets a thick white halo to flag it
-        // to the operator, drawn behind the normal yellow-outlined triangle.
-        if (manual && manualMainHasWaiter(x,y,dir))
-          drawTriangle(x,y,dir,color,.385,"#ffffff",Math.max(4, tileSize()*.25),0,SIGNAL_SIDE_OFFSET);
+        // Centred marker: a translucent backing disc (white halo if a train waits at a red manual main).
+        drawMarkerBack(x, y, dir, off, manual && manualMainHasWaiter(x,y,dir));
         // Manual mains carry a yellow outline; automatic mains a dark one.
         const stroke = manual ? MANUAL_RING : "#0b0e12";
-        drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
+        drawTriangle(x,y,dir,color,.34,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)), off, 0);
       }
     }
   }
@@ -1063,12 +1090,14 @@
     drawOccupiedBlockOutlines();  // orange halo on occupied automatic blocks
     drawManualRouteOutlines();    // set-route green/black halo over it
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileRoutes(x,y,t); }
-    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
     drawSelectionOverlay();
     drawPlacementGhost();
     drawElementNames();
     drawStationLabels();
     drawTrains();
+    // Switch/signal markers are drawn LAST — centred on their tile, on top of trains — so the
+    // operator can always read a signal's state and a locked switch even under a train.
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawTileMarkers(x,y,t); }
     drawFlash();
     stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
@@ -1255,6 +1284,10 @@
     if (nameInput && document.activeElement !== nameInput) nameInput.value = (server.meta && server.meta.name) || "";
     const speedSel = document.getElementById("speedSelect");
     if (speedSel && document.activeElement !== speedSel && state.speedScale != null) speedSel.value = String(state.speedScale);
+    const jump = document.getElementById("stationJump");
+    if (jump && document.activeElement !== jump)
+      jump.innerHTML = `<option value="">Go to station&hellip;</option>` +
+        state.stations.map(st => `<option value="${st.id}">${escapeHtml(st.name || ("Station " + st.id))}</option>`).join("");
     const sel = document.getElementById("loadGameSelect");
     if (sel && document.activeElement !== sel){
       const cur = server.gameId;
@@ -1421,18 +1454,31 @@
     state.hover = null;
     draw();
   });
-  canvas.addEventListener("wheel", event => {
-    event.preventDefault();
-    closeContext();
-    const before = screenToWorld(event.offsetX,event.offsetY);
-    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  // Zoom by `factor`, keeping the world point under screen (sx,sy) fixed.
+  function zoomAround(factor, sx, sy){
+    const before = screenToWorld(sx, sy);
     state.view.zoom = Math.max(.35, Math.min(2.7, state.view.zoom * factor));
-    const after = screenToWorld(event.offsetX,event.offsetY);
+    const after = screenToWorld(sx, sy);
     const s = tileSize();
     state.view.x += (after.x - before.x) * s;
     state.view.y += (after.y - before.y) * s;
-    setHoverFromPoint({x:event.offsetX, y:event.offsetY});
     draw();
+  }
+  // Zoom around the centre of the viewport (used by the on-screen buttons).
+  function zoomButton(factor){ zoomAround(factor, stage.clientWidth/2, stage.clientHeight/2); }
+  // Centre the map on a station (keeping the current zoom).
+  function jumpToStation(st){
+    const r = normRect(st && st.rect); if (!r) return;
+    const s = tileSize();
+    state.view.x = -((r.x0 + r.x1 + 1) / 2) * s;
+    state.view.y = -((r.y0 + r.y1 + 1) / 2) * s;
+    draw();
+  }
+  canvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    closeContext();
+    zoomAround(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.offsetX, event.offsetY);
+    setHoverFromPoint({x:event.offsetX, y:event.offsetY});
   }, {passive:false});
   canvas.addEventListener("contextmenu", event => {
     event.preventDefault();
@@ -1930,6 +1976,12 @@
     document.getElementById("undoBtn").addEventListener("click", serverUndo);
     document.getElementById("redoBtn").addEventListener("click", serverRedo);
     document.getElementById("speedSelect").addEventListener("change", e => mutate({ type: "setSpeed", scale: Number(e.target.value) }));
+    document.getElementById("zoomInBtn").addEventListener("click", () => zoomButton(1.25));
+    document.getElementById("zoomOutBtn").addEventListener("click", () => zoomButton(1 / 1.25));
+    document.getElementById("stationJump").addEventListener("change", e => {
+      const st = state.stations.find(s => String(s.id) === e.target.value);
+      e.target.value = ""; if (st) jumpToStation(st);
+    });
     document.getElementById("gameName").addEventListener("change", e => serverRename(e.target.value));
     document.getElementById("loadGameSelect").addEventListener("change", e => { const id = e.target.value; e.target.value = ""; if (id) serverLoadGame(id); });
     document.getElementById("saveAsBtn").addEventListener("click", serverSaveAs);
