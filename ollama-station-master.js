@@ -96,54 +96,50 @@ THIS one event with the tools above and call done.`;
       }
     }
   }
-  // Sweep every managed station's signals for a train already WAITING and route it (no fresh event
-  // fires for those). A short per-train cooldown avoids re-deciding a train that can't yet be cleared.
-  const handled = {};
-  async function sweepWaiting(){
-    for (const st of STATIONS){
-      let report; try { report = (await gj(`/api/stations/${encodeURIComponent(st)}`)).station; } catch { continue; }
-      const items = [];
-      for (const sig of (report.signals || [])) for (const w of (sig.waiting || [])) items.push({ sig, w });
-      items.sort((a, b) => (b.w.waitedSeconds || 0) - (a.w.waitedSeconds || 0)); // longest-waiting first
-      for (const { sig, w } of items){
-        const key = `${st}:${sig.name}:${w.trainType}:${w.wantsDir}`;
-        if (handled[key] && Date.now() - handled[key] < 12000) continue;
-        handled[key] = Date.now();
-        console.error(`\n→ [${st}] waiting ${w.waitedSeconds}s: train "${w.trainTypeName}" at ${sig.name} wants ${w.wantsDir}`);
-        await act(st, `A train of type ${w.trainType} ("${w.trainTypeName}") has been WAITING ${w.waitedSeconds}s at ${sig.name} wanting to go ${w.wantsDir}. Set its route and clear ${sig.name} per your instructions.`);
-      }
-    }
+  // Build a "reconsider" prompt for one station from its currently-stopped trains.
+  function stuckPrompt(list){
+    const lines = list.slice(0, 8).map(t => `- train ${t.id} type ${t.type} ("${t.typeName}") at ${t.at || (t.x + "," + t.y)} heading ${t.heading || "?"}, stopped ${t.waitedSeconds}s${t.waitingFor ? ` — ${t.waitingFor}` : ""}`).join("\n");
+    return `Trains are STOPPED in your station right now (longest wait first):\n${lines}\nRoute as many as you can — clear the LONGEST-waiting first. A route refused a moment ago may work now that other trains have moved, so just retry it. Use set_path / clear_signal. If a train is blocked by another train directly ahead and there is genuinely nothing you can do yet, skip it. Call done when you've done what you can this round.`;
   }
 
-  // Loop: handle waiting trains, then long-poll all managed stations for new arrivals/messages.
+  // Main loop — work CONTINUOUSLY, no cooldowns: the instant the model is free, act on whatever is
+  // stopped in your stations (it may touch ANY train, ANY time). Only when nothing is stopped do we
+  // block waiting for the next arrival/message. Tiny trains, fast turnaround — no artificial delays.
   let cursor = 0;
   const owner = STATIONS.map(encodeURIComponent).join(",");
-  await sweepWaiting();
   while (true){
+    // 1) Anything stopped? Act on it immediately, longest-waiting first, then re-check at once.
+    let trains; try { trains = (await gj("/api/trains")).trains || []; } catch { trains = []; }
+    const stuck = trains
+      .filter(t => STATIONS.includes(t.station) && !t.moving && t.waitingFor !== "dwelling at stop")
+      .sort((a, b) => (b.waitedSeconds || 0) - (a.waitedSeconds || 0));
+    if (stuck.length){
+      for (const st of STATIONS){
+        const list = stuck.filter(t => t.station === st);
+        if (!list.length) continue;
+        console.error(`\n● [${st}] ${list.length} stopped (longest ${list[0].waitedSeconds}s) — working`);
+        await act(st, stuckPrompt(list));
+      }
+      continue; // re-evaluate at once — the model never sits idle while a train is stopped
+    }
+    // 2) Nothing stopped — block until the next arrival/message, route it proactively, then loop.
     let res;
     try {
-      const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 35000);
-      const r = await fetch(`${SERVER}/api/notifications?owner=${owner}&after=${cursor}&wait=25${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
+      const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 30000);
+      const r = await fetch(`${SERVER}/api/notifications?owner=${owner}&after=${cursor}&wait=20${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
       clearTimeout(to); res = await r.json();
-    } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 1000)); continue; }
+    } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 500)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
       const st = ev.owner || STATIONS[0];
       if (ev.mode === "message"){
         console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
         await act(st, `The operator sent you a message: "${ev.text}". Reply with send_message if warranted, and take any switch/signal actions they ask for.`);
-      } else if (ev.mode === "waiting"){
-        // A train already stuck at a red signal, surfaced by the long-poll (no fresh edge event fires
-        // for it). Cooldown-dedupe so an un-clearable train isn't re-decided every poll.
-        const key = `${st}:${ev.element}:${ev.trainType}:${ev.wantsDir}`;
-        if (handled[key] && Date.now() - handled[key] < 10000) continue;
-        handled[key] = Date.now();
-        console.error(`\n→ [${st}] waiting ${ev.waitedSeconds}s: train "${ev.trainTypeName}" at ${ev.element} wants ${ev.wantsDir}`);
-        await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") has been WAITING ${ev.waitedSeconds}s at ${ev.element} wanting to go ${ev.wantsDir}. Set its route and clear ${ev.element} per your instructions.`);
-      } else {
+      } else if (ev.mode === "approach" || ev.mode === "reach"){
         console.error(`\n→ [${st}] ${ev.mode}: train "${ev.trainTypeName}" at ${ev.element} (${ev.clock})`);
-        await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.`);
+        await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") is approaching ${ev.element}. Set its route and clear the signal per your instructions, before it has to stop.`);
       }
+      // "waiting"/"pass" need no handling here — a stopped train is picked up by step 1 on the next loop.
     }
   }
 })().catch(e => { console.error(e); process.exit(1); });
