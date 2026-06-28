@@ -1249,12 +1249,15 @@
         for (const i of tilesInStation(st)){
           if (i.tile.kind !== "signal" || !manualDirs(i.tile).length) continue; // only operator-cleared signals
           for (const t of state.trains){
-            if (t.x === i.x && t.y === i.y && trainStopped(t) && trainWaitReason(t)){
-              const ex = exitFor(i.tile, t.from); const tt = trainTypeById(t.type);
-              out.push({ mode: "waiting", owner: st.name, element: i.tile.name || null,
-                trainId: t.id, trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
-                wantsDir: ex != null ? DIRNAMES[ex] : null, waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
-            }
+            if (t.x !== i.x || t.y !== i.y || !trainStopped(t) || !trainWaitReason(t)) continue;
+            const ex = exitFor(i.tile, t.from);
+            // Only a train facing this signal in one of its MANUAL directions is the master's to clear;
+            // a train passing the other (automatic) way is held by automatic logic, not this signal.
+            if (ex == null || !manualDirs(i.tile).includes(ex)) continue;
+            const tt = trainTypeById(t.type);
+            out.push({ mode: "waiting", owner: st.name, element: i.tile.name || null,
+              trainId: t.id, trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
+              wantsDir: DIRNAMES[ex], waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
           }
         }
       }
@@ -1403,23 +1406,61 @@
       });
       if (state.watchEvents.length > 500) state.watchEvents.shift();
     }
+    // The exit direction a train will have AT the watched tile, tracing the LIVE forward path to it
+    // (so a diverging switch is honoured). null if its path doesn't reach the tile within maxTiles.
+    function approachExitDir(t, wx, wy, maxTiles){
+      let cx = t.x, cy = t.y, from = t.from;
+      for (let i = 0; i < maxTiles; i++){
+        const tile = getTile(cx, cy); if (!tile) return null;
+        const ex = exitFor(tile, from); if (ex == null) return null;
+        const nx = cx + DIRS[ex].dx, ny = cy + DIRS[ex].dy;
+        const nt = getTile(nx, ny);
+        if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return null;
+        if (nx === wx && ny === wy) return exitFor(nt, opposite(ex)); // stepping onto the watched tile
+        cx = nx; cy = ny; from = opposite(ex);
+      }
+      return null;
+    }
+    // A MANUAL signal only concerns trains passing in one of its manual directions. Some manual signals
+    // point opposite to the normal running direction; a train passing the NORMAL way is not the master's
+    // business and must not notify (it was confusing the station-master LLMs). Returns true to SUPPRESS a
+    // train exiting the (signal) tile in direction `dir`. Only manual-signal tiles filter; switches and
+    // automatic-only signals are unaffected, and an undeterminable dir is never suppressed (don't miss real events).
+    function watchDirSuppressed(tile, dir){
+      if (!tile || tile.kind !== "signal") return false;
+      const md = manualDirs(tile);
+      if (!md.length || dir == null) return false;
+      return !md.includes(dir);
+    }
     function checkWatches(){
       if (!state.watches.length) return;
       for (const w of state.watches){
         const tk = key(w.x, w.y);
+        const wt = getTile(w.x, w.y);
         const cur = new Set();
+        w._dir = w._dir || new Map();   // trainId -> traversal exit dir, captured while the head is on the tile
         for (const t of state.trains){
-          if (w.mode === "reach"){ if (t.x === w.x && t.y === w.y) cur.add(t.id); }
+          const onTile = (t.x === w.x && t.y === w.y);
+          // Capture the traversal dir while the head is on the tile; it survives the whole cover (the
+          // train stays in `cur`), so a pass watch can still tell the direction when the tail clears.
+          if (onTile && wt) w._dir.set(t.id, exitFor(wt, t.from));
+          if (w.mode === "reach"){ if (onTile) cur.add(t.id); }
           else if (w.mode === "pass"){ const bt = t._tiles || computeBodyTiles(t); if (bt.has(tk)) cur.add(t.id); }
-          else { // "approach"
-            if (t.x === w.x && t.y === w.y) continue;          // already arrived → not "approaching"
-            if (forwardPath(t, w.tiles || DEFAULT_APPROACH_TILES).includes(tk)) cur.add(t.id);
-          }
+          else { if (!onTile && forwardPath(t, w.tiles || DEFAULT_APPROACH_TILES).includes(tk)) cur.add(t.id); }
         }
         const prev = w._on || new Set();
-        if (w.mode === "pass"){ for (const id of prev) if (!cur.has(id)) fireWatch(w, id); }     // leaving edge
-        else { for (const id of cur) if (!prev.has(id)) fireWatch(w, id); }                       // entering edge
+        // Edge-detect, then fire only if the train traverses the tile in a MANUAL direction of the signal.
+        const fireIds = (w.mode === "pass")
+          ? [...prev].filter(id => !cur.has(id))     // tail cleared (leaving edge)
+          : [...cur].filter(id => !prev.has(id));    // entered (approach/reach entering edge)
+        for (const id of fireIds){
+          let dir;
+          if (w.mode === "approach"){ const t = state.trains.find(x => x.id === id); dir = t ? approachExitDir(t, w.x, w.y, w.tiles || DEFAULT_APPROACH_TILES) : null; }
+          else dir = w._dir.get(id);                 // reach/pass: dir captured while the head was on the tile
+          if (!watchDirSuppressed(wt, dir)) fireWatch(w, id);
+        }
         w._on = cur;
+        for (const id of [...w._dir.keys()]) if (!cur.has(id) && !prev.has(id)) w._dir.delete(id); // keep while covering / one step after
       }
     }
     function publicWatch(w){ return {id:w.id, owner:w.owner, x:w.x, y:w.y, mode:w.mode, tiles:w.tiles, element:w.element||null, label:w.label||null}; }
