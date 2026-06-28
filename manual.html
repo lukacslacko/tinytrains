@@ -1106,7 +1106,9 @@
   // engine.js). It renders the streamed snapshot of the ONE live game and sends every change —
   // operate AND edit — to the server as a command; the server applies it, autosaves, and streams
   // the result back. There is no offline mode and no local simulation: the server is the truth.
-  const server = { connected: false, es: null, meta: null };
+  // The server runs MANY games at once; this page VIEWS one (server.gameId) while others (e.g. ones
+  // station-master AIs are operating) keep running. Every request carries the game it targets.
+  const server = { connected: false, es: null, meta: null, gameId: null };
   let serverGamesCache = [];
   const SERVER_DOWN = "Game server unreachable — start it with: node server.js";
 
@@ -1115,16 +1117,31 @@
     let body = null; try { body = await res.json(); } catch {}
     return { ok: res.ok, status: res.status, body };
   }
+  function withGame(body){ return Object.assign({ game: server.gameId }, body || {}); }
 
-  // Subscribe to the live game's snapshot stream. Each message replaces our rendered state.
+  // On startup, pick a game to view (the most recent live one, else the most recent saved), then
+  // subscribe to it.
+  async function serverStart(){
+    try {
+      const r = await apiFetch("/api/games");
+      const list = (r.body && r.body.games) || []; serverGamesCache = list;
+      const live = list.filter(g => g.live);
+      server.gameId = (live[0] && live[0].id) || (list[0] && list[0].id) || null;
+    } catch {}
+    serverConnect();
+  }
+  // Subscribe to the viewed game's snapshot stream. Each message replaces our rendered state.
   function serverConnect(){
     if (server.es) server.es.close();
     lastEventSeq = 0;
-    server.es = new EventSource("/api/events");
+    const q = server.gameId ? "?game=" + encodeURIComponent(server.gameId) : "";
+    server.es = new EventSource("/api/events" + q);
     server.es.onmessage = (e) => { try { onServerSnapshot(JSON.parse(e.data)); } catch {} };
     server.es.onerror = () => { server.connected = false; state.message = SERVER_DOWN; syncServerUI(); draw(); };
     refreshServerGames();
   }
+  // Switch which game this page views (other games keep running on the server).
+  function switchToGame(id){ if (!id) return; server.gameId = id; server.meta = null; serverConnect(); }
   async function refreshServerGames(){
     try { const r = await apiFetch("/api/games"); serverGamesCache = (r.body && r.body.games) || []; }
     catch { serverGamesCache = []; }
@@ -1146,13 +1163,13 @@
   // The single mutation path: send a command (edit OR operate) to the authoritative game. The
   // change is reflected by the snapshot that streams back (no local mutation — server is the truth).
   function mutate(cmd){
-    apiFetch("/api/command", { method: "POST", body: JSON.stringify(cmd) }).then(r => {
+    apiFetch("/api/command", { method: "POST", body: JSON.stringify(withGame(cmd)) }).then(r => {
       if (r.body && r.body.flash) flashTiles(r.body.flash);
       if (r.body && !r.body.ok && r.body.error){ state.message = r.body.error; draw(); }
     }).catch(() => { server.connected = false; state.message = SERVER_DOWN; draw(); });
   }
   function serverPost(path, body){
-    return apiFetch(path, { method: "POST", body: body ? JSON.stringify(body) : undefined })
+    return apiFetch(path, { method: "POST", body: JSON.stringify(withGame(body)) })
       .then(r => { refreshServerGames(); return r; })
       .catch(() => { server.connected = false; state.message = SERVER_DOWN; draw(); return { ok:false }; });
   }
@@ -1160,22 +1177,22 @@
   function serverRedo(){ serverPost("/api/game/redo"); }
   function togglePauseServer(){ serverPost("/api/game/pause", { paused: !!(server.meta && server.meta.running) }); }
   function stepServer(){ serverPost("/api/game/step"); }
-  // Start a brand-new game from a layout (premade templates / Import JSON), switching to it.
+  // Start a brand-new game from a layout (premade templates / Import JSON) and switch to it.
   async function serverNewFromLayout(name, layout){
-    const r = await serverPost("/api/game/new", { name, layout });
-    if (r && r.body && r.body.ok) state.message = `New game "${r.body.name}"`;
-    else if (r && r.body) state.message = "Server rejected layout: " + (r.body.error || "");
-    draw();
+    const r = await apiFetch("/api/game/new", { method: "POST", body: JSON.stringify({ name, layout }) });
+    if (r.body && r.body.ok){ state.message = `New game "${r.body.name}"`; switchToGame(r.body.id); }
+    else state.message = "Server rejected layout: " + ((r.body && r.body.error) || "");
+    refreshServerGames(); draw();
   }
   async function serverLoadGame(id){
     const r = await serverPost("/api/game/load", { id });
-    if (r && r.body && r.body.ok) state.message = `Loaded "${r.body.name}"`;
+    if (r && r.body && r.body.ok){ state.message = `Viewing "${r.body.name}"`; switchToGame(r.body.id); }
   }
   async function serverSaveAs(){
     const name = (prompt("Save as a new game — name:", (server.meta && server.meta.name) || "New game") || "").trim();
     if (!name) return;
     const r = await serverPost("/api/game/save-as", { name });
-    if (r && r.body && r.body.ok) state.message = `Saved as new game "${r.body.name}"`;
+    if (r && r.body && r.body.ok){ state.message = `Saved as new game "${r.body.name}"`; switchToGame(r.body.id); }
     draw();
   }
   function serverRename(name){ const n = (name || "").trim(); if (n) serverPost("/api/game/rename", { name: n }); }
@@ -1192,9 +1209,9 @@
     if (nameInput && document.activeElement !== nameInput) nameInput.value = (server.meta && server.meta.name) || "";
     const sel = document.getElementById("loadGameSelect");
     if (sel && document.activeElement !== sel){
-      const cur = server.meta && server.meta.id;
+      const cur = server.gameId;
       sel.innerHTML = `<option value="">Load game&hellip;</option>` +
-        serverGamesCache.map(g => `<option value="${g.id}"${g.id===cur?" disabled":""}>${escapeHtml(g.name||g.id)} · ${clockFromFrames(g.simFrame)}${g.id===cur?" (current)":""}</option>`).join("");
+        serverGamesCache.map(g => `<option value="${g.id}"${g.id===cur?" disabled":""}>${escapeHtml(g.name||g.id)} · ${clockFromFrames(g.simFrame)}${g.live&&g.id!==cur?" ●":""}${g.id===cur?" (viewing)":""}</option>`).join("");
     }
   }
 
@@ -4322,7 +4339,7 @@
   updateSignals();
   resize();
   notify("info", "Connecting to the game server…");
-  serverConnect(); // server-only: subscribe to the live game and render its streamed state
+  serverStart(); // server-only: pick a game to view and subscribe to its streamed state
   animation();
 })();
 </script>

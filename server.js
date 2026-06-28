@@ -44,105 +44,128 @@ const AUTOSAVE_MS = 10000;     // persist the live game to disk this often
 
 if (!fs.existsSync(GAMES_DIR)) fs.mkdirSync(GAMES_DIR, { recursive: true });
 
-// ---- The one live game -------------------------------------------------------------------
-// { id, name, engine, running, createdAt } — engine holds the authoritative state.
-let game = null;
-const sseClients = new Set();
-let lastAutosave = 0;
+// ---- Live games (MANY run at once) -------------------------------------------------------
+// games: id -> { id, name, engine, running, undo, redo, subs:Set<res>, saveTimer, lastAutosave }.
+// Every running game is ticked; the UI VIEWS one (subscribes to its stream) while others keep
+// playing — so station masters keep operating their game even when you switch the UI to another.
+const games = new Map();
 
 function newId(){ return "g" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36); }
 function gamePath(id){ return path.join(GAMES_DIR, path.basename(id) + ".json"); }
 
+function makeLive({ id, name, engine }){
+  const lg = { id: id || newId(), name: name || "Untitled", engine, running: true, undo: [], redo: [], subs: new Set(), saveTimer: null, lastAutosave: 0, acc: 0, sinceBroadcast: 0 };
+  games.set(lg.id, lg);
+  return lg;
+}
 function startGame({ id, name, fromLayout, fromSnapshot }){
   const engine = createEngine();
   if (fromSnapshot) engine.applySnapshot(fromSnapshot);
   else engine.deserialize(typeof fromLayout === "string" ? fromLayout : JSON.stringify(fromLayout));
-  game = { id: id || newId(), name: name || "Untitled", engine, running: true, createdAt: Date.now(), undo: [], redo: [] };
-  saveGame();        // every game is immediately a saved game (server-only: there is no unsaved state)
-  broadcast();
-  return game;
+  const lg = makeLive({ id, name, engine });
+  saveGame(lg);        // every game is immediately a saved game (server-only: no unsaved state)
+  broadcast(lg);
+  return lg;
+}
+function loadRec(id){ const p = gamePath(id); if (!fs.existsSync(p)) return null; try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } }
+// Resolve a game reference (id OR name) to a LIVE game, loading it from disk into the live set if it
+// isn't already running. This is what lets a station master target its own game by name regardless
+// of what the UI is viewing.
+function resolveGame(ref){
+  if (ref == null || ref === "") return null;
+  ref = String(ref);
+  if (games.has(ref)) return games.get(ref);
+  for (const lg of games.values()) if (lg.name.toLowerCase() === ref.toLowerCase()) return lg;
+  let rec = loadRec(ref);
+  if (!rec){ const hit = listSaved().find(g => g.name.toLowerCase() === ref.toLowerCase()); if (hit) rec = loadRec(hit.id); }
+  if (!rec) return null;
+  const engine = createEngine(); engine.applySnapshot(rec.snapshot);
+  return makeLive({ id: rec.id, name: rec.name, engine });
+}
+// The game for a request: explicit ?game=/body.game, else (convenience) the only live game.
+function reqGame(query, body){
+  const ref = (body && body.game != null ? body.game : null) || (query && query.get("game"));
+  if (ref) return resolveGame(ref);
+  return games.size === 1 ? games.values().next().value : null;
 }
 
-function saveGame(name){
-  if (!game) return null;
-  if (name) game.name = name;
-  const rec = { id: game.id, name: game.name, savedAt: Date.now(), snapshot: game.engine.snapshot() };
-  fs.writeFileSync(gamePath(game.id), JSON.stringify(rec));
+function saveGame(lg, name){
+  if (!lg) return null;
+  if (name) lg.name = name;
+  const rec = { id: lg.id, name: lg.name, savedAt: Date.now(), snapshot: lg.engine.snapshot() };
+  fs.writeFileSync(gamePath(lg.id), JSON.stringify(rec));
   return rec;
 }
-// Autosave is continuous: any change marks the game dirty and it is flushed shortly after. This is
-// what makes "whenever anything changes, update the saved game state" hold without writing on every
-// 60 Hz tick.
-let saveTimer = null;
-function scheduleSave(){ if (saveTimer) return; saveTimer = setTimeout(() => { saveTimer = null; try { saveGame(); } catch (e) { console.error("autosave failed:", e.message); } }, 400); }
+// Continuous autosave per game (debounced) so "whenever anything changes" the save updates.
+function scheduleSave(lg){ if (!lg || lg.saveTimer) return; lg.saveTimer = setTimeout(() => { lg.saveTimer = null; try { saveGame(lg); } catch (e) { console.error("autosave failed:", e.message); } }, 400); }
 
-// Layout undo/redo history (edit commands only — operating switches/signals is not an "edit").
-function pushUndo(){ if (!game) return; game.undo.push(game.engine.serialize()); if (game.undo.length > 100) game.undo.shift(); game.redo.length = 0; }
-function applyCommand(cmd){
-  if (!game) return { ok:false, error:"no active game" };
-  if (game.engine.EDIT_COMMANDS && game.engine.EDIT_COMMANDS.has(cmd.type)) pushUndo();
-  const result = game.engine.command(cmd);
-  scheduleSave();
-  broadcast();
+function pushUndo(lg){ lg.undo.push(lg.engine.serialize()); if (lg.undo.length > 100) lg.undo.shift(); lg.redo.length = 0; }
+function applyCommand(lg, cmd){
+  if (!lg) return { ok: false, error: "no such game" };
+  if (lg.engine.EDIT_COMMANDS && lg.engine.EDIT_COMMANDS.has(cmd.type)) pushUndo(lg);
+  const result = lg.engine.command(cmd);
+  scheduleSave(lg); broadcast(lg);
   return result;
 }
-function undoRedo(which){
-  if (!game) return { ok:false, error:"no active game" };
-  const from = which === "redo" ? game.redo : game.undo;
-  const to = which === "redo" ? game.undo : game.redo;
-  if (!from.length) return { ok:false, error:"nothing to " + which };
-  to.push(game.engine.serialize());
-  game.engine.applyLayout(from.pop());
-  scheduleSave();
-  broadcast();
-  return { ok:true };
+function undoRedo(lg, which){
+  if (!lg) return { ok: false, error: "no such game" };
+  const from = which === "redo" ? lg.redo : lg.undo;
+  const to = which === "redo" ? lg.undo : lg.redo;
+  if (!from.length) return { ok: false, error: "nothing to " + which };
+  to.push(lg.engine.serialize());
+  lg.engine.applyLayout(from.pop());
+  scheduleSave(lg); broadcast(lg);
+  return { ok: true };
 }
-// Fork the current state into a brand-new saved game and switch to working on it.
-function saveAs(name){
-  if (!game) return null;
-  const snap = game.engine.snapshot();
-  game.id = newId(); game.name = name || game.name; game.undo = []; game.redo = [];
-  const rec = { id: game.id, name: game.name, savedAt: Date.now(), snapshot: snap };
-  fs.writeFileSync(gamePath(game.id), JSON.stringify(rec));
-  broadcast();
-  return rec;
+// Fork a game into a NEW live game (the original keeps running).
+function saveAs(lg, name){
+  if (!lg) return null;
+  const engine = createEngine(); engine.applySnapshot(lg.engine.snapshot());
+  const ng = makeLive({ name: name || lg.name, engine });
+  saveGame(ng); broadcast(ng);
+  return ng;
 }
 
-function listGames(){
+function listSaved(){
   return fs.readdirSync(GAMES_DIR).filter(f => f.endsWith(".json")).map(f => {
-    try {
-      const rec = JSON.parse(fs.readFileSync(path.join(GAMES_DIR, f), "utf8"));
-      return { id: rec.id, name: rec.name, savedAt: rec.savedAt, simFrame: rec.snapshot ? rec.snapshot.simFrame : 0 };
-    } catch { return null; }
-  }).filter(Boolean).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+    try { const rec = JSON.parse(fs.readFileSync(path.join(GAMES_DIR, f), "utf8"));
+      return { id: rec.id, name: rec.name, savedAt: rec.savedAt, simFrame: rec.snapshot ? rec.snapshot.simFrame : 0 }; } catch { return null; }
+  }).filter(Boolean);
+}
+// Saved games merged with live ones (live entries show the running sim frame + flags).
+function listGames(){
+  const map = new Map(listSaved().map(g => [g.id, g]));
+  for (const lg of games.values()) map.set(lg.id, { id: lg.id, name: lg.name, savedAt: (map.get(lg.id) || {}).savedAt || 0, simFrame: lg.engine.state.simFrame });
+  return [...map.values()].map(g => ({ ...g, live: games.has(g.id), running: games.has(g.id) ? games.get(g.id).running : false }))
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }
 
-function gameMeta(){ return game ? { id: game.id, name: game.name, running: game.running } : null; }
-function snapshotPayload(){ return game ? { game: gameMeta(), snapshot: game.engine.snapshot() } : { game: null, snapshot: null }; }
+function gameMeta(lg){ return lg ? { id: lg.id, name: lg.name, running: lg.running } : null; }
+function snapshotPayload(lg){ return lg ? { game: gameMeta(lg), snapshot: lg.engine.snapshot() } : { game: null, snapshot: null }; }
 
-// ---- Tick loop (authoritative) -----------------------------------------------------------
-let acc = 0, last = Date.now(), sinceBroadcast = 0;
+// ---- Tick loop: advance EVERY running game -----------------------------------------------
+let last = Date.now();
 setInterval(() => {
   const now = Date.now();
   let elapsed = now - last; last = now;
-  if (elapsed > 250) elapsed = 250;                 // clamp long stalls
-  if (game && game.running){
-    acc += elapsed;
-    let steps = 0;
-    while (acc >= SIM_STEP_MS && steps < 8){ game.engine.simStep(); acc -= SIM_STEP_MS; steps++; sinceBroadcast++; }
-    if (steps >= 8) acc = 0;
-    if (sinceBroadcast >= BROADCAST_EVERY){ sinceBroadcast = 0; broadcast(); }
-  } else {
-    acc = 0;
+  if (elapsed > 250) elapsed = 250;
+  for (const lg of games.values()){
+    if (lg.running){
+      lg.acc += elapsed;
+      let steps = 0;
+      while (lg.acc >= SIM_STEP_MS && steps < 8){ lg.engine.simStep(); lg.acc -= SIM_STEP_MS; steps++; lg.sinceBroadcast++; }
+      if (steps >= 8) lg.acc = 0;
+      if (lg.sinceBroadcast >= BROADCAST_EVERY){ lg.sinceBroadcast = 0; broadcast(lg); }
+    } else lg.acc = 0;
+    if (now - lg.lastAutosave > AUTOSAVE_MS){ lg.lastAutosave = now; try { saveGame(lg); } catch (e) {} }
   }
-  if (game && now - lastAutosave > AUTOSAVE_MS){ lastAutosave = now; try { saveGame(); } catch (e) { console.error("autosave failed:", e.message); } }
 }, SIM_STEP_MS);
 
-// ---- SSE broadcast -----------------------------------------------------------------------
-function broadcast(){
-  if (!sseClients.size) return;
-  const data = "data: " + JSON.stringify(snapshotPayload()) + "\n\n";
-  for (const res of sseClients){ try { res.write(data); } catch { sseClients.delete(res); } }
+// ---- SSE broadcast (per game, to that game's subscribers) --------------------------------
+function broadcast(lg){
+  if (!lg || !lg.subs.size) return;
+  const data = "data: " + JSON.stringify(snapshotPayload(lg)) + "\n\n";
+  for (const res of lg.subs){ try { res.write(data); } catch { lg.subs.delete(res); } }
 }
 
 // ---- HTTP plumbing -----------------------------------------------------------------------
@@ -177,10 +200,10 @@ function serveStatic(req, res){
 }
 
 // Resolve a Station Master target tile from { name } (station-local element name) or { x, y }.
-function resolveTarget(stationId, body){
+function resolveTarget(lg, stationId, body){
   if (Number.isFinite(body.x) && Number.isFinite(body.y)) return { x: body.x, y: body.y };
   if (body.name != null){
-    const hit = game.engine.resolveElement(stationId, body.name);
+    const hit = lg.engine.resolveElement(stationId, body.name);
     if (hit) return { x: hit.x, y: hit.y, tile: hit.tile };
   }
   return null;
@@ -269,188 +292,186 @@ const server = http.createServer(async (req, res) => {
 
   if (!url.startsWith("/api/")) return serveStatic(req, res);
 
+  // The game a request targets (?game=<id|name> or body.game). Most endpoints need one; the helper
+  // returns the only live game when unspecified (single-game convenience), else null.
+  const NO_GAME = { code: 409, body: { ok: false, error: "specify ?game=<id|name> (no such / no single game)" } };
+
   try {
+    let m;
     // ---- read-only ----
     if (url === "/api/health" && req.method === "GET")
-      return sendJSON(res, 200, { ok: true, hasGame: !!game, name: game && game.name });
-
-    if (url === "/api/state" && req.method === "GET")
-      return sendJSON(res, 200, { ok: true, ...snapshotPayload() });
+      return sendJSON(res, 200, { ok: true, games: listGames().filter(g => g.live).map(g => ({ id: g.id, name: g.name, running: g.running })) });
 
     if (url === "/api/games" && req.method === "GET")
       return sendJSON(res, 200, { ok: true, games: listGames() });
 
-    if (url === "/api/stations" && req.method === "GET"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      return sendJSON(res, 200, { ok: true, stations: game.engine.stationsReport() });
+    if (url === "/api/guide" && req.method === "GET")
+      return sendJSON(res, 200, { ok: true, guide: STATION_MASTER_GUIDE });
+
+    if (url === "/api/state" && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: true, ...snapshotPayload(lg) });
     }
 
-    let m;
+    if (url === "/api/stations" && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: true, stations: lg.engine.stationsReport() });
+    }
+
     if ((m = url.match(/^\/api\/stations\/([^\/]+)$/)) && req.method === "GET"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const st = game.engine.stationsReport().find(s => String(s.id) === decodeURIComponent(m[1]) ||
-        s.name.toLowerCase() === decodeURIComponent(m[1]).toLowerCase());
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       return sendJSON(res, 200, { ok: true, station: st });
     }
 
-    // The global Station Master operating brief (same for every station).
-    if (url === "/api/guide" && req.method === "GET")
-      return sendJSON(res, 200, { ok: true, guide: STATION_MASTER_GUIDE });
-
-    // A single station's free-text instructions.
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/instructions$/)) && req.method === "GET"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       const id = decodeURIComponent(m[1]);
-      const st = game.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
+      const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "" });
     }
 
-    // ---- SSE state stream ----
+    // ---- SSE state stream for one game (?game=<id|name>) ----
     if (url === "/api/events" && req.method === "GET"){
+      const lg = reqGame(query);
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache",
         "Connection": "keep-alive", "Access-Control-Allow-Origin": "*" });
       res.write("retry: 2000\n\n");
-      res.write("data: " + JSON.stringify(snapshotPayload()) + "\n\n");
-      sseClients.add(res);
-      req.on("close", () => sseClients.delete(res));
+      res.write("data: " + JSON.stringify(snapshotPayload(lg)) + "\n\n");
+      if (lg){ lg.subs.add(res); req.on("close", () => lg.subs.delete(res)); }
+      else req.on("close", () => {});
       return;
     }
 
-    // ---- mutations ----
+    // ---- game lifecycle ----
     if (url === "/api/game/new" && req.method === "POST"){
       const body = await readBody(req);
       if (!body.layout) return sendJSON(res, 400, { ok: false, error: "missing layout" });
-      try { const g = startGame({ name: body.name, fromLayout: body.layout });
-        return sendJSON(res, 200, { ok: true, id: g.id, name: g.name }); }
+      try { const lg = startGame({ name: body.name, fromLayout: body.layout });
+        return sendJSON(res, 200, { ok: true, id: lg.id, name: lg.name }); }
       catch (e) { return sendJSON(res, 400, { ok: false, error: "bad layout: " + e.message }); }
     }
 
     if (url === "/api/game/load" && req.method === "POST"){
-      const body = await readBody(req);
-      const p = gamePath(String(body.id || ""));
-      if (!body.id || !fs.existsSync(p)) return sendJSON(res, 404, { ok: false, error: "no such saved game" });
-      const rec = JSON.parse(fs.readFileSync(p, "utf8"));
-      startGame({ id: rec.id, name: rec.name, fromSnapshot: rec.snapshot });
-      return sendJSON(res, 200, { ok: true, id: rec.id, name: rec.name });
+      const body = await readBody(req);                          // load = ensure live; it keeps running
+      const lg = resolveGame(body.id || body.game);
+      if (!lg) return sendJSON(res, 404, { ok: false, error: "no such saved game" });
+      return sendJSON(res, 200, { ok: true, id: lg.id, name: lg.name });
     }
 
     if (url === "/api/game/save" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const body = await readBody(req);
-      const rec = saveGame(body.name);
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const rec = saveGame(lg, body.name);
       return sendJSON(res, 200, { ok: true, id: rec.id, name: rec.name, savedAt: rec.savedAt });
     }
 
-    // Fork the current game into a new saved game and switch to it (the only explicit save in
-    // server-only mode; ordinary changes autosave the current game).
     if (url === "/api/game/save-as" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const body = await readBody(req);
-      const rec = saveAs(body.name);
-      return sendJSON(res, 200, { ok: true, id: rec.id, name: rec.name });
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const ng = saveAs(lg, body.name);
+      return sendJSON(res, 200, { ok: true, id: ng.id, name: ng.name });
     }
 
     if (url === "/api/game/rename" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const body = await readBody(req);
-      game.name = (body.name || "").trim() || game.name;
-      saveGame(); broadcast();
-      return sendJSON(res, 200, { ok: true, name: game.name });
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      lg.name = (body.name || "").trim() || lg.name;
+      saveGame(lg); broadcast(lg);
+      return sendJSON(res, 200, { ok: true, name: lg.name });
     }
 
     if ((url === "/api/game/undo" || url === "/api/game/redo") && req.method === "POST"){
-      const result = undoRedo(url.endsWith("redo") ? "redo" : "undo");
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const result = undoRedo(lg, url.endsWith("redo") ? "redo" : "undo");
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
 
     if (url === "/api/game/pause" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const body = await readBody(req);
-      game.running = !body.paused;
-      game.engine.setPaused(!game.running);
-      broadcast();
-      return sendJSON(res, 200, { ok: true, running: game.running });
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      lg.running = !body.paused; lg.engine.setPaused(!lg.running); broadcast(lg);
+      return sendJSON(res, 200, { ok: true, running: lg.running });
     }
 
     if (url === "/api/game/step" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      game.engine.simStep();
-      broadcast();
-      return sendJSON(res, 200, { ok: true, simFrame: game.engine.state.simFrame });
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      lg.engine.simStep(); broadcast(lg);
+      return sendJSON(res, 200, { ok: true, simFrame: lg.engine.state.simFrame });
     }
 
+    // ---- operate / edit ----
     if (url === "/api/command" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const cmd = await readBody(req);
-      const result = applyCommand(cmd);
+      const cmd = await readBody(req); const lg = reqGame(query, cmd);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const result = applyCommand(lg, cmd);
       return sendJSON(res, result.ok ? 200 : 400, { ...result });
     }
 
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/switch$/)) && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const id = decodeURIComponent(m[1]);
-      const body = await readBody(req);
-      const t = resolveTarget(id, body);
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const t = resolveTarget(lg, decodeURIComponent(m[1]), body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
-      const result = applyCommand({ type: "setSwitch", x: t.x, y: t.y, to: parseDir(body.to) });
+      const result = applyCommand(lg, { type: "setSwitch", x: t.x, y: t.y, to: parseDir(body.to) });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/signal$/)) && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const id = decodeURIComponent(m[1]);
-      const body = await readBody(req);
-      const t = resolveTarget(id, body);
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const t = resolveTarget(lg, decodeURIComponent(m[1]), body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
-      const result = applyCommand({ type, x: t.x, y: t.y, dir: body.dir });
+      const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: body.dir });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
-    // ---- Station Master notifications: register a watch, list/remove, and long-poll for events ----
+    // ---- Station Master notifications: register a watch, list/remove, long-poll ----
     if (url === "/api/watches" && req.method === "POST"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      const body = await readBody(req);
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       let x = body.x, y = body.y;
       if (!(Number.isFinite(x) && Number.isFinite(y))){
         const elem = body.element != null ? body.element : body.name;
         if (body.station == null || elem == null) return sendJSON(res, 400, { ok: false, error: "give x,y or station + element" });
-        const hit = game.engine.resolveElement(body.station, elem);
+        const hit = lg.engine.resolveElement(body.station, elem);
         if (!hit) return sendJSON(res, 404, { ok: false, error: "element not found in station" });
         x = hit.x; y = hit.y;
       }
       const owner = body.owner != null ? String(body.owner) : (body.station != null ? String(body.station) : "");
-      const w = game.engine.addWatch({ owner, x, y, mode: body.mode, tiles: body.tiles, element: body.element || body.name || null, label: body.label });
+      const w = lg.engine.addWatch({ owner, x, y, mode: body.mode, tiles: body.tiles, element: body.element || body.name || null, label: body.label });
       return sendJSON(res, 200, { ok: true, watch: w });
     }
 
     if (url === "/api/watches" && req.method === "GET"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      return sendJSON(res, 200, { ok: true, watches: game.engine.listWatches(query.get("owner") || undefined) });
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: true, watches: lg.engine.listWatches(query.get("owner") || undefined) });
     }
 
     if ((m = url.match(/^\/api\/watches\/(\d+)$/)) && req.method === "DELETE"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-      return sendJSON(res, 200, { ok: game.engine.removeWatch(Number(m[1])) });
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: lg.engine.removeWatch(Number(m[1])) });
     }
 
     // Long-poll: hold the request open until a watched train fires an event for `owner` (seq > after)
-    // or `wait` seconds pass. This is how a Station Master AI receives notifications — it calls this
-    // (via the MCP await_events tool), blocks, and is woken when a train approaches/arrives.
+    // or `wait` seconds pass. How a Station Master AI receives notifications (via await_events).
     if (url === "/api/notifications" && req.method === "GET"){
-      if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       const owner = query.get("owner") || undefined;
       const after = Number(query.get("after") || 0);
       const waitMs = Math.min(Math.max(Number(query.get("wait") || 25), 0), 55) * 1000;
       const deadline = Date.now() + waitMs;
       let timer = null;
       const tick = () => {
-        if (!game) return sendJSON(res, 409, { ok: false, error: "no active game" });
-        const events = game.engine.watchEventsSince(owner, after);
+        const events = lg.engine.watchEventsSince(owner, after);
         if (events.length || Date.now() >= deadline)
-          return sendJSON(res, 200, { ok: true, events, cursor: game.engine.watchCursor() });
+          return sendJSON(res, 200, { ok: true, events, cursor: lg.engine.watchCursor() });
         timer = setTimeout(tick, 150);
       };
       req.on("close", () => { if (timer) clearTimeout(timer); });
@@ -465,21 +486,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// Server-only mode: there is ALWAYS a current game. On boot, resume the most recently saved game;
-// if there are none, create an empty one to build on.
+// Ensure at least one game is live on boot, so the UI has a default to view. Other games come live
+// on demand (resolveGame) when the UI loads them or a station master targets them — and keep running.
 const EMPTY_LAYOUT = { version: 3, tiles: [], stations: [], trainTypes: [], view: { x: 0, y: 0, zoom: 1 } };
 function bootGame(){
-  const saved = listGames();
+  const saved = listSaved().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   if (saved.length){
-    try {
-      const rec = JSON.parse(fs.readFileSync(gamePath(saved[0].id), "utf8"));
-      startGame({ id: rec.id, name: rec.name, fromSnapshot: rec.snapshot });
-      console.log(`Resumed "${rec.name}" (${rec.id})`);
-      return;
-    } catch (e) { console.error("could not resume latest save:", e.message); }
+    const lg = resolveGame(saved[0].id);
+    if (lg){ console.log(`Resumed "${lg.name}" (${lg.id})`); return; }
   }
-  startGame({ name: "Untitled", fromLayout: EMPTY_LAYOUT });
-  console.log(`Started a new empty game (${game.id})`);
+  const lg = startGame({ name: "Untitled", fromLayout: EMPTY_LAYOUT });
+  console.log(`Started a new empty game (${lg.id})`);
 }
 
 server.listen(PORT, () => {

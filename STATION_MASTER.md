@@ -12,6 +12,10 @@ Start the game server first: `node server.js` (port 8765), with a game that has 
 to load it (e.g. the Miskolc save). The station instructions are the free-text you write per
 station (right-click a station name on the map) — e.g.
 
+**The server runs many games at once.** Every API call targets a game by id or name (`?game=` on
+GET, `game` in the POST body); the MCP server is pinned to one with `--game`. So the UI can switch
+which game it views while station masters keep operating their own — each AI keeps playing its game.
+
 > If a train of line 1 arrives at A, set 1 to NW and clear A.
 > If a train arrives at B1, set 2 SW and clear B1.
 
@@ -68,19 +72,19 @@ one station, that calls the HTTP API. Tools:
 Run / configure (one per station):
 
 ```
-node mcp-server.js --station Tiszai [--server http://localhost:8765]
-# or env: TINYTRAINS_STATION, TINYTRAINS_SERVER
+node mcp-server.js --station Tiszai --game Miskolc [--server http://localhost:8765]
+# or env: TINYTRAINS_STATION, TINYTRAINS_GAME, TINYTRAINS_SERVER
 ```
 
-As an MCP stdio server in a host (e.g. Claude Code), one entry per station:
+As an MCP stdio server in a host (e.g. Claude Code), one entry per station (all `--game Miskolc`):
 
 ```json
 {
   "mcpServers": {
-    "tiszai":  { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Tiszai"],
+    "tiszai":  { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Tiszai", "--game", "Miskolc"],
                  "env": { "TINYTRAINS_SERVER": "http://localhost:8765" } },
-    "foter":   { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Foter"] },
-    "szikra":  { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Szikra"] }
+    "foter":   { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Foter", "--game", "Miskolc"] },
+    "szikra":  { "command": "node", "args": ["/abs/path/mcp-server.js", "--station", "Szikra", "--game", "Miskolc"] }
   }
 }
 ```

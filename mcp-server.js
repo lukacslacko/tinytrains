@@ -28,16 +28,21 @@ function arg(name, envName, def){
 }
 const SERVER = (arg("server", "TINYTRAINS_SERVER", "http://localhost:8765")).replace(/\/$/, "");
 const STATION = arg("station", "TINYTRAINS_STATION", "");
+const GAME = arg("game", "TINYTRAINS_GAME", ""); // which game on the server this station belongs to
 
 let cursor = 0; // last seen watch-event seq, advanced by await_events
 
 function log(...a){ process.stderr.write("[station-master] " + a.join(" ") + "\n"); } // stderr: never on the protocol stream
 
+// Every call is scoped to this server's GAME: appended to the query for GET, merged into the body
+// for POST/DELETE. So this MCP instance only ever touches its own game.
 async function api(method, path, body){
-  const res = await fetch(SERVER + path, {
+  let url = SERVER + path;
+  if (method === "GET" && GAME) url += (path.includes("?") ? "&" : "?") + "game=" + encodeURIComponent(GAME);
+  const res = await fetch(url, {
     method,
     headers: { "Content-Type": "application/json" },
-    body: body != null ? JSON.stringify(body) : undefined
+    body: method !== "GET" ? JSON.stringify(Object.assign({ game: GAME }, body || {})) : undefined
   });
   let json = null; try { json = await res.json(); } catch {}
   return { ok: res.ok, status: res.status, body: json };
@@ -123,7 +128,7 @@ const TOOLS = [
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), (wait + 5) * 1000);
       try {
-        const res = await fetch(`${SERVER}/api/notifications?owner=${encodeURIComponent(owner)}&after=${cursor}&wait=${wait}`, { signal: ctrl.signal });
+        const res = await fetch(`${SERVER}/api/notifications?owner=${encodeURIComponent(owner)}&after=${cursor}&wait=${wait}${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
         const j = await res.json();
         if (typeof j.cursor === "number") cursor = j.cursor;
         const events = (j.events || []).map(e => ({ train: e.trainTypeName, trainId: e.trainId, element: e.element, mode: e.mode, clock: e.clock }));
@@ -155,7 +160,7 @@ async function handle(msg){
       protocolVersion: (params && params.protocolVersion) || "2024-11-05",
       capabilities: { tools: {} },
       serverInfo: { name: "tinytrains-station-master" + (STATION ? ":" + STATION : ""), version: "0.1.0" },
-      instructions: `You are the Station Master for "${STATION || "(unset)"}". Call get_guide and get_my_instructions, then watch_arrivals, then loop on await_events — acting on each notification.`
+      instructions: `You are the Station Master for station "${STATION || "(unset)"}" in game "${GAME || "(default)"}". Call get_guide and get_my_instructions, then watch_arrivals, then loop on await_events — acting on each notification.`
     });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return; // no response
@@ -189,4 +194,4 @@ process.stdin.on("data", chunk => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-log(`ready — station="${STATION || "(unset)"}" server=${SERVER}`);
+log(`ready — station="${STATION || "(unset)"}" game="${GAME || "(default)"}" server=${SERVER}`);
