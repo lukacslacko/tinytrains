@@ -48,6 +48,11 @@ Operate (by station-local element name, or `x,y`):
 - `POST /api/stations/:id/switch` `{ name, to }` — `to` is a compass bearing (N/NE/E/SE/S/SW/W/NW)
   or branch index.
 - `POST /api/stations/:id/signal` `{ name, action: "clear" | "red" }`.
+- `POST /api/stations/:id/path` `{ path: [entrySignal, switch, switch, …, (signal|compass)?] }` —
+  **sets a whole route at once**: traces the live track element-to-element and sets every switch so
+  the route threads through it (one port is the stem, the other the set branch), then clears the entry
+  signal. An optional final signal/compass fixes the last switch's exit when it's entered via its stem.
+  This is the easy way to satisfy a "set path 1,2,3" instruction without computing switch directions.
 
 Notify:
 - `POST /api/watches` `{ station, element, mode, tiles? }` (or `{ owner, x, y, mode }`) → `{ watch }`.
@@ -73,9 +78,10 @@ one station, that calls the HTTP API. Tools:
 
 `get_guide`, `get_my_instructions`, `list_stations`, `get_infrastructure` (switches + signals, with
 any train **waiting** at each signal), `list_trains` (where every train is + its heading + why it is
-waiting), `set_switch`, `clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch
-every signal at once), `await_events` (the blocking notification receiver), `send_message`,
-`list_watches`, `cancel_watch`.
+waiting), **`set_path`** (route a train in one call — `["A","1","2","3"]` lines up the switches and
+clears the entry signal; the easy way to follow "set path …" instructions), `set_switch`,
+`clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),
+`await_events` (the blocking notification receiver), `send_message`, `list_watches`, `cancel_watch`.
 
 Because approach/arrival notifications are edge-triggered, a master also **sweeps `get_infrastructure`
 every cycle** for trains already waiting at its signals and routes them — so trains don't get

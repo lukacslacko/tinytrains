@@ -1127,6 +1127,7 @@
         case "setTrainTypes": return cmdSetTrainTypes(cmd.trainTypes, cmd.selectedType);
         case "pasteTiles":    return cmdPasteTiles(cmd.tiles);
         case "removeTiles":   return cmdRemoveTiles(cmd.keys, cmd.andTrains);
+        case "setPath":       return cmdSetPath(cmd.station, cmd.path);
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
         case "step":          simStep(); return {ok:true, simFrame: state.simFrame};
@@ -1218,6 +1219,103 @@
         });
         return {id: st.id, name: st.name, instructions: st.instructions || "", rect: st.rect, switches, signals};
       });
+    }
+
+    // ---- Set a PATH of switches (line them all up from an entry signal) ----
+    // A path is [entrySignal, switch, switch, … , (final switch | signal | compass dir)?]. We trace
+    // the live track from each element to the next (through plain track only — a signal or switch in
+    // between breaks it) and set every switch so the route threads through it: of the two ports the
+    // route uses at a switch, one is the stem and the other a branch, and the switch is set to that
+    // branch. The entry signal is then cleared. This frees a master from working out each switch's
+    // direction by hand. (See cmdSetPath in the guide.)
+    function isDirName(s){ return typeof s === "string" && DIRNAMES.includes(s.trim().toUpperCase()); }
+    function dirIndexOf(s){ return DIRNAMES.indexOf(s.trim().toUpperCase()); }
+    function tilePortsOf(t){ return t.kind === "switch" ? [t.stem, ...t.branches] : (t.route || []); }
+    // Follow plain track (track/stop/spawn/crossing — NOT signals/switches) from (x,y) leaving via
+    // exitDir; return the first signal/switch reached and the port we arrive on, or null if broken.
+    function traceSegment(x, y, exitDir){
+      let cx = x, cy = y, ex = exitDir;
+      for (let i = 0; i < 512; i++){
+        const nx = cx + DIRS[ex].dx, ny = cy + DIRS[ex].dy;
+        const nt = getTile(nx, ny);
+        if (!nt) return null;
+        const arrival = opposite(ex);
+        if (nt.kind === "signal" || nt.kind === "switch")
+          return tilePortsOf(nt).includes(arrival) ? { x: nx, y: ny, arrival } : null;
+        const out = exitFor(nt, arrival);
+        if (out == null) return null;
+        cx = nx; cy = ny; ex = out;
+      }
+      return null;
+    }
+    // Ports to try leaving an element toward the next: a signal/first element → both its track ports;
+    // a switch entered via its stem → the two branches; entered via a branch → the stem.
+    function pathExits(ent, inPort, isFirst){
+      if (isFirst || ent.tile.kind !== "switch") return (ent.tile.route || []).slice();
+      if (inPort === ent.tile.stem) return ent.tile.branches.slice();
+      if (ent.tile.branches.includes(inPort)) return [ent.tile.stem];
+      return [];
+    }
+    // Set a switch so the route from inPort to outPort passes (one must be the stem, the other a branch).
+    function setSwitchForPorts(ent, inPort, outPort){
+      const stem = ent.tile.stem, branches = ent.tile.branches;
+      const branchPort = [inPort, outPort].find(p => branches.includes(p));
+      if (branchPort == null || ![inPort, outPort].includes(stem)) return { ok: false, error: "the route would cross between its two branches" };
+      if (switchLocked(ent.x, ent.y) && switchCurrent(ent.tile) !== branchPort) return { ok: false, error: "locked by another route" };
+      ent.tile.current = branchPort;
+      return { ok: true, branch: branchPort };
+    }
+    function cmdSetPath(stationId, names){
+      if (!Array.isArray(names) || names.length < 2) return { ok: false, error: 'path needs an entry signal then at least one switch, e.g. ["A","1","2"]' };
+      let finalDir = null, elemNames = names.map(String);
+      // An optional trailing compass direction sets the last switch's exit (if entered via its stem).
+      const lastNm = elemNames[elemNames.length - 1];
+      if (elemNames.length >= 3 && isDirName(lastNm) && !resolveElement(stationId, lastNm)){ finalDir = dirIndexOf(lastNm); elemNames = elemNames.slice(0, -1); }
+      const ents = [];
+      for (const nm of elemNames){
+        const hit = resolveElement(stationId, nm);
+        if (!hit) return { ok: false, error: `"${nm}" is not an element of this station` };
+        ents.push({ name: nm, x: hit.x, y: hit.y, tile: hit.tile });
+      }
+      if (ents[0].tile.kind !== "signal") return { ok: false, error: `a path must start with a signal; "${ents[0].name}" is a ${ents[0].tile.kind}` };
+      for (let i = 1; i < ents.length; i++){
+        const k = ents[i].tile.kind, lastOne = i === ents.length - 1;
+        if (k !== "switch" && !(lastOne && k === "signal")) return { ok: false, error: `"${ents[i].name}" is a ${k}; a path is a signal then switches (with an optional final signal/direction)` };
+      }
+      const set = [];
+      let prevArrival = null;
+      for (let i = 0; i < ents.length - 1; i++){
+        const cur = ents[i], nxt = ents[i + 1];
+        let conn = null;
+        for (const ex of pathExits(cur, prevArrival, i === 0)){
+          const seg = traceSegment(cur.x, cur.y, ex);
+          if (seg && seg.x === nxt.x && seg.y === nxt.y){ conn = seg; conn.exit = ex; break; }
+        }
+        if (!conn) return { ok: false, error: `no clear track from "${cur.name}" to "${nxt.name}" (they don't connect directly, or a signal/switch is in between)` };
+        if (cur.tile.kind === "switch"){
+          const r = setSwitchForPorts(cur, prevArrival, conn.exit);
+          if (!r.ok) return { ok: false, error: `switch "${cur.name}": ${r.error}` };
+          set.push({ name: cur.name, dir: DIRNAMES[r.branch] });
+        }
+        prevArrival = conn.arrival;
+      }
+      const last = ents[ents.length - 1];
+      if (last.tile.kind === "switch"){
+        if (last.tile.branches.includes(prevArrival)){                       // entered via a branch → set to it
+          if (switchLocked(last.x, last.y) && switchCurrent(last.tile) !== prevArrival) return { ok: false, error: `switch "${last.name}" is locked by another route` };
+          last.tile.current = prevArrival; set.push({ name: last.name, dir: DIRNAMES[prevArrival] });
+        } else if (finalDir != null){                                        // entered via stem → use the given exit dir
+          if (!last.tile.branches.includes(finalDir)) return { ok: false, error: `"${DIRNAMES[finalDir]}" is not a branch of switch "${last.name}" (branches ${last.tile.branches.map(b => DIRNAMES[b]).join("/")})` };
+          if (switchLocked(last.x, last.y) && switchCurrent(last.tile) !== finalDir) return { ok: false, error: `switch "${last.name}" is locked by another route` };
+          last.tile.current = finalDir; set.push({ name: last.name, dir: DIRNAMES[finalDir] });
+        } else {
+          return { ok: false, error: `the last switch "${last.name}" is entered from its stem — add a final compass direction (e.g. "E") or a signal to say which way to set it` };
+        }
+      }
+      updateSignals();
+      let cleared = null;
+      if (manualDirs(ents[0].tile).length) cleared = cmdSetSignal(ents[0].x, ents[0].y, undefined, true);  // route the train
+      return { ok: true, entry: ents[0].name, set, cleared };
     }
 
     // ---- Train-location watches (notifications) ----

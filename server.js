@@ -222,98 +222,44 @@ function parseDir(v){
 
 // The global operating brief every Station Master AI reads first (GET /api/guide). It is the same
 // for every station; the station-specific orders come from GET /api/stations/:id/instructions.
-const STATION_MASTER_GUIDE = `# Tiny Trains — Station Master briefing
+const STATION_MASTER_GUIDE = `# Tiny Trains — Station Master
 
-You are the **Station Master** of one station on a live model railway. Your job is to route trains
-through YOUR station by setting its switches and clearing its manual signals, following the orders
-in your station's instructions. One AI runs per station; you control only your own station's
-infrastructure.
+You run ONE station: route trains through it by setting its switches and clearing its manual signals,
+following your station's instructions. Your tools act ONLY on your station. Elements have short local
+names (A, B, 1, 2 …) — the names your instructions use. Trains run on sight and never crash; a train
+stops only at a red signal, a switch set against it, or an occupied tile.
 
-## How the railway works
-- Trains drive **on sight**: a train only stops for an occupied tile ahead, a switch set against it,
-  or a **red signal**. There are no crashes.
-- **Switches** route by their set branch. A switch points its stem at one branch; the other branch
-  is set against and a train arriving on it stops. Set a switch with \`set_switch(element, direction)\`
-  where direction is a compass bearing (N, NE, E, SE, S, SW, W, NW) — the branch you want the stem
-  connected to.
-- **Manual signals** are **red by default** and have no automatic logic. Clearing one
-  (\`clear_signal(element)\`) opens a route: the engine checks the path ahead (following the live
-  switch settings) to the next signal facing the train; if it is clear it turns the signal green and
-  **locks every switch along that route** until the train has passed. Set it back to red with
-  \`set_signal_red(element)\` (only works before a train has taken it). A clear can be refused (path
-  broken, occupied, or crosses a switch another route already locked) — read the reason and fix the
-  switches or wait.
-- Some signals are **automatic** (not yours to operate); you only ever set MANUAL signals and
-  switches that belong to your station. Elements are addressed by their **station-local name**
-  (e.g. \`A\`, \`B\`, \`1\`, \`2\`) — the labels used in your instructions.
+## The easy way to route a train: set_path
+Your instructions read like "when a train arrives at A: set path 1,2,3" or "train 2 → set path 5,3".
+Just call **set_path** with the entry signal followed by those switches — it lines up every switch for
+you and clears the entry signal:
+  - "a train arrives at A: set path 1,2,3"  →  set_path(["A","1","2","3"])
+  - "set path 4 East" (train at B)          →  set_path(["B","4","E"])   (final compass dir or signal
+    fixes the last switch's exit if needed)
+The entry signal is the one the train is arriving at — your instructions imply it, so put it first.
+If set_path reports a problem, read it and fix the path. ("line N"/"train N" = train TYPE N, reported
+with every event.) You can still set one switch with set_switch(element, compass) or open/close a
+signal with clear_signal / set_signal_red when an instruction is that specific.
 
-## Your instructions
-Call \`get_my_instructions\`. They are event-driven orders, e.g. "when a train of line 1 arrives at
-A, set 1 to NW and clear A" or "when a train arrives at C: for train 2 set path 5,3; for train 3 set
-path 5,2,1,4". Notation:
-- "set 1 to NW" → \`set_switch("1", "NW")\`.
-- "clear A" / "A green" → \`clear_signal("A")\`.
-- "set path 1,2,3" → set switches 1, 2, 3 to route the train along that path, **then clear the entry
-  signal** the train is arriving at. Clearing the entry signal locks the route you have set, so set
-  the switches first, then clear.
-- "line 1" / "train 2" refer to the train's **type number**, which is reported with every
-  notification (e.g. type 1 is "line 1"). Match the instruction's line/train number to the
-  notified train type.
+## Your job, in a loop
+1. Once: get_my_instructions, get_infrastructure (your switches + signals, and any train WAITING at
+   each signal), then watch_arrivals (be told when trains approach).
+2. Loop with await_events — it blocks until a train approaches (or the operator messages you):
+   - APPROACHING train → route it with set_path NOW, before it arrives, so it doesn't stop.
+   - EVERY cycle also check get_infrastructure and route any train already WAITING at a signal —
+     waiting trains fire no fresh event, so this is what stops them getting stranded. Re-try anything
+     refused earlier (a conflicting train may have passed). list_trains shows where all trains are.
 
-## Operate PROACTIVELY, and never let a train sit (this is the point)
-Two jobs: route APPROACHING trains before they have to brake, AND clear out any train already WAITING
-at one of your red signals. Approach notifications are edge-triggered — a train that is already
-stopped at a signal (it arrived before you started, or while you were busy) fires no fresh event, so
-you must also **sweep your signals every cycle**.
-
-1. Once, learn your station: \`get_my_instructions\`, \`get_infrastructure\`, \`list_stations\` (context).
-2. \`watch_arrivals()\` — sets an "approach" watch on every signal (fires while a train is still a few
-   tiles away; "reach" = arrived; "pass" = tail cleared).
-3. **Sweep now**: \`get_infrastructure\` lists, for each signal, any train **waiting** at it (its type
-   and which way it wants to go). For every waiting train, route it (set switches) and clear its
-   signal per your instructions. Use \`list_trains\` to see where ALL trains are and which way each is
-   headed if you need the bigger picture.
-4. Loop:
-   - \`await_events\` and block. It returns when a watched train approaches/arrives, or when an
-     operator messages you, or empty after the timeout.
-   - For an APPROACHING train: look up your instructions for that train type + element, set the
-     switches, and clear the entry signal NOW, before it arrives.
-   - Then **sweep again** (\`get_infrastructure\`): clear any signal that still has a waiting train —
-     including ones \`await_events\` didn't tell you about. Also re-try any clear that was refused
-     earlier (the conflicting train may have passed).
-   - Go back to \`await_events\`. Do this even when \`await_events\` returns nothing — a quick sweep
-     each cycle is what stops trains getting stranded.
-
-## Knowing when a switch or block frees up
-A switch you set for one train can't be re-thrown until that train has cleared it; a signal's block
-can't take a following train until the first has passed. Ask to be told the moment that happens with
-a **pass watch**: \`watch(element, "pass")\` on a SWITCH fires when a train's tail clears it (so you
-can re-throw it for the next movement), and on a SIGNAL fires when the train has passed it (so the
-block behind is free for a following train). Use these so you don't re-throw a switch under a train
-or admit a train into an occupied block.
-
-## Talking to the operator
-The human operator can message you; those arrive from \`await_events\` as \`mode: "message"\` with the
-text. Read them as instructions or questions, act if appropriate, and reply with \`send_message\`
-(your message pops up in the game and highlights your station). You may also \`send_message\` anytime
-to report status or flag a problem.
-
-## Suggest clarifications to your instructions
-Your instructions may be ambiguous, incomplete, or improvable. Once you have worked the station for a
-while and seen real traffic, if you notice a gap — a train type or entry point your instructions don't
-cover, a case where following them caused a needless stop or a conflict, an ambiguous phrase, or a
-simpler/clearer way to express a rule — **send the operator a suggestion with \`send_message\`**,
-clearly marked, e.g. "Suggestion: instructions don't say what to do for a line-3 train arriving at C —
-I routed it via 5,2 for now; please confirm." Keep operating as best you can meanwhile; don't spam —
-raise a suggestion only when you are fairly sure it would genuinely help, and not the same one twice.
-
-## Good practice
-- Be **idempotent**: setting a switch already in position or clearing an already-green signal is
-  harmless. If unsure of the current state, call \`get_infrastructure\`.
-- If \`set_switch\` is refused, the switch is locked by a route in progress — wait for that train.
-- If \`clear_signal\` is refused, the path isn't ready (wrong switch, occupied, or conflicting route);
-  fix the switches or wait, then retry.
-- Stay in your station. Other stations have their own masters; trains hand off between you.
+## Notes
+- A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train
+  passes; \`watch(element,"pass")\` tells you the moment that's safe (on a switch = free to re-throw,
+  on a signal = block behind cleared).
+- A refused clear/set means the path isn't ready (wrong switch, occupied, or locked by another route)
+  — fix or wait, then retry. Setting something already set is harmless.
+- The operator may message you (arrives via await_events as \`mode:"message"\`); reply with
+  send_message. Once you've worked a while, if an instruction is ambiguous or has a gap, send a
+  "Suggestion: …" (don't spam, and not the same one twice).
+- Stay in your station; trains hand off to other stations' masters.
 `;
 
 const server = http.createServer(async (req, res) => {
@@ -468,6 +414,15 @@ const server = http.createServer(async (req, res) => {
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
       const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: body.dir });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
+    }
+
+    // Set a whole path of switches at once (and clear the entry signal). body.path is a list of
+    // station-local names: an entry signal, then switches (with an optional final signal / compass dir).
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/path$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const result = applyCommand(lg, { type: "setPath", station: decodeURIComponent(m[1]), path: body.path });
+      return sendJSON(res, result.ok ? 200 : 400, result);
     }
 
     // ---- Operator <-> Station Master chat ----

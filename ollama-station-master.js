@@ -24,7 +24,9 @@ async function gp(path, body){ const r = await fetch(SERVER + path, { method: "P
 
 // Tools the model may call. Kept tiny on purpose.
 const TOOLS = [
-  { type: "function", function: { name: "set_switch", description: "Set a station switch so its stem connects to the given branch. direction is a compass bearing (N,NE,E,SE,S,SW,W,NW).",
+  { type: "function", function: { name: "set_path", description: "Route a train the easy way: path = [entry signal, then the switches in order, optional final compass dir]. Lines up every switch and clears the entry signal. Use for any 'set path …' instruction, e.g. set path 1,2,3 at A → [\"A\",\"1\",\"2\",\"3\"].",
+    parameters: { type: "object", properties: { path: { type: "array", items: { type: "string" } } }, required: ["path"] } } },
+  { type: "function", function: { name: "set_switch", description: "Set ONE station switch so its stem connects to the given branch. direction is a compass bearing (N,NE,E,SE,S,SW,W,NW). Prefer set_path for multi-switch routes.",
     parameters: { type: "object", properties: { element: { type: "string" }, direction: { type: "string" } }, required: ["element", "direction"] } } },
   { type: "function", function: { name: "clear_signal", description: "Clear a station manual signal to green to open the route ahead (set the switches first).",
     parameters: { type: "object", properties: { element: { type: "string" } }, required: ["element"] } } },
@@ -34,6 +36,7 @@ const TOOLS = [
     parameters: { type: "object", properties: {} } } }
 ];
 async function runTool(name, a){
+  if (name === "set_path") return gp(`/api/stations/${encodeURIComponent(STATION)}/path`, { path: a.path });
   if (name === "set_switch") return gp(`/api/stations/${encodeURIComponent(STATION)}/switch`, { name: a.element, to: a.direction });
   if (name === "clear_signal") return gp(`/api/stations/${encodeURIComponent(STATION)}/signal`, { name: a.element, action: "clear" });
   if (name === "send_message") return gp(`/api/stations/${encodeURIComponent(STATION)}/operator-message`, { text: a.text });
@@ -71,11 +74,12 @@ YOUR INSTRUCTIONS:
 ${instructions}
 
 A train's "line N" / "train N" in the instructions means train TYPE N (e.g. line 1 = type 1).
-When told a train is approaching, follow the instructions for that train type + entry point: emit
-set_switch and clear_signal tool calls (set switches first, then clear the entry signal), then call
-"done". Only use the listed elements. If the instructions DON'T cover this case (or are ambiguous), do
-your best, and also call send_message with a short "Suggestion: ..." telling the operator what is
-missing, then call "done".`;
+When told a train is approaching or waiting, route it per your instructions for that train type +
+entry point. For a "set path …" order, call set_path with the entry signal first then those switches,
+e.g. "arrives at A: set path 1,2,3" -> set_path(["A","1","2","3"]); it lines up the switches and clears
+the signal. For a single switch use set_switch then clear_signal. Then call "done". Only use this
+station's elements. If the instructions DON'T cover this case (or are ambiguous), do your best, and
+also send_message a short "Suggestion: ..." telling the operator what is missing, then call "done".`;
 
   console.error(`[ollama master] station=${STATION} game=${GAME || "(default)"} model=${MODEL} — watching ${signals}`);
 

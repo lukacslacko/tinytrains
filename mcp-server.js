@@ -99,6 +99,14 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { element: { type: "string" }, station: { type: "string" } }, required: ["element"] },
     run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/signal`, { name: a.element, action: "red" })).body },
 
+  { name: "set_path",
+    description: "Set a whole route at once — the EASY way to follow a 'set path …' instruction (you don't have to work out each switch's direction). Give the path as element names: the entry SIGNAL the train arrives at, then the SWITCHES to thread through in order, and optionally a final signal or compass direction (N/NE/E/SE/S/SW/W/NW) to fix the last switch's exit. The system lines up every switch so the route passes, then clears the entry signal. Your instructions imply the entry signal: 'a train arrives at A: set path 1,2,3' → set_path(path=[\"A\",\"1\",\"2\",\"3\"]); 'set path 4 East' at B → set_path(path=[\"B\",\"4\",\"E\"]). Returns which switches were set, or why it couldn't satisfy the path.",
+    inputSchema: { type: "object", properties: {
+      path: { type: "array", items: { type: "string" }, description: "[entry signal, switch, switch, …, optional final signal or compass direction]" },
+      station: { type: "string" }
+    }, required: ["path"] },
+    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/path`, { path: a.path })).body },
+
   { name: "watch",
     description: "Ask to be notified about a train at one of your elements — a SIGNAL or a SWITCH. mode: 'approach' (fires EARLY, while the train is still a few tiles away and heading toward it — route proactively), 'reach' (train arrives on it), or 'pass' (the train's tail has CLEARED it). Use 'pass' on a SWITCH to learn the moment it is free to re-throw for the next train, and on a SIGNAL to learn when the block behind it has cleared so a following train may enter. Returns a watch id; await_events then delivers the events.",
     inputSchema: { type: "object", properties: {
