@@ -256,7 +256,9 @@ path 5,2,1,4". Notation:
 - "set path 1,2,3" → set switches 1, 2, 3 to route the train along that path, **then clear the entry
   signal** the train is arriving at. Clearing the entry signal locks the route you have set, so set
   the switches first, then clear.
-- "line 1" / "train 2" refer to the train's **type** (reported with each notification).
+- "line 1" / "train 2" refer to the train's **type number**, which is reported with every
+  notification (e.g. type 1 is "line 1"). Match the instruction's line/train number to the
+  notified train type.
 
 ## Operate PROACTIVELY (this is the point)
 Don't wait for trains to stop at red signals. Set the route and clear the entry signal **while the

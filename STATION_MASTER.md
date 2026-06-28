@@ -94,6 +94,30 @@ get_my_instructions, then watch_arrivals, then loop on await_events — for each
 and clear the signal per your instructions."* The MCP server also returns that as `initialize`
 instructions.
 
+## Running an AI station master
+
+Two ready-made launchers (start `node server.js` first; load a game with stations, e.g. Miskolc):
+
+**Claude (via the MCP server):**
+```
+./station-master.sh <station> [game]            # e.g. ./station-master.sh Tiszai Miskolc
+MODEL=haiku EFFORT=low ./station-master.sh Tiszai Miskolc
+```
+Defaults to the cheapest model + lowest reasoning effort (the task is easy). It launches `claude`
+with the station's MCP server, allows only the station tools, and tells it to loop on `await_events`.
+Run one per station in its own terminal.
+
+**A local model (via Ollama) — no API, runs on your Mac:**
+```
+./ollama-station-master.sh <station> [game]      # e.g. ./ollama-station-master.sh Tiszai Miskolc
+OLLAMA_MODEL=llama3.1:8b ./ollama-station-master.sh Tiszai Miskolc
+```
+Here the **script** owns the event loop (registers approach watches, long-polls for arrivals); the
+local LLM only decides the switch/signal actions for each arriving train. That keeps each decision
+in a short, fresh context, so a small tool-calling model is reliable. Verified working with
+`qwen3.5` (it produced the correct `set_switch`/`clear_signal` calls for Tiszai's instructions);
+`qwen2.5:7b`, `llama3.1:8b`, and `mistral-nemo` are also good choices.
+
 ## Status
 
 Implemented and tested: the HTTP API (guide / instructions / infra / operate-by-name / watches /
