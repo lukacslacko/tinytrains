@@ -6,7 +6,8 @@
 // commands; the game keeps running with no browser open. State is managed locally: games persist
 // to ./games/<id>.json so they can be saved, listed, and continued.
 //
-//   node server.js [port]      (default 8765)
+//   node server.js [port]      (default 8765; or PORT env)
+//   TINYTRAINS_GAMES_DIR=./games-test PORT=8788 node server.js   (isolated dir+port for testing)
 //
 // Static files (manual.html, engine.js, index.html, …) are served from this directory, so open
 //   http://localhost:8765/manual.html
@@ -35,8 +36,11 @@ const path = require("path");
 const { createEngine } = require("./engine.js");
 
 const ROOT = __dirname;
-const GAMES_DIR = path.join(ROOT, "games");
-const PORT = Number(process.argv[2]) || 8765;
+// Game persistence directory and port are overridable so a test run can use an isolated dir+port
+// and never touch the directory/port someone is actually playing on (default ./games on :8765).
+const GAMES_DIR = process.env.TINYTRAINS_GAMES_DIR
+  ? path.resolve(process.env.TINYTRAINS_GAMES_DIR) : path.join(ROOT, "games");
+const PORT = Number(process.argv[2]) || Number(process.env.PORT) || 8765;
 const FRAMES_PER_SECOND = 60;
 const SIM_STEP_MS = 1000 / FRAMES_PER_SECOND;
 const BROADCAST_EVERY = 3;     // stream a snapshot every N sim frames (~20 Hz; trains move slowly)
