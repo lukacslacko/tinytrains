@@ -118,6 +118,14 @@ in a short, fresh context, so a small tool-calling model is reliable. Verified w
 `qwen3.5` (it produced the correct `set_switch`/`clear_signal` calls for Tiszai's instructions);
 `qwen2.5:7b`, `llama3.1:8b`, and `mistral-nemo` are also good choices.
 
+## Operator ↔ station-master chat
+
+Each station's pop-up (right-click its name) has a **chat** with its master. A message you send is
+delivered to the master as a notification (it arrives from `await_events` as `mode:"message"`); the
+master can reply with the `send_message` tool, which **pops up in the game notifications and
+highlights that station** on the map. Endpoints: `POST /api/stations/:id/message` (operator→master)
+and `POST /api/stations/:id/operator-message` (master→operator).
+
 ## Status
 
 Implemented and tested: the HTTP API (guide / instructions / infra / operate-by-name / watches /

@@ -28,12 +28,15 @@ const TOOLS = [
     parameters: { type: "object", properties: { element: { type: "string" }, direction: { type: "string" } }, required: ["element", "direction"] } } },
   { type: "function", function: { name: "clear_signal", description: "Clear a station manual signal to green to open the route ahead (set the switches first).",
     parameters: { type: "object", properties: { element: { type: "string" } }, required: ["element"] } } },
-  { type: "function", function: { name: "done", description: "Call when you have set everything needed for this train.",
+  { type: "function", function: { name: "send_message", description: "Send a short message to the human operator (appears in the game). Use to reply to the operator or report status.",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+  { type: "function", function: { name: "done", description: "Call when you have set everything needed for this event.",
     parameters: { type: "object", properties: {} } } }
 ];
 async function runTool(name, a){
   if (name === "set_switch") return gp(`/api/stations/${encodeURIComponent(STATION)}/switch`, { name: a.element, to: a.direction });
   if (name === "clear_signal") return gp(`/api/stations/${encodeURIComponent(STATION)}/signal`, { name: a.element, action: "clear" });
+  if (name === "send_message") return gp(`/api/stations/${encodeURIComponent(STATION)}/operator-message`, { text: a.text });
   if (name === "done") return { ok: true, done: true };
   return { ok: false, error: "unknown tool " + name };
 }
@@ -84,10 +87,13 @@ set_switch and clear_signal tool calls (set switches first, then clear the entry
     } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 1000)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
-      console.error(`\n→ ${ev.mode}: train "${ev.trainTypeName}" at ${ev.element} (${ev.clock})`);
+      const user = ev.mode === "message"
+        ? `The operator sent you a message: "${ev.text}". Reply with send_message if a reply is warranted, and take any switch/signal actions they ask for.`
+        : `A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.`;
+      console.error(`\n→ ${ev.mode === "message" ? `operator: "${ev.text}"` : `${ev.mode}: train "${ev.trainTypeName}" at ${ev.element}`} (${ev.clock})`);
       const messages = [
         { role: "system", content: system },
-        { role: "user", content: `A train of type ${ev.trainType} ("${ev.trainTypeName}") is ${ev.mode === "pass" ? "leaving" : "approaching"} ${ev.element}. Set its route and clear its signal per your instructions.` }
+        { role: "user", content: user }
       ];
       for (let round = 0; round < 6; round++){
         let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error("  llm error:", e.message); break; }

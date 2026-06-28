@@ -203,15 +203,24 @@
   }
   #contextMenu,#stationMenu{min-width:250px;max-width:290px;max-height:calc(100vh - 24px);overflow:auto;padding:12px;display:none;gap:10px}
   #contextMenu.open,#stationMenu.open{display:grid}
-  #stationMenu textarea{height:130px;line-height:1.4}
+  #stationMenu textarea{height:88px;line-height:1.4}
   /* The station pop-up is movable (drag its header) and resizable both ways (drag its corner), so
-     you can shove it aside to see the station while writing instructions. */
-  #stationMenu{width:300px;max-width:min(92vw,760px);resize:both}
+     you can shove it aside to see the station while writing instructions / chatting. */
+  #stationMenu{width:320px;max-width:min(92vw,760px);resize:both}
   #stationMenu.open{display:flex;flex-direction:column}
   #stationMenu h2{cursor:move;user-select:none}
   #stationMenu h2::after{content:" ⠿";color:var(--muted);font-weight:400}
-  #stationMenu .field.grow{flex:1 1 auto;min-height:0;grid-template-rows:auto 1fr}
-  #stationMenu .field.grow textarea{height:auto;min-height:110px;resize:none}
+  #stationMenu .field.grow{flex:1 1 auto;min-height:90px;grid-template-rows:auto 1fr auto}
+  .chatlog{min-height:70px;overflow-y:auto;border:1px solid var(--line);border-radius:7px;background:#0f141a;padding:6px;display:flex;flex-direction:column;gap:5px;font-size:13px}
+  .chatrow{display:flex;gap:6px;margin-top:5px}
+  .chatrow input{flex:1 1 auto;min-width:0}
+  .chatrow button{flex:0 0 auto;padding:6px 12px;text-align:center}
+  .chat-msg{padding:4px 8px;border-radius:7px;max-width:88%}
+  .chat-msg .chat-from{display:block;font-size:10px;color:var(--muted);margin-bottom:1px;text-transform:uppercase;letter-spacing:.04em}
+  .chat-op{align-self:flex-end;background:#243042}
+  .chat-master{align-self:flex-start;background:#152a20;border:1px solid #2f5a3f}
+  .chat-empty{color:var(--muted);font-size:12px}
+  .note-master{border-left-color:var(--accent);background:#102420}
   .type-row .type-notes{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;text-align:center}
   .type-row .type-notes.has-notes{border-color:var(--accent);color:var(--accent)}
   .srv-status{font-weight:700}
@@ -921,16 +930,27 @@
   // Translucent tint + border under the tiles, marking a station's extent.
   function drawStations(){
     const s = tileSize();
+    const now = performance.now();
     for (const st of state.stations){
       const r = normRect(st.rect); if (!r) continue;
       const a = worldToScreen(r.x0, r.y0);
       const w = (r.x1-r.x0+1)*s, h = (r.y1-r.y0+1)*s;
+      const hot = stationHighlights[st.name] && now < stationHighlights[st.name];
       ctx.save();
-      ctx.fillStyle = "rgba(120,150,205,.10)";
+      ctx.fillStyle = hot ? "rgba(100,215,196,.16)" : "rgba(120,150,205,.10)";
       ctx.fillRect(a.x, a.y, w, h);
-      ctx.strokeStyle = "rgba(150,180,235,.5)";
-      ctx.lineWidth = Math.max(1, s*.03);
-      ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+      if (hot){
+        // A station master messaged the operator: pulse a bright accent border to draw the eye.
+        const pulse = 0.55 + 0.45 * Math.sin(now / 180);
+        ctx.strokeStyle = "#64d7c4";
+        ctx.lineWidth = Math.max(2, s*.06);
+        ctx.globalAlpha = pulse;
+        ctx.strokeRect(a.x+2, a.y+2, w-4, h-4);
+      } else {
+        ctx.strokeStyle = "rgba(150,180,235,.5)";
+        ctx.lineWidth = Math.max(1, s*.03);
+        ctx.strokeRect(a.x+1, a.y+1, w-2, h-2);
+      }
       ctx.restore();
     }
   }
@@ -1094,7 +1114,19 @@
   // longer touches the DOM; it buffers events on state.events and the client drains them here.
   let lastEventSeq = 0;
   function drainEvents(){
-    for (const ev of state.events){ if (ev.seq > lastEventSeq){ lastEventSeq = ev.seq; notify(ev.level, ev.text); } }
+    for (const ev of state.events){
+      if (ev.seq <= lastEventSeq) continue;
+      lastEventSeq = ev.seq;
+      if (ev.level === "master" && ev.station){
+        // A message FROM a station master: log it, drop it into that station's chat, glow the station.
+        (stationChats[ev.station] = stationChats[ev.station] || []).push({ from: "master", text: ev.text });
+        stationHighlights[ev.station] = performance.now() + 9000;
+        renderStationChat(ev.station);
+        notify("master", `${ev.station}: ${ev.text}`);
+      } else {
+        notify(ev.level, ev.text);
+      }
+    }
   }
 
   // Flash the given tiles red for ~1s (used when an operation is refused). Wall-clock timed
@@ -1133,7 +1165,7 @@
   // Subscribe to the viewed game's snapshot stream. Each message replaces our rendered state.
   function serverConnect(){
     if (server.es) server.es.close();
-    lastEventSeq = 0;
+    lastEventSeq = 0; server._resync = true;
     const q = server.gameId ? "?game=" + encodeURIComponent(server.gameId) : "";
     server.es = new EventSource("/api/events" + q);
     server.es.onmessage = (e) => { try { onServerSnapshot(JSON.parse(e.data)); } catch {} };
@@ -1151,7 +1183,12 @@
     const gameChanged = !server.meta || !payload.game || server.meta.id !== payload.game.id;
     server.connected = true;
     server.meta = payload.game;
-    if (payload.snapshot){ applySnapshot(payload.snapshot); drainEvents(); }
+    if (payload.snapshot){
+      applySnapshot(payload.snapshot);
+      // On (re)connect / game switch, skip the event backlog so we don't replay old notifications.
+      if (server._resync){ server._resync = false; lastEventSeq = state.events.reduce((mx, e) => Math.max(mx, e.seq), 0); }
+      else drainEvents();
+    }
     state.paused = !!(payload.game && !payload.game.running);
     updatePauseButton();
     if (!trainTypeById(state.selectedType) && state.trainTypes.length) state.selectedType = state.trainTypes[0].id;
@@ -1514,13 +1551,20 @@
   }
   function openStationContext(st, clientX, clientY){
     stationMenu.dataset.id = st.id;
+    stationMenu.dataset.station = st.name;
+    delete stationHighlights[st.name]; // opening the pop-up acknowledges any highlight
     stationMenu.innerHTML =
       `<h2>Station</h2>` +
       `<label class="field"><span>Name</span><input name="name" type="text" maxlength="32" value="${escapeHtml(st.name||"")}" placeholder="Station ${st.id}"></label>` +
-      `<label class="field grow"><span>Station Master instructions</span>` +
+      `<label class="field"><span>Station Master instructions</span>` +
         `<textarea name="instructions" placeholder="Free-text orders for the Station Master — who sets this station's switches and manual signals.">${escapeHtml(st.instructions||"")}</textarea></label>` +
-      `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>`;
+      `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>` +
+      `<div class="field grow"><span>Chat with the station master</span>` +
+        `<div id="stationChat" class="chatlog"></div>` +
+        `<div class="chatrow"><input id="chatInput" type="text" autocomplete="off" placeholder="message ${escapeHtml(st.name)}…"><button type="button" id="chatSend">Send</button></div>` +
+      `</div>`;
     stationMenu.classList.add("open");
+    renderStationChat(st.name);
     // Place near the click, clamped to the stage using the pop-up's actual (possibly resized) size.
     const rect = stage.getBoundingClientRect();
     const w = stationMenu.offsetWidth, h = stationMenu.offsetHeight;
@@ -1529,6 +1573,36 @@
     const f = stationMenu.querySelector("input[name=name]"); if (f) f.focus();
   }
   function closeStationContext(){ stationMenu.classList.remove("open"); }
+
+  // ---- Operator <-> station-master chat (per station, by name) ----
+  const stationChats = {};        // station name -> [{from:"operator"|"master", text}]
+  const stationHighlights = {};   // station name -> performance.now() expiry (a master message glows the station)
+  function renderStationChat(name){
+    const box = document.getElementById("stationChat");
+    if (!box || stationMenu.dataset.station !== name) return;
+    const msgs = stationChats[name] || [];
+    box.innerHTML = msgs.length
+      ? msgs.map(m => `<div class="chat-msg chat-${m.from === "operator" ? "op" : "master"}"><span class="chat-from">${m.from === "operator" ? "you" : escapeHtml(name)}</span>${escapeHtml(m.text)}</div>`).join("")
+      : `<div class="chat-empty">No messages yet. The station master receives your message as a notification.</div>`;
+    box.scrollTop = box.scrollHeight;
+  }
+  function sendChat(name, text){
+    text = (text || "").trim(); if (!text) return;
+    (stationChats[name] = stationChats[name] || []).push({ from: "operator", text });
+    renderStationChat(name);
+    apiFetch(`/api/stations/${encodeURIComponent(name)}/message`, { method: "POST", body: JSON.stringify(withGame({ text })) });
+  }
+  stationMenu.addEventListener("click", event => {
+    if (event.target.id !== "chatSend") return;
+    const input = document.getElementById("chatInput");
+    sendChat(stationMenu.dataset.station, input.value); input.value = ""; input.focus();
+  });
+  stationMenu.addEventListener("keydown", event => {
+    if (event.target.id === "chatInput" && event.key === "Enter"){
+      event.preventDefault();
+      sendChat(stationMenu.dataset.station, event.target.value); event.target.value = "";
+    }
+  });
   // Drag the pop-up by its header so it doesn't cover the station you're writing instructions for.
   let stationDrag = null;
   stationMenu.addEventListener("pointerdown", event => {

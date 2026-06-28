@@ -120,7 +120,7 @@ const TOOLS = [
     } },
 
   { name: "await_events",
-    description: "BLOCK until a watched train approaches/arrives/passes, then return the event(s): the train's type and which element. THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on what it returns (set switches + clear the entry signal per your instructions), then call it again. If nothing happens within timeout_seconds it returns no events; just call it again to keep waiting.",
+    description: "BLOCK until something happens for you, then return it: a watched TRAIN (the train's type number/name + which element + approach/reach/pass), or a MESSAGE from the human operator (mode 'message', with the text). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on what it returns (route trains per your instructions; answer operator messages with send_message), then call it again. If nothing happens within timeout_seconds it returns no events; just call it again to keep waiting.",
     inputSchema: { type: "object", properties: { timeout_seconds: { type: "number", description: "how long to block, default 25, max 55" }, station: { type: "string" } } },
     run: async (a) => {
       const owner = need(a.station);
@@ -131,10 +131,17 @@ const TOOLS = [
         const res = await fetch(`${SERVER}/api/notifications?owner=${encodeURIComponent(owner)}&after=${cursor}&wait=${wait}${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
         const j = await res.json();
         if (typeof j.cursor === "number") cursor = j.cursor;
-        const events = (j.events || []).map(e => ({ train: e.trainTypeName, trainId: e.trainId, element: e.element, mode: e.mode, clock: e.clock }));
-        return events.length ? { events } : { events: [], note: "no train events within " + wait + "s — call await_events again to keep watching" };
+        const events = (j.events || []).map(e => e.mode === "message"
+          ? { mode: "message", from: e.from || "operator", message: e.text, clock: e.clock }
+          : { mode: e.mode, train: e.trainTypeName, trainType: e.trainType, trainId: e.trainId, element: e.element, clock: e.clock });
+        return events.length ? { events } : { events: [], note: "nothing within " + wait + "s — call await_events again to keep watching" };
       } finally { clearTimeout(to); }
     } },
+
+  { name: "send_message",
+    description: "Send a message to the human operator (it pops up in the game's notifications and highlights your station). Use it to report status, ask a question, or reply to an operator message.",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, station: { type: "string" } }, required: ["text"] },
+    run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/operator-message`, { text: a.text })).body },
 
   { name: "list_watches",
     description: "List the watches you currently have registered.",

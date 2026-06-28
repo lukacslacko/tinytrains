@@ -277,6 +277,12 @@ gives you that lead time:
 4. For that train + element, look up your instructions, set the switches, and clear the entry signal
    — now, before it arrives. Then go back to \`await_events\`.
 
+## Talking to the operator
+The human operator can message you; those arrive from \`await_events\` as \`mode: "message"\` with the
+text. Read them as instructions or questions, act if appropriate, and reply with \`send_message\`
+(your message pops up in the game and highlights your station). You may also \`send_message\` anytime
+to report status or flag a problem.
+
 ## Good practice
 - Be **idempotent**: setting a switch already in position or clearing an already-green signal is
   harmless. If unsure of the current state, call \`get_infrastructure\`.
@@ -432,6 +438,30 @@ const server = http.createServer(async (req, res) => {
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
       const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: body.dir });
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
+    }
+
+    // ---- Operator <-> Station Master chat ----
+    // From the operator (UI) TO a station master: delivered on the master's event stream so its
+    // await_events wakes with it (mode "message").
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/message$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
+      if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      lg.engine.notifyOwner(st.name, body.text, "operator");
+      return sendJSON(res, 200, { ok: true, station: st.name });
+    }
+    // From a station master TO the operator: shown in the game notification log + highlights the station.
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/operator-message$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
+      if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      lg.engine.notifyOperator(st.name, body.text);
+      broadcast(lg);
+      return sendJSON(res, 200, { ok: true, station: st.name });
     }
 
     // ---- Station Master notifications: register a watch, list/remove, long-poll ----
