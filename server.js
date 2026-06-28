@@ -298,6 +298,15 @@ text. Read them as instructions or questions, act if appropriate, and reply with
 (your message pops up in the game and highlights your station). You may also \`send_message\` anytime
 to report status or flag a problem.
 
+## Suggest clarifications to your instructions
+Your instructions may be ambiguous, incomplete, or improvable. Once you have worked the station for a
+while and seen real traffic, if you notice a gap — a train type or entry point your instructions don't
+cover, a case where following them caused a needless stop or a conflict, an ambiguous phrase, or a
+simpler/clearer way to express a rule — **send the operator a suggestion with \`send_message\`**,
+clearly marked, e.g. "Suggestion: instructions don't say what to do for a line-3 train arriving at C —
+I routed it via 5,2 for now; please confirm." Keep operating as best you can meanwhile; don't spam —
+raise a suggestion only when you are fairly sure it would genuinely help, and not the same one twice.
+
 ## Good practice
 - Be **idempotent**: setting a switch already in position or clearing an already-green signal is
   harmless. If unsure of the current state, call \`get_infrastructure\`.

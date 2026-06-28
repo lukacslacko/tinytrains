@@ -73,7 +73,9 @@ ${instructions}
 A train's "line N" / "train N" in the instructions means train TYPE N (e.g. line 1 = type 1).
 When told a train is approaching, follow the instructions for that train type + entry point: emit
 set_switch and clear_signal tool calls (set switches first, then clear the entry signal), then call
-"done". Only use the listed elements. If the instructions don't cover it, just call "done".`;
+"done". Only use the listed elements. If the instructions DON'T cover this case (or are ambiguous), do
+your best, and also call send_message with a short "Suggestion: ..." telling the operator what is
+missing, then call "done".`;
 
   console.error(`[ollama master] station=${STATION} game=${GAME || "(default)"} model=${MODEL} — watching ${signals}`);
 

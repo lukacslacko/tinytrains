@@ -144,7 +144,7 @@ const TOOLS = [
     } },
 
   { name: "send_message",
-    description: "Send a message to the human operator (it pops up in the game's notifications and highlights your station). Use it to report status, ask a question, or reply to an operator message.",
+    description: "Send a message to the human operator (it pops up in the game's notifications and highlights your station). Use it to report status, ask a question, reply to an operator message, or — once you've worked the station a while — SUGGEST A CLARIFICATION to your instructions when you find a gap, ambiguity, or improvement (prefix it 'Suggestion:').",
     inputSchema: { type: "object", properties: { text: { type: "string" }, station: { type: "string" } }, required: ["text"] },
     run: async (a) => (await api("POST", `/api/stations/${encodeURIComponent(need(a.station))}/operator-message`, { text: a.text })).body },
 

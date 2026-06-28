@@ -138,6 +138,11 @@ master can reply with the `send_message` tool, which **pops up in the game notif
 highlights that station** on the map. Endpoints: `POST /api/stations/:id/message` (operator→master)
 and `POST /api/stations/:id/operator-message` (master→operator).
 
+Masters are also told to **suggest clarifications** to their instructions once they've worked a while
+(an uncovered train/entry point, an ambiguity, a needless stop) — sent as a `Suggestion: …` chat
+message. (Verified: a local model routed an uncovered line-3 train as best it could and messaged a
+suggestion noting the gap.)
+
 ## Status
 
 Implemented and tested: the HTTP API (guide / instructions / infra / operate-by-name / watches /

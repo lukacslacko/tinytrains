@@ -40,7 +40,8 @@ First call get_guide and get_my_instructions to learn how the railway works and 
 Then call watch_arrivals once. Then loop forever: call await_events to wait for a train; when one \
 approaches, look up your instructions for that train type + entry point, set the switches (set_switch) \
 and clear the entry signal (clear_signal) BEFORE it arrives, then call await_events again. Keep going; \
-do not stop. Use only the station tools."
+do not stop. Use only the station tools. If, after working a while, you find a gap or ambiguity in your \
+instructions, suggest a clarification to the operator with send_message (prefix it 'Suggestion:')."
 
 echo "▶ station master — station=$STATION game=${GAME:-<default>} model=$MODEL effort=$EFFORT server=$SERVER"
 
