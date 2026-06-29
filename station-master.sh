@@ -14,6 +14,10 @@
 # Prerequisites: the game server running (`node server.js`) and the `claude` CLI on PATH.
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On Windows/Git Bash, give node a Windows-style path (C:/…) so the script dir resolves even when it
+# rides inside a JSON/arg string that MSYS won't auto-translate. cygpath is absent on macOS/Linux,
+# where the POSIX path is already correct — so this is a no-op there.
+command -v cygpath >/dev/null 2>&1 && DIR="$(cygpath -m "$DIR")"
 
 STATION="${1:-}"
 GAME="${2:-}"

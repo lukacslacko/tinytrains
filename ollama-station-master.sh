@@ -8,6 +8,9 @@
 # Requires the game server running (`node server.js`) and Ollama (https://ollama.com).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On Windows/Git Bash, give node a Windows-style path (C:/…); cygpath is absent on macOS/Linux,
+# where the POSIX path is already correct, so this is a no-op there.
+command -v cygpath >/dev/null 2>&1 && DIR="$(cygpath -m "$DIR")"
 
 STATION="${1:-}"; GAME="${2:-}"   # <station> may be a comma list, e.g. Tiszai,Foter,Szikra
 if [ -z "$STATION" ]; then echo "usage: $0 <station[,station2,...]> [game]   (env: OLLAMA_MODEL, TINYTRAINS_SERVER, OLLAMA_URL)" >&2; exit 1; fi

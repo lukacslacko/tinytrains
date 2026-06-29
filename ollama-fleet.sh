@@ -17,6 +17,9 @@
 # it prints the command to restart it with.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# On Windows/Git Bash, give node a Windows-style path (C:/…); cygpath is absent on macOS/Linux,
+# where the POSIX path is already correct, so this is a no-op there.
+command -v cygpath >/dev/null 2>&1 && DIR="$(cygpath -m "$DIR")"
 
 MODEL="${1:-}"; STATIONS_CSV="${2:-}"; GAME="${3:-}"
 if [ -z "$MODEL" ] || [ -z "$STATIONS_CSV" ] || [ -z "$GAME" ]; then
