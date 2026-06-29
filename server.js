@@ -175,6 +175,10 @@ function broadcast(lg){
 // ---- HTTP plumbing -----------------------------------------------------------------------
 function sendJSON(res, code, obj){
   const body = JSON.stringify(obj);
+  // Log the response we return, compact and on one line (JSON.stringify has no whitespace). Set
+  // TINYTRAINS_QUIET=1 to silence (same switch as the [SM] request log).
+  if (!process.env.TINYTRAINS_QUIET)
+    console.log(`${new Date().toISOString().slice(11, 19)} [RES ${code}] ${res._reqLine || ""} -> ${body}`);
   res.writeHead(code, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
   res.end(body);
@@ -285,6 +289,7 @@ const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, "http://localhost");
   const url = parsed.pathname;
   const query = parsed.searchParams;
+  res._reqLine = req.method + " " + req.url;   // so sendJSON can label the response it logs
   if (req.method === "OPTIONS") return sendJSON(res, 204, {});
 
   if (!url.startsWith("/api/")) return serveStatic(req, res);
