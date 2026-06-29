@@ -4,8 +4,8 @@
 //   (env: TINYTRAINS_SERVER, OLLAMA_URL, OLLAMA_MODEL)
 //
 // Feasibility: yes, this works on a MacBook Pro with a tool-calling local model (qwen2.5, llama3.1,
-// mistral-nemo). THIS SCRIPT owns the event loop (registers approach watches and long-polls); the
-// model only does the easy part — for each event, route that station's train per its instructions.
+// mistral-nemo). THIS SCRIPT owns the loop (polls /api/trains for STOPPED trains — no look-ahead); the
+// model only does the easy part — route the trains stopped at the station per its instructions.
 // One agent can manage several stations (in one game): each decision uses that station's own context.
 
 "use strict";
@@ -54,17 +54,17 @@ A: set path 1,2,3" -> set_path(["A","1","2","3"]). For a single switch use set_s
 Then call "done". Only use THIS station's elements. If the instructions don't cover the case (or are
 ambiguous), do your best and also send_message a short "Suggestion: ..." for the operator, then "done".`;
 
-// The Ollama model only makes ONE per-event decision — the script owns the loop. So it gets THIS
+// The script owns the loop; the model just makes the routing decision it's handed. So it gets THIS
 // focused brief, NOT the /api/guide text (that guide is for the MCP master and tells it to "loop with
 // await_events / watch_arrivals", tools this agent does not expose — which makes literal models like
 // qwen3.5 try to call await_events and get refused).
-const OLLAMA_BRIEF = `You are an automated railway Station Master controlling one station. For the SINGLE
-event described below, set the switches and clear the signals to route that train through your station,
-following YOUR INSTRUCTIONS, then call done.
+const OLLAMA_BRIEF = `You are an automated railway Station Master controlling one station. Trains that
+are STOPPED at your station and described below need to be routed: set the switches and clear the
+signals to send each one on its way per YOUR INSTRUCTIONS, then call done.
 TOOLS YOU MAY CALL: set_path, set_switch, clear_signal, send_message, done — and NOTHING else. There is
 NO await_events, watch_arrivals, get_infrastructure, list_trains or any polling/notification tool:
-events are delivered to you automatically, so never try to wait for, watch, or fetch them. Just handle
-THIS one event with the tools above and call done.`;
+the situation is handed to you, so never try to wait for, watch, or fetch anything. Just act on what is
+described below with the tools above and call done.`;
 
 (async () => {
   const ctx = {};   // station -> system prompt
@@ -75,7 +75,8 @@ THIS one event with the tools above and call done.`;
     const switches = station.switches.map(s => `${s.name} (branches ${s.branches.map(b => DIRS[b]).join("/")})`).join(", ");
     const signals = station.signals.filter(s => s.name).map(s => s.name).join(", ");
     ctx[st] = `${OLLAMA_BRIEF}\n\nYOU ARE THE STATION MASTER OF "${st}".\nSwitches: ${switches}.\nSignals: ${signals}.\n\nYOUR INSTRUCTIONS:\n${instructions}\n\n${SHARED_NOTE}`;
-    for (const sig of station.signals) if (sig.name) await gp("/api/watches", { station: st, owner: st, element: sig.name, mode: "approach" });
+    // No approach watches: the model is told about a train only once it is STOPPED at a signal (the
+    // main loop polls /api/trains for stopped trains). No look-ahead, no pre-announced arrivals.
   }
   console.error(`[ollama master] game=${GAME || "(default)"} model=${MODEL} — managing ${STATIONS.join(", ")}`);
 
@@ -104,7 +105,7 @@ THIS one event with the tools above and call done.`;
 
   // Main loop — work CONTINUOUSLY, no cooldowns: the instant the model is free, act on whatever is
   // stopped in your stations (it may touch ANY train, ANY time). Only when nothing is stopped do we
-  // block waiting for the next arrival/message. Tiny trains, fast turnaround — no artificial delays.
+  // block waiting for the next operator message. Tiny trains, fast turnaround — no artificial delays.
   let cursor = 0;
   const owner = STATIONS.map(encodeURIComponent).join(",");
   while (true){
@@ -122,7 +123,9 @@ THIS one event with the tools above and call done.`;
       }
       continue; // re-evaluate at once — the model never sits idle while a train is stopped
     }
-    // 2) Nothing stopped — block until the next arrival/message, route it proactively, then loop.
+    // 2) Nothing stopped — block until something happens, then loop. Only operator MESSAGES are acted
+    // on here; a train that stops is picked up by step 1 next loop (the poll returns promptly when one
+    // does, so there's little delay). No approach/look-ahead handling — stopped trains only.
     let res;
     try {
       const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 30000);
@@ -131,15 +134,10 @@ THIS one event with the tools above and call done.`;
     } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 500)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
+      if (ev.mode !== "message") continue;     // stopped trains are step 1's job; ignore waiting/pass here
       const st = ev.owner || STATIONS[0];
-      if (ev.mode === "message"){
-        console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
-        await act(st, `The operator sent you a message: "${ev.text}". Reply with send_message if warranted, and take any switch/signal actions they ask for.`);
-      } else if (ev.mode === "approach" || ev.mode === "reach"){
-        console.error(`\n→ [${st}] ${ev.mode}: train "${ev.trainTypeName}" at ${ev.element} (${ev.clock})`);
-        await act(st, `A train of type ${ev.trainType} ("${ev.trainTypeName}") is approaching ${ev.element}. Set its route and clear the signal per your instructions, before it has to stop.`);
-      }
-      // "waiting"/"pass" need no handling here — a stopped train is picked up by step 1 on the next loop.
+      console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
+      await act(st, `The operator sent you a message: "${ev.text}". Reply with send_message if warranted, and take any switch/signal actions they ask for.`);
     }
   }
 })().catch(e => { console.error(e); process.exit(1); });
