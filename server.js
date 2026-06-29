@@ -30,6 +30,7 @@
 //   GET  /api/stations/:id                → one station's report
 //   POST /api/stations/:id/switch { name|x,y, to }                → set a switch by element name
 //   POST /api/stations/:id/signal { name|x,y, dir?, action:clear|red } → operate a manual signal
+//   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
 
 "use strict";
 const http = require("http");
@@ -304,6 +305,14 @@ destination), or they will conflict.
 - Some instructions are time-of-day rules — e.g. "during game time between 2 and 8 minutes: … /
   outside that: …". Call **get_time** for the current \`secondsIntoDay\` (0..\`dayLength\`) and pick the
   matching branch (2 minutes = 120s, 8 minutes = 480s). The day wraps every \`dayLength\` seconds.
+- **Temporary overrides over chat.** The operator can change your orders on the fly, e.g. "Attention,
+  instruction override! Until further notice, all trains arriving at B → set path 4,3,2,5." Do NOT just
+  acknowledge in words — your memory of one message does not carry to the next train. Instead call
+  **set_override** with the rule (\`set_override("until further notice: trains arriving at B → set path
+  4,3,2,5")\`), THEN send_message to acknowledge. The override is stored on the station and **takes
+  precedence over your base instructions** for every future train until the operator cancels it — then
+  call **clear_override**. Your overrides come back with get_my_instructions (field \`overrides\`); when
+  routing, apply any that match before falling back to your base instructions.
 - Stay in your station; trains hand off to other stations' masters.
 `;
 
@@ -378,7 +387,7 @@ const server = http.createServer(async (req, res) => {
       const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       smlog(`${gname(lg)} ${st.name} | get_my_instructions`);
-      return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "" });
+      return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "", overrides: st.overrides || [] });
     }
 
     // ---- SSE state stream for one game (?game=<id|name>) ----
@@ -505,6 +514,19 @@ const server = http.createServer(async (req, res) => {
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       lg.engine.notifyOwner(st.name, body.text, "operator");
       return sendJSON(res, 200, { ok: true, station: st.name });
+    }
+    // Standing instruction overrides for a station: temporary operator orders that take precedence over
+    // the base instructions until cleared. POST { text } to add one (the master records it when the
+    // operator says "override … until further notice"); POST { action: "clear" } to drop them all.
+    // Persisted with the game (every master reads them via get_my_instructions each decision).
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/override$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const clear = body.action === "clear" || body.clear === true;
+      const result = applyCommand(lg, clear ? { type: "clearOverrides", station: id } : { type: "addOverride", station: id, text: body.text });
+      smlog(`${gname(lg)} ${id} | ${clear ? "clear_overrides" : `set_override "${body.text}"`}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
     }
     // From a station master TO the operator: shown in the game notification log + highlights the station.
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/operator-message$/)) && req.method === "POST"){

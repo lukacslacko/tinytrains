@@ -23,6 +23,10 @@ async function gp(path, body){ const r = await fetch(SERVER + path, { method: "P
 // Current simulation time of day (for time-of-day instruction rules). The SCRIPT fetches it and hands
 // it to the model in the prompt — the model itself never fetches anything. null if unavailable.
 async function gameTime(){ try { const t = await gj("/api/time"); return t && t.ok ? t : null; } catch { return null; } }
+// Standing operator overrides for a station (set over chat, "until further notice …"). Fetched fresh
+// each decision and injected into the prompt so they apply to every train, not just the message that set
+// them. Returns [] if none / unavailable.
+async function overridesFor(station){ try { const r = await gj(`/api/stations/${encodeURIComponent(station)}/instructions`); return (r && Array.isArray(r.overrides)) ? r.overrides : []; } catch { return []; } }
 
 const TOOLS = [
   { type: "function", function: { name: "set_path", description: "Route a train the easy way: path = [entry signal, then the switches in order, optional final compass dir]. Lines up every switch and clears the entry signal. Use for any 'set path …' instruction, e.g. set path 1,2,3 at A → [\"A\",\"1\",\"2\",\"3\"].",
@@ -33,6 +37,10 @@ const TOOLS = [
     parameters: { type: "object", properties: { element: { type: "string" } }, required: ["element"] } } },
   { type: "function", function: { name: "send_message", description: "Send a short message to the human operator. Use to reply, report status, or a 'Suggestion:' about the instructions.",
     parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+  { type: "function", function: { name: "set_override", description: "Record a STANDING instruction override the operator gave you (e.g. 'until further notice, trains arriving at B → set path 4,3,2,5'). It is saved and applied to EVERY future train at this station until cleared — call this whenever the operator says to override/change routing until further notice, THEN send_message to acknowledge.",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+  { type: "function", function: { name: "clear_overrides", description: "Remove ALL standing overrides for this station (the operator cancelled the override / said go back to normal).",
+    parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "done", description: "Call when you have set everything needed for this event.",
     parameters: { type: "object", properties: {} } } }
 ];
@@ -42,8 +50,10 @@ async function runTool(station, name, a){
   if (name === "set_switch") return gp(`/api/stations/${encodeURIComponent(station)}/switch`, { name: a.element, to: a.direction });
   if (name === "clear_signal") return gp(`/api/stations/${encodeURIComponent(station)}/signal`, { name: a.element, action: "clear" });
   if (name === "send_message") return gp(`/api/stations/${encodeURIComponent(station)}/operator-message`, { text: a.text });
+  if (name === "set_override") return gp(`/api/stations/${encodeURIComponent(station)}/override`, { text: a.text });
+  if (name === "clear_overrides") return gp(`/api/stations/${encodeURIComponent(station)}/override`, { action: "clear" });
   if (name === "done") return { ok: true, done: true };
-  return { ok: false, error: `no such tool "${name}". You may ONLY call: set_path, set_switch, clear_signal, send_message, done. Events are delivered to you automatically — there is no await_events/watch/poll tool. Handle THIS event with the allowed tools, then call done.` };
+  return { ok: false, error: `no such tool "${name}". You may ONLY call: set_path, set_switch, clear_signal, send_message, set_override, clear_overrides, done. Events are delivered to you automatically — there is no await_events/watch/poll tool. Handle THIS event with the allowed tools, then call done.` };
 }
 async function ollamaChat(messages){
   const r = await fetch(OLLAMA + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -66,10 +76,14 @@ current game time is given with each request — apply the branch that matches i
 const OLLAMA_BRIEF = `You are an automated railway Station Master controlling one station. Trains that
 are STOPPED at your station and described below need to be routed: set the switches and clear the
 signals to send each one on its way per YOUR INSTRUCTIONS, then call done.
-TOOLS YOU MAY CALL: set_path, set_switch, clear_signal, send_message, done — and NOTHING else. There is
-NO await_events, watch_arrivals, get_infrastructure, list_trains or any polling/notification tool:
-the situation is handed to you, so never try to wait for, watch, or fetch anything. Just act on what is
-described below with the tools above and call done.`;
+TOOLS YOU MAY CALL: set_path, set_switch, clear_signal, send_message, set_override, clear_overrides,
+done — and NOTHING else. There is NO await_events, watch_arrivals, get_infrastructure, list_trains or
+any polling/notification tool: the situation is handed to you, so never try to wait for, watch, or fetch
+anything. Just act on what is described below with the tools above and call done.
+If the operator messages you an instruction OVERRIDE ("until further notice, route ... like ..."), do
+NOT just acknowledge — a reply is forgotten by the next train. Call set_override with the rule FIRST,
+then send_message to acknowledge. Standing overrides are listed with each request and TAKE PRECEDENCE
+over your base instructions until the operator cancels them (then call clear_overrides).`;
 
 (async () => {
   const ctx = {};   // station -> system prompt
@@ -85,12 +99,15 @@ described below with the tools above and call done.`;
   }
   console.error(`[ollama master] game=${GAME || "(default)"} model=${MODEL} — managing ${STATIONS.join(", ")}`);
 
-  // Run one decision for a station through the model. The script fetches the current game time and
-  // prepends it, so the model can apply time-of-day rules without any fetch tool of its own.
+  // Run one decision for a station through the model. The script fetches the current game time and any
+  // standing operator overrides and prepends them, so the model applies them without a fetch tool of its
+  // own — overrides especially must ride along every decision, not just the message that set them.
   async function act(station, user){
     const t = await gameTime();
     const timeLine = t ? `Current game time: ${t.dayClock} into the day (secondsIntoDay=${t.secondsIntoDay} of dayLength=${t.dayLength}, day ${t.day}). If your instructions have time-of-day rules (e.g. "between 2 and 8 minutes" = secondsIntoDay 120..480), apply the branch that matches NOW.\n\n` : "";
-    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: timeLine + user }];
+    const ovs = await overridesFor(station);
+    const ovLine = ovs.length ? `STANDING OPERATOR OVERRIDES for ${station} (these OVERRIDE your base instructions until cleared — apply the matching one before falling back to base instructions):\n${ovs.map(o => "- " + o).join("\n")}\n\n` : "";
+    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: timeLine + ovLine + user }];
     for (let round = 0; round < 6; round++){
       let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error(`  [${station}] llm error:`, e.message); return; }
       messages.push(msg);
@@ -145,7 +162,7 @@ described below with the tools above and call done.`;
       if (ev.mode !== "message") continue;     // stopped trains are step 1's job; ignore waiting/pass here
       const st = ev.owner || STATIONS[0];
       console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
-      await act(st, `The operator sent you a message: "${ev.text}". Reply with send_message if warranted, and take any switch/signal actions they ask for.`);
+      await act(st, `The operator sent you a message: "${ev.text}". If it is an instruction OVERRIDE ("until further notice …", a lasting change to how you route), call set_override with the rule FIRST (or clear_overrides if they cancel one), then reply with send_message. Otherwise reply with send_message if warranted and take any switch/signal actions they ask for.`);
     }
   }
 })().catch(e => { console.error(e); process.exit(1); });

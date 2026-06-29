@@ -181,7 +181,9 @@
     const id = state.nextStationId++;
     // `instructions` is free text for the Station Master (the operator/API that sets this
     // station's switches and manual signals). It travels with the layout and is exposed by the API.
-    const st = {id, name:`Station ${id}`, instructions:"", rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    // `overrides` are temporary operator instructions (set over chat, "until further notice …") that
+    // take precedence over `instructions` until cleared; they travel with the layout like instructions.
+    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
     state.stations.push(st);
     return st;
   }
@@ -968,7 +970,7 @@
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.stations = (Array.isArray(data.stations) ? data.stations : [])
       .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
@@ -1082,7 +1084,7 @@
     function sanitizeStations(list){
       return (Array.isArray(list) ? list : [])
         .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     }
     function sanitizeTypes(list){
       return (Array.isArray(list) && list.length)
@@ -1101,6 +1103,22 @@
       state.stations = sanitizeStations(stations);
       state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
       return {ok:true};
+    }
+    // Standing instruction overrides: temporary operator orders ("until further notice …") that take
+    // precedence over a station's base instructions until cleared. Recorded by a master when the
+    // operator messages one, or set directly by the operator; they persist with the layout.
+    function cmdAddOverride(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      const t = String(text == null ? "" : text).trim();
+      if (!t) return {ok:false, error:"empty override"};
+      if (!Array.isArray(st.overrides)) st.overrides = [];
+      st.overrides.push(t);
+      return {ok:true, station: st.name, overrides: st.overrides.slice()};
+    }
+    function cmdClearOverrides(idOrName){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.overrides = [];
+      return {ok:true, station: st.name, overrides: []};
     }
     function cmdSetTrainTypes(types, selectedType){
       state.trainTypes = sanitizeTypes(types);
@@ -1150,6 +1168,8 @@
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
         case "setDayLength":  return setDayLength(cmd.seconds);
+        case "addOverride":   return cmdAddOverride(cmd.station, cmd.text);
+        case "clearOverrides":return cmdClearOverrides(cmd.station);
         case "step":          simStep(); return {ok:true, simFrame: state.simFrame};
         default:              return {ok:false, error:"unknown command type: " + cmd.type};
       }
@@ -1249,7 +1269,7 @@
             waiting
           };
         });
-        return {id: st.id, name: st.name, instructions: st.instructions || "", rect: st.rect, switches, signals};
+        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals};
       });
     }
     // Trains CURRENTLY stopped at the given owners' signals — synthetic "waiting" events so the
@@ -1554,7 +1574,7 @@
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
       state.stations = (Array.isArray(s.stations) ? s.stations : [])
         .filter(st => st && st.rect)
-        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
       state.tiles = new Map();
       for (const it of (s.tiles||[])){ if (it && it.tile && Number.isFinite(it.x) && Number.isFinite(it.y)) setTile(it.x, it.y, it.tile); }
       state.trains = (s.trains||[]).map(deHydrateTrain);

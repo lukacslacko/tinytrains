@@ -71,7 +71,7 @@ const TOOLS = [
     run: async () => (await api("GET", "/api/guide")).body.guide },
 
   { name: "get_my_instructions",
-    description: "A station's free-text orders: which switches to set / signals to clear for each arriving train. Read it for EACH station you manage.",
+    description: "A station's free-text orders: which switches to set / signals to clear for each arriving train. Read it for EACH station you manage. Also returns `overrides` — any STANDING operator overrides in effect (set via chat, \"until further notice …\"); these take precedence over the base instructions until cleared.",
     inputSchema: { type: "object", properties: STATION_PROP },
     run: async (a) => { const p = post(a); return { station: p.station, game: p.game, ...(await api("GET", `/api/stations/${encodeURIComponent(p.station)}/instructions`, null, p.game)).body }; } },
 
@@ -154,6 +154,16 @@ const TOOLS = [
     description: "Send a message to the human operator (pops up in the game and highlights the station). Report status, ask a question, reply to an operator message, or — once you've worked a while — SUGGEST A CLARIFICATION to a station's instructions when you find a gap/ambiguity/improvement (prefix 'Suggestion:').",
     inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/operator-message`, { text: a.text }, p.game)).body; } },
+
+  { name: "set_override",
+    description: "Record a STANDING instruction override the operator gave you over chat (e.g. \"until further notice, all trains arriving at B → set path 4,3,2,5\"). It is stored on the station and TAKES PRECEDENCE over your base instructions for EVERY future train until cleared — so the rule survives past this one message. Call this (then send_message to acknowledge) whenever the operator says to override/change routing until further notice. Overrides also come back in get_my_instructions (field `overrides`).",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/override`, { text: a.text }, p.game)).body; } },
+
+  { name: "clear_override",
+    description: "Remove ALL standing overrides for a station (the operator cancelled the override / said go back to normal instructions).",
+    inputSchema: { type: "object", properties: STATION_PROP },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/override`, { action: "clear" }, p.game)).body; } },
 
   { name: "list_watches",
     description: "List the watches registered for a station.",

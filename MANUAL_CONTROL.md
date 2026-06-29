@@ -159,7 +159,9 @@ then open `http://localhost:8765/manual.html`.
     and manual signals, by station-local name, with live settings),
     `POST /api/stations/:id/switch` `{name|x,y, to}` and
     `POST /api/stations/:id/signal` `{name|x,y, dir?, action:clear|red}` — the station master sets
-    switches and clears/holds manual signals by the same station-local labels a human uses.
+    switches and clears/holds manual signals by the same station-local labels a human uses;
+    `POST /api/stations/:id/override` `{text}` / `{action:"clear"}` — set or clear a **standing
+    instruction override** (temporary chat orders that take precedence until cleared; persisted).
 
 - **Client (server-only).** `manual.html` is a thin client: on load it connects to the live game
   (`/api/events`), renders each streamed snapshot, and sends **every** action — operate *and* edit

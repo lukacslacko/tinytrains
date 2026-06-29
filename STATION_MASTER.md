@@ -83,7 +83,9 @@ for instructions like "during game time between 2 and 8 minutes"), **`set_path`*
 one call — `["A","1","2","3"]` lines up the switches and
 clears the entry signal; the easy way to follow "set path …" instructions), `set_switch`,
 `clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),
-`await_events` (the blocking notification receiver), `send_message`, `list_watches`, `cancel_watch`.
+`await_events` (the blocking notification receiver), `send_message`, `set_override` / `clear_override`
+(record/cancel a **standing operator override** given over chat — "until further notice …" — which
+takes precedence over the base instructions until cleared), `list_watches`, `cancel_watch`.
 
 Because approach/arrival notifications are edge-triggered, a master also **sweeps `get_infrastructure`
 every cycle** for trains already waiting at its signals and routes them — so trains don't get
