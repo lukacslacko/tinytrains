@@ -6,6 +6,9 @@ gitignored). Each file is `{ id, name, savedAt, snapshot }` — a complete, load
 - **`miskolc.json`** — the Miskolc layout: 3 stations (Tiszai, Foter, Szikra) with named switches and
   manual signals and per-station Station Master instructions, 138 tiles, 8 trains. This is the layout
   used throughout the docs and the station-master examples.
+- **`miskolc_depot.json`** — a depot variant of Miskolc: 4 stations, 196 tiles, 8 trains, with a
+  600-second day length set, so it works with time-of-day instructions ("during game time between
+  2 and 8 minutes …"). Loads as a separate game ("Miskolc Depot") alongside `miskolc.json`.
 
 ## Loading one
 
