@@ -385,6 +385,11 @@
         <div id="stationList"></div>
       </section>
       <section class="group">
+        <div class="label">Superintendent's reports</div>
+        <p class="help">End-of-day reports filed by each station master, newest first. At each midnight the game pauses while masters report, update their memory, and review each other's reports; then it resumes. Read-only.</p>
+        <div id="superList" style="max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:6px"></div>
+      </section>
+      <section class="group">
         <div class="label">Game</div>
         <p class="help">The game runs on the <strong>server</strong> (authoritative &mdash; keeps running with no tab open) so it can be driven from outside via the API, e.g. the Station Master. Everything you do is <strong>autosaved</strong> into the current game. <span id="serverStatus" class="srv-status srv-off">connecting&hellip;</span></p>
         <label class="field"><span>Current game (autosaved)</span><input id="gameName" type="text" maxlength="40" placeholder="game name"></label>
@@ -1379,6 +1384,8 @@
     if (!trainTypeById(state.selectedType) && state.trainTypes.length) state.selectedType = state.trainTypes[0].id;
     if (gameChanged){ refreshColorUI(); refreshStationsUI(); refreshServerGames(); } // sync side panels + list
     syncServerUI();
+    renderSuperintendent();
+    if (stationMenu.classList.contains("open")) renderStationState(stationMenu.dataset.station);
     draw();
   }
 
@@ -1764,6 +1771,7 @@
       `<label class="field"><span>Name</span><input name="name" type="text" maxlength="32" value="${escapeHtml(st.name||"")}" placeholder="Station ${st.id}"></label>` +
       `<label class="field"><span>Station Master instructions</span>` +
         `<textarea name="instructions" placeholder="Free-text orders for the Station Master — who sets this station's switches and manual signals.">${escapeHtml(st.instructions||"")}</textarea></label>` +
+      `<div id="stationStateView"></div>` +
       `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>` +
       `<div class="field grow"><span>Chat with the station master</span>` +
         `<div id="stationChat" class="chatlog"></div>` +
@@ -1771,6 +1779,7 @@
       `</div>`;
     stationMenu.classList.add("open");
     renderStationChat(st.name);
+    renderStationState(st.name);
     // Place near the click, clamped to the stage using the pop-up's actual (possibly resized) size.
     const rect = stage.getBoundingClientRect();
     const w = stationMenu.offsetWidth, h = stationMenu.offsetHeight;
@@ -1791,6 +1800,28 @@
       ? msgs.map(m => `<div class="chat-msg chat-${m.from === "operator" ? "op" : "master"}"><span class="chat-from">${m.from === "operator" ? "you" : escapeHtml(name)}</span>${escapeHtml(m.text)}</div>`).join("")
       : `<div class="chat-empty">No messages yet. The station master receives your message as a notification.</div>`;
     box.scrollTop = box.scrollHeight;
+  }
+  // Superintendent's report log (newest first) — read-only, fed from the streamed snapshot.
+  function renderSuperintendent(){
+    const box = document.getElementById("superList"); if (!box) return;
+    const reports = (state.superintendentReports || []).slice().reverse();
+    box.innerHTML = reports.length
+      ? reports.map(r => `<div style="border:1px solid var(--line);border-radius:6px;padding:6px 8px">`
+          + `<div style="font-size:11px;opacity:0.7;margin-bottom:2px">day ${r.day} &middot; ${escapeHtml(r.station)} &middot; ${escapeHtml(r.clock||"")}</div>`
+          + `<div style="white-space:pre-wrap">${escapeHtml(r.text)}</div></div>`).join("")
+      : `<div class="help" style="opacity:0.6">No reports yet. Masters file these at the end of each day.</div>`;
+  }
+  // A station's saved state (overrides / long-term memory / today's notebook), shown read-only in the
+  // pop-up and refreshed live while it is open.
+  function renderStationState(name){
+    const box = document.getElementById("stationStateView");
+    if (!box || stationMenu.dataset.station !== name) return;
+    const st = state.stations.find(s => s.name === name); if (!st){ box.innerHTML = ""; return; }
+    const block = (label, val, mono) => (val && val.trim())
+      ? `<label class="field"><span>${label} (read-only)</span><div style="white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-height:120px;overflow:auto${mono?";font-family:monospace;font-size:12px":""}">${escapeHtml(val)}</div></label>` : "";
+    const ovs = (st.overrides && st.overrides.length) ? st.overrides.map(o => "• " + o).join("\n") : "";
+    box.innerHTML = (block("Standing overrides", ovs) + block("Long-term memory", st.memory) + block("Today's notebook", st.notebook, true))
+      || `<div class="help" style="opacity:0.6">No memory, notebook, or overrides yet.</div>`;
   }
   function sendChat(name, text){
     text = (text || "").trim(); if (!text) return;

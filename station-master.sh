@@ -39,7 +39,7 @@ GAME_ARG=""; [ -n "$GAME" ] && GAME_ARG=", \"--game\", \"$GAME\""
 MCP="{ \"mcpServers\": { \"tinytrains\": { \"command\": \"node\", \"args\": [\"$DIR/mcp-server.js\", \"--station\", \"$STATION\"$GAME_ARG, \"--server\", \"$SERVER\"] } } }"
 
 # Allow exactly this game's station tools to run without a permission prompt (so the master is hands-off).
-TOOLS="mcp__tinytrains__get_guide mcp__tinytrains__get_my_instructions mcp__tinytrains__list_stations mcp__tinytrains__get_infrastructure mcp__tinytrains__list_trains mcp__tinytrains__get_time mcp__tinytrains__set_switch mcp__tinytrains__clear_signal mcp__tinytrains__set_signal_red mcp__tinytrains__set_path mcp__tinytrains__set_override mcp__tinytrains__clear_override mcp__tinytrains__watch mcp__tinytrains__await_events mcp__tinytrains__send_message mcp__tinytrains__list_watches mcp__tinytrains__cancel_watch"
+TOOLS="mcp__tinytrains__get_guide mcp__tinytrains__get_my_instructions mcp__tinytrains__list_stations mcp__tinytrains__get_infrastructure mcp__tinytrains__list_trains mcp__tinytrains__get_time mcp__tinytrains__set_switch mcp__tinytrains__clear_signal mcp__tinytrains__set_signal_red mcp__tinytrains__set_path mcp__tinytrains__set_override mcp__tinytrains__clear_override mcp__tinytrains__note mcp__tinytrains__remember mcp__tinytrains__report_to_superintendent mcp__tinytrains__watch mcp__tinytrains__await_events mcp__tinytrains__send_message mcp__tinytrains__list_watches mcp__tinytrains__cancel_watch"
 
 PROMPT="You are the Station Master for: \"$STATION\"${GAME:+ in game \"$GAME\"}. \
 First call get_guide. Then for EACH of your stations call get_my_instructions. \

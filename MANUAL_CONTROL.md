@@ -161,7 +161,12 @@ then open `http://localhost:8765/manual.html`.
     `POST /api/stations/:id/signal` `{name|x,y, dir?, action:clear|red}` — the station master sets
     switches and clears/holds manual signals by the same station-local labels a human uses;
     `POST /api/stations/:id/override` `{text}` / `{action:"clear"}` — set or clear a **standing
-    instruction override** (temporary chat orders that take precedence until cleared; persisted).
+    instruction override** (temporary chat orders that take precedence until cleared; persisted);
+    `POST /api/stations/:id/note` `{text}` / `{action:"clear"}` and `POST /api/stations/:id/memory`
+    `{text}` — a station's **daily notebook** (wiped each midnight) and **long-term memory**;
+    `POST /api/superintendent/report` `{station, text}` and `GET /api/superintendent` — the
+    **superintendent's report log** (newest first). At each in-sim midnight the game pauses while every
+    master reports, curates memory, and reviews the day's reports, then resumes.
 
 - **Client (server-only).** `manual.html` is a thin client: on load it connects to the live game
   (`/api/events`), renders each streamed snapshot, and sends **every** action — operate *and* edit

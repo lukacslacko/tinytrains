@@ -165,6 +165,21 @@ const TOOLS = [
     inputSchema: { type: "object", properties: STATION_PROP },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/override`, { action: "clear" }, p.game)).body; } },
 
+  { name: "note",
+    description: "Append a line to your station's DAILY NOTEBOOK — a scratchpad wiped each midnight. Use it to carry running state between trains: e.g. for \"alternate trains from A and B\", note which side you last let through, then read it back (it comes with get_my_instructions and every routing decision) to pick the other next time.",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/note`, { text: a.text }, p.game)).body; } },
+
+  { name: "remember",
+    description: "Overwrite your station's LONG-TERM MEMORY (kept across days, unlike the notebook). At end of day, fold anything worth keeping from today's notebook into this. Keep it concise — it is supplied with every decision.",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/memory`, { text: a.text }, p.game)).body; } },
+
+  { name: "report_to_superintendent",
+    description: "File a report to the superintendent — a short summary of how the day went at your station. Call this when you get an end_of_day event (then also `remember` to update your memory; your notebook is cleared afterwards). All reports are shared back to every station master for review.",
+    inputSchema: { type: "object", properties: { text: { type: "string" }, ...STATION_PROP }, required: ["text"] },
+    run: async (a) => { const p = post(a); return (await api("POST", "/api/superintendent/report", { station: p.station, text: a.text }, p.game)).body; } },
+
   { name: "list_watches",
     description: "List the watches registered for a station.",
     inputSchema: { type: "object", properties: STATION_PROP },

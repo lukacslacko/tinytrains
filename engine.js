@@ -148,6 +148,7 @@
     frame: 0,
     simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second)
     dayLength: 600,     // sim-seconds per simulation "day"; time-of-day = simSeconds mod dayLength
+    superintendentReports: [],   // ever-growing log of end-of-day reports: {day, station, text, clock}
     paused: false,
     selectedTool: "operate",
     lastTool: "track",   // the build tool to return to when Tab leaves Operate
@@ -183,7 +184,9 @@
     // station's switches and manual signals). It travels with the layout and is exposed by the API.
     // `overrides` are temporary operator instructions (set over chat, "until further notice …") that
     // take precedence over `instructions` until cleared; they travel with the layout like instructions.
-    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    // `notebook` is a daily scratchpad (cleared each midnight); `memory` is long-term, carried across
+    // days and curated by the master at end of day. Both travel with the layout like instructions.
+    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], notebook:"", memory:"", rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
     state.stations.push(st);
     return st;
   }
@@ -970,7 +973,7 @@
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.stations = (Array.isArray(data.stations) ? data.stations : [])
       .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], notebook: typeof s.notebook === "string" ? s.notebook : "", memory: typeof s.memory === "string" ? s.memory : "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
@@ -1084,7 +1087,7 @@
     function sanitizeStations(list){
       return (Array.isArray(list) ? list : [])
         .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], notebook: typeof s.notebook === "string" ? s.notebook : "", memory: typeof s.memory === "string" ? s.memory : "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     }
     function sanitizeTypes(list){
       return (Array.isArray(list) && list.length)
@@ -1119,6 +1122,42 @@
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       st.overrides = [];
       return {ok:true, station: st.name, overrides: []};
+    }
+    // Daily notebook (scratchpad, cleared each midnight) + long-term memory (curated, carried across
+    // days). These give a master state between decisions — e.g. "alternate A then B" remembers which
+    // was last let through. Append is the common case; set overwrites; clear wipes the notebook.
+    function cmdAppendNotebook(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      const t = String(text == null ? "" : text).trim();
+      if (!t) return {ok:false, error:"empty note"};
+      st.notebook = (typeof st.notebook === "string" && st.notebook) ? st.notebook + "\n" + t : t;
+      return {ok:true, station: st.name, notebook: st.notebook};
+    }
+    function cmdSetNotebook(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.notebook = String(text == null ? "" : text);
+      return {ok:true, station: st.name, notebook: st.notebook};
+    }
+    function cmdClearNotebook(idOrName){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.notebook = "";
+      return {ok:true, station: st.name, notebook: ""};
+    }
+    function cmdSetMemory(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.memory = String(text == null ? "" : text);
+      return {ok:true, station: st.name, memory: st.memory};
+    }
+    // Superintendent's report log: ever-growing, newest appended. `day` is the day the report concerns.
+    function cmdAddReport(idOrName, text, day){
+      const st = findStation(idOrName);
+      const t = String(text == null ? "" : text).trim();
+      if (!t) return {ok:false, error:"empty report"};
+      if (!Array.isArray(state.superintendentReports)) state.superintendentReports = [];
+      const d = Number.isFinite(day) ? day : dayTime().day;
+      const entry = { day: d, station: st ? st.name : String(idOrName), text: t, clock: formatClock(state.simFrame), simFrame: state.simFrame };
+      state.superintendentReports.push(entry);
+      return {ok:true, report: entry, count: state.superintendentReports.length};
     }
     function cmdSetTrainTypes(types, selectedType){
       state.trainTypes = sanitizeTypes(types);
@@ -1170,6 +1209,11 @@
         case "setDayLength":  return setDayLength(cmd.seconds);
         case "addOverride":   return cmdAddOverride(cmd.station, cmd.text);
         case "clearOverrides":return cmdClearOverrides(cmd.station);
+        case "appendNotebook":return cmdAppendNotebook(cmd.station, cmd.text);
+        case "setNotebook":   return cmdSetNotebook(cmd.station, cmd.text);
+        case "clearNotebook": return cmdClearNotebook(cmd.station);
+        case "setMemory":     return cmdSetMemory(cmd.station, cmd.text);
+        case "addReport":     return cmdAddReport(cmd.station, cmd.text, cmd.day);
         case "step":          simStep(); return {ok:true, simFrame: state.simFrame};
         default:              return {ok:false, error:"unknown command type: " + cmd.type};
       }
@@ -1269,7 +1313,7 @@
             waiting
           };
         });
-        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals};
+        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], notebook: st.notebook || "", memory: st.memory || "", rect: st.rect, switches, signals};
       });
     }
     // Trains CURRENTLY stopped at the given owners' signals — synthetic "waiting" events so the
@@ -1536,6 +1580,18 @@
     // notifyOperator: a message FROM a station master to the human — emitted onto the game event
     // log (carried in the snapshot) tagged with the station so the UI can show + highlight it.
     function notifyOperator(station, text){ emit("master", String(text || ""), { station: String(station) }); return { ok: true }; }
+    // A structured event FOR a station master on its await_events stream — used for orchestrated moments
+    // like end-of-day (mode "end_of_day") and the post-report review (mode "review_reports"). `payload`
+    // carries mode-specific fields (e.g. the station's notebook/memory, or all stations' reports).
+    function notifyEvent(owner, mode, payload){
+      state.watchEvents.push(Object.assign(
+        { seq: ++watchEventSeq, frame: state.simFrame, clock: formatClock(state.simFrame),
+          owner: String(owner), mode: String(mode), from: "system", text: "",
+          label: null, element: null, trainId: null, trainType: null, trainTypeName: null },
+        payload || {}));
+      if (state.watchEvents.length > 500) state.watchEvents.shift();
+      return { ok: true };
+    }
 
     // ---- Live snapshot for streaming + persistence (Sets/transients made JSON-safe) ----
     function serHold(h){ return {blockId:h.blockId, entryMainKey:h.entryMainKey, entryMainTile:h.entryMainTile, approach: h.approach ? [...h.approach] : null, rollThrough: !!h.rollThrough}; }
@@ -1550,6 +1606,7 @@
         version: 3,
         simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused, speedScale: state.speedScale || 1, dayLength: state.dayLength || 600,
         nextTrainId: state.nextTrainId, nextStationId: state.nextStationId, selectedType: state.selectedType,
+        superintendentReports: state.superintendentReports || [],
         trainTypes: state.trainTypes, stations: state.stations,
         tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
         trains: state.trains.map(cleanTrain),
@@ -1569,12 +1626,13 @@
       state.paused = !!s.paused;
       state.speedScale = s.speedScale || 1;
       state.dayLength = s.dayLength || 600;
+      state.superintendentReports = Array.isArray(s.superintendentReports) ? s.superintendentReports : [];
       state.nextTrainId = s.nextTrainId||1; state.nextStationId = s.nextStationId||1;
       state.trainTypes = (Array.isArray(s.trainTypes) && s.trainTypes.length)
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
       state.stations = (Array.isArray(s.stations) ? s.stations : [])
         .filter(st => st && st.rect)
-        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], notebook: typeof st.notebook === "string" ? st.notebook : "", memory: typeof st.memory === "string" ? st.memory : "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
       state.tiles = new Map();
       for (const it of (s.tiles||[])){ if (it && it.tile && Number.isFinite(it.x) && Number.isFinite(it.y)) setTile(it.x, it.y, it.tile); }
       state.trains = (s.trains||[]).map(deHydrateTrain);
@@ -1585,7 +1643,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator, notifyEvent };
   }
   return { createEngine };
 });

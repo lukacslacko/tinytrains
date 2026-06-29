@@ -31,6 +31,10 @@
 //   POST /api/stations/:id/switch { name|x,y, to }                → set a switch by element name
 //   POST /api/stations/:id/signal { name|x,y, dir?, action:clear|red } → operate a manual signal
 //   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
+//   POST /api/stations/:id/note { text } | { action:"clear" }          → daily notebook (scratchpad)
+//   POST /api/stations/:id/memory { text }                             → station long-term memory
+//   POST /api/superintendent/report { station, text }                  → file a report (day summary)
+//   GET  /api/superintendent                                           → report log (newest first)
 
 "use strict";
 const http = require("http");
@@ -48,6 +52,11 @@ const FRAMES_PER_SECOND = 60;
 const SIM_STEP_MS = 1000 / FRAMES_PER_SECOND;
 const BROADCAST_EVERY = 3;     // stream a snapshot every N sim frames (~20 Hz; trains move slowly)
 const AUTOSAVE_MS = 10000;     // persist the live game to disk this often
+// End-of-day orchestration: when the sim clock rolls into a new day the game pauses and each station
+// master is asked to report + curate memory (phase "report"), then review every report (phase "review"),
+// then the game resumes. Each phase has a timeout so a slow/absent master can never deadlock the game.
+const EOD_REPORT_MS = Number(process.env.TINYTRAINS_EOD_REPORT_MS || 120000);  // wait for reports
+const EOD_REVIEW_MS = Number(process.env.TINYTRAINS_EOD_REVIEW_MS || 60000);   // wait for review notes
 
 if (!fs.existsSync(GAMES_DIR)) fs.mkdirSync(GAMES_DIR, { recursive: true });
 
@@ -61,7 +70,9 @@ function newId(){ return "g" + Date.now().toString(36) + Math.floor(Math.random(
 function gamePath(id){ return path.join(GAMES_DIR, path.basename(id) + ".json"); }
 
 function makeLive({ id, name, engine }){
-  const lg = { id: id || newId(), name: name || "Untitled", engine, running: true, undo: [], redo: [], subs: new Set(), saveTimer: null, lastAutosave: 0, acc: 0, sinceBroadcast: 0 };
+  const lg = { id: id || newId(), name: name || "Untitled", engine, running: true, undo: [], redo: [], subs: new Set(), saveTimer: null, lastAutosave: 0, acc: 0, sinceBroadcast: 0,
+    lastDay: (() => { try { return engine.dayTime().day; } catch { return 0; } })(),  // for day-rollover detection
+    eod: null };   // end-of-day phase state: { phase:"report"|"review", day, reported:Set, reviewed:Set, deadline }
   games.set(lg.id, lg);
   return lg;
 }
@@ -147,8 +158,56 @@ function listGames(){
     .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }
 
-function gameMeta(lg){ return lg ? { id: lg.id, name: lg.name, running: lg.running } : null; }
+function gameMeta(lg){ return lg ? { id: lg.id, name: lg.name, running: lg.running, dayPhase: lg.eod ? lg.eod.phase : null, eodDay: lg.eod ? lg.eod.day : null } : null; }
 function snapshotPayload(lg){ return lg ? { game: gameMeta(lg), snapshot: lg.engine.snapshot() } : { game: null, snapshot: null }; }
+
+// ---- End-of-day ceremony -----------------------------------------------------------------
+// At midnight (the sim clock crossing into a new day) the game pauses and every station master is
+// asked to (D1) report to the superintendent, (D2) update its memory, (D3) drop its notebook; then
+// all reports are shared back for review (E); then the game resumes (F). Phase timeouts guarantee a
+// slow or absent master can never wedge the game.
+function stationNames(lg){ return lg.engine.state.stations.map(s => s.name); }
+function reportsForDay(lg, day){
+  return (lg.engine.state.superintendentReports || []).filter(r => r.day === day).map(r => ({ station: r.station, text: r.text }));
+}
+function startEndOfDay(lg, endedDay){
+  lg.running = false;                        // pause for the whole ceremony
+  lg.eod = { phase: "report", day: endedDay, reported: new Set(), reviewed: new Set(), deadline: Date.now() + EOD_REPORT_MS };
+  for (const st of lg.engine.state.stations)
+    lg.engine.notifyEvent(st.name, "end_of_day", { day: endedDay, station: st.name, notebook: st.notebook || "", memory: st.memory || "" });
+  smlog(`${gname(lg)} | === end of day ${endedDay}: paused, awaiting ${stationNames(lg).length} station report(s) ===`);
+  broadcast(lg);
+}
+function enterReviewPhase(lg){
+  const reports = reportsForDay(lg, lg.eod.day);
+  lg.eod.phase = "review"; lg.eod.reviewed = new Set(); lg.eod.deadline = Date.now() + EOD_REVIEW_MS;
+  for (const st of lg.engine.state.stations)
+    lg.engine.notifyEvent(st.name, "review_reports", { day: lg.eod.day, station: st.name, reports });
+  smlog(`${gname(lg)} | day ${lg.eod.day}: ${reports.length} report(s) collected — sharing for review`);
+  broadcast(lg);
+}
+function finishEndOfDay(lg){
+  const day = lg.eod.day; lg.eod = null;
+  try { lg.lastDay = lg.engine.dayTime().day; } catch { lg.lastDay = day + 1; }
+  lg.running = true;
+  smlog(`${gname(lg)} | === day ${day} wrapped: resumed ===`);
+  saveGame(lg); broadcast(lg);
+}
+function serviceEod(lg){
+  const e = lg.eod; if (!e) return;
+  const all = stationNames(lg);
+  const covered = set => all.length > 0 && all.every(n => set.has(n));
+  if (e.phase === "report"){ if (covered(e.reported) || Date.now() >= e.deadline) enterReviewPhase(lg); }
+  else if (e.phase === "review"){ if (covered(e.reviewed) || Date.now() >= e.deadline) finishEndOfDay(lg); }
+}
+function checkDayRollover(lg){
+  if (lg.eod) return;
+  let day; try { day = lg.engine.dayTime().day; } catch { return; }
+  if (day > lg.lastDay){
+    if (lg.engine.state.stations.length) startEndOfDay(lg, lg.lastDay);
+    else lg.lastDay = day;                    // no stations to report — just advance the marker
+  }
+}
 
 // ---- Tick loop: advance EVERY running game -----------------------------------------------
 let last = Date.now();
@@ -163,7 +222,9 @@ setInterval(() => {
       while (lg.acc >= SIM_STEP_MS && steps < 8){ lg.engine.simStep(); lg.acc -= SIM_STEP_MS; steps++; lg.sinceBroadcast++; }
       if (steps >= 8) lg.acc = 0;
       if (lg.sinceBroadcast >= BROADCAST_EVERY){ lg.sinceBroadcast = 0; broadcast(lg); }
+      checkDayRollover(lg);                     // pause + run the ceremony when the clock turns midnight
     } else lg.acc = 0;
+    if (lg.eod) serviceEod(lg);                 // drive the (paused) ceremony's phase machine
     if (now - lg.lastAutosave > AUTOSAVE_MS){ lg.lastAutosave = now; try { saveGame(lg); } catch (e) {} }
   }
 }, SIM_STEP_MS);
@@ -313,6 +374,18 @@ destination), or they will conflict.
   precedence over your base instructions** for every future train until the operator cancels it — then
   call **clear_override**. Your overrides come back with get_my_instructions (field \`overrides\`); when
   routing, apply any that match before falling back to your base instructions.
+- **Your memory.** You have three kinds of saved state, returned by get_my_instructions and supplied
+  with each routing decision: \`memory\` (long-term, carried across days), \`notebook\` (today's
+  scratchpad, wiped each midnight), and \`overrides\`. Use the notebook to track running state an
+  instruction needs — e.g. "alternate trains from A and B" means **note** which side you last let
+  through, then read it next time and pick the other. Tools: **note** (append a line to today's
+  notebook), **remember** (overwrite long-term memory), **report_to_superintendent** (file a report).
+- **Midnight.** When the day ends you receive an \`end_of_day\` event (it carries your notebook + memory).
+  The game is PAUSED. Do three things: (1) **report_to_superintendent** with a short summary of the day,
+  (2) **remember** — fold anything worth keeping from today's notebook into your long-term memory, (3)
+  your notebook is then cleared automatically. Shortly after, a \`review_reports\` event delivers EVERY
+  station's report for the day; read them and, if useful, **note** anything you want to act on tomorrow.
+  The game resumes once everyone has reported and reviewed.
 - Stay in your station; trains hand off to other stations' masters.
 `;
 
@@ -369,7 +442,7 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/trains" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       smlog(`${gname(lg)} | list_trains`);
-      return sendJSON(res, 200, { ok: true, trains: lg.engine.trainsReport() });
+      return sendJSON(res, 200, { ok: true, trains: lg.engine.trainsReport(), running: lg.running, dayPhase: lg.eod ? lg.eod.phase : null });
     }
 
     if ((m = url.match(/^\/api\/stations\/([^\/]+)$/)) && req.method === "GET"){
@@ -387,7 +460,7 @@ const server = http.createServer(async (req, res) => {
       const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
       if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
       smlog(`${gname(lg)} ${st.name} | get_my_instructions`);
-      return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "", overrides: st.overrides || [] });
+      return sendJSON(res, 200, { ok: true, station: st.name, id: st.id, instructions: st.instructions || "", overrides: st.overrides || [], notebook: st.notebook || "", memory: st.memory || "" });
     }
 
     // ---- SSE state stream for one game (?game=<id|name>) ----
@@ -527,6 +600,48 @@ const server = http.createServer(async (req, res) => {
       const result = applyCommand(lg, clear ? { type: "clearOverrides", station: id } : { type: "addOverride", station: id, text: body.text });
       smlog(`${gname(lg)} ${id} | ${clear ? "clear_overrides" : `set_override "${body.text}"`}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    // A station's DAILY NOTEBOOK (scratchpad, cleared each midnight). POST { text } appends a line;
+    // POST { action:"clear" } wipes it. During the end-of-day review phase, a note doubles as the
+    // master's acknowledgement that it has read the day's reports.
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/note$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const clear = body.action === "clear" || body.clear === true;
+      const result = applyCommand(lg, clear ? { type: "clearNotebook", station: id } : { type: "appendNotebook", station: id, text: body.text });
+      if (result.ok && lg.eod && lg.eod.phase === "review"){ lg.eod.reviewed.add(result.station || id); serviceEod(lg); }
+      smlog(`${gname(lg)} ${id} | ${clear ? "clear_notebook" : `note "${String(body.text||"").slice(0,40)}"`}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    // A station's LONG-TERM MEMORY (carried across days; curated by the master at end of day).
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/memory$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const result = applyCommand(lg, { type: "setMemory", station: id, text: body.text });
+      smlog(`${gname(lg)} ${id} | set_memory  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    // A station master files a report to the superintendent (the day's summary). During the end-of-day
+    // report phase this also marks the station done and drops its notebook (D3).
+    if (url === "/api/superintendent/report" && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const station = body.station;
+      const result = applyCommand(lg, { type: "addReport", station, text: body.text, day: lg.eod ? lg.eod.day : undefined });
+      if (result.ok && lg.eod && lg.eod.phase === "report"){
+        lg.eod.reported.add(result.report.station);
+        applyCommand(lg, { type: "clearNotebook", station });   // D3: notepad cleared once the report is in
+        serviceEod(lg);
+      }
+      smlog(`${gname(lg)} ${station} | report_to_superintendent  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    // The superintendent's report log, newest first (for the UI).
+    if (url === "/api/superintendent" && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      return sendJSON(res, 200, { ok: true, reports: (lg.engine.state.superintendentReports || []).slice().reverse() });
     }
     // From a station master TO the operator: shown in the game notification log + highlights the station.
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/operator-message$/)) && req.method === "POST"){

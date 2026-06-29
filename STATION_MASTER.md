@@ -85,7 +85,17 @@ clears the entry signal; the easy way to follow "set path …" instructions), `s
 `clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),
 `await_events` (the blocking notification receiver), `send_message`, `set_override` / `clear_override`
 (record/cancel a **standing operator override** given over chat — "until further notice …" — which
-takes precedence over the base instructions until cleared), `list_watches`, `cancel_watch`.
+takes precedence over the base instructions until cleared), `note` / `remember`
+(write the station's **daily notebook** — a scratchpad wiped each midnight — and its **long-term
+memory** — kept across days; both ride along every decision, so a master can carry state like "which
+side did I last let through"), `report_to_superintendent` (file the day's report),
+`list_watches`, `cancel_watch`.
+
+**End of day.** When the sim clock turns midnight the game pauses and each master receives an
+`end_of_day` event: it should `report_to_superintendent`, fold anything worth keeping into `remember`,
+and its notebook is then cleared. A `review_reports` event then shares every station's report back for
+reading (and optional `note`s for tomorrow); the game resumes once everyone has reported and reviewed
+(each phase is timeout-bounded so a slow/absent master can't wedge the game).
 
 Because approach/arrival notifications are edge-triggered, a master also **sweeps `get_infrastructure`
 every cycle** for trains already waiting at its signals and routes them — so trains don't get

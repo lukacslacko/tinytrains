@@ -26,7 +26,11 @@ async function gameTime(){ try { const t = await gj("/api/time"); return t && t.
 // Standing operator overrides for a station (set over chat, "until further notice …"). Fetched fresh
 // each decision and injected into the prompt so they apply to every train, not just the message that set
 // them. Returns [] if none / unavailable.
-async function overridesFor(station){ try { const r = await gj(`/api/stations/${encodeURIComponent(station)}/instructions`); return (r && Array.isArray(r.overrides)) ? r.overrides : []; } catch { return []; } }
+async function stateFor(station){
+  try { const r = await gj(`/api/stations/${encodeURIComponent(station)}/instructions`);
+    return { overrides: Array.isArray(r.overrides) ? r.overrides : [], notebook: typeof r.notebook === "string" ? r.notebook : "", memory: typeof r.memory === "string" ? r.memory : "" };
+  } catch { return { overrides: [], notebook: "", memory: "" }; }
+}
 
 const TOOLS = [
   { type: "function", function: { name: "set_path", description: "Route a train the easy way: path = [entry signal, then the switches in order, optional final compass dir]. Lines up every switch and clears the entry signal. Use for any 'set path …' instruction, e.g. set path 1,2,3 at A → [\"A\",\"1\",\"2\",\"3\"].",
@@ -41,6 +45,12 @@ const TOOLS = [
     parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
   { type: "function", function: { name: "clear_overrides", description: "Remove ALL standing overrides for this station (the operator cancelled the override / said go back to normal).",
     parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "note", description: "Append a line to your DAILY NOTEBOOK (a scratchpad, wiped each midnight). Use it to carry running state between trains — e.g. for 'alternate trains from A and B', note which side you last let through, then read it next time to pick the other. Your notebook is shown with every request.",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+  { type: "function", function: { name: "remember", description: "Overwrite your LONG-TERM MEMORY (kept across days, unlike the notebook). Update it at end of day with anything worth keeping. Keep it concise — it is shown with every request.",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+  { type: "function", function: { name: "report_to_superintendent", description: "File a short report on how the day went at your station. Call this when you receive an end-of-day request.",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
   { type: "function", function: { name: "done", description: "Call when you have set everything needed for this event.",
     parameters: { type: "object", properties: {} } } }
 ];
@@ -52,8 +62,11 @@ async function runTool(station, name, a){
   if (name === "send_message") return gp(`/api/stations/${encodeURIComponent(station)}/operator-message`, { text: a.text });
   if (name === "set_override") return gp(`/api/stations/${encodeURIComponent(station)}/override`, { text: a.text });
   if (name === "clear_overrides") return gp(`/api/stations/${encodeURIComponent(station)}/override`, { action: "clear" });
+  if (name === "note") return gp(`/api/stations/${encodeURIComponent(station)}/note`, { text: a.text });
+  if (name === "remember") return gp(`/api/stations/${encodeURIComponent(station)}/memory`, { text: a.text });
+  if (name === "report_to_superintendent") return gp(`/api/superintendent/report`, { station, text: a.text });
   if (name === "done") return { ok: true, done: true };
-  return { ok: false, error: `no such tool "${name}". You may ONLY call: set_path, set_switch, clear_signal, send_message, set_override, clear_overrides, done. Events are delivered to you automatically — there is no await_events/watch/poll tool. Handle THIS event with the allowed tools, then call done.` };
+  return { ok: false, error: `no such tool "${name}". You may ONLY call: set_path, set_switch, clear_signal, send_message, set_override, clear_overrides, note, remember, report_to_superintendent, done. Events are delivered to you automatically — there is no await_events/watch/poll tool. Handle THIS event with the allowed tools, then call done.` };
 }
 async function ollamaChat(messages){
   const r = await fetch(OLLAMA + "/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -77,9 +90,15 @@ const OLLAMA_BRIEF = `You are an automated railway Station Master controlling on
 are STOPPED at your station and described below need to be routed: set the switches and clear the
 signals to send each one on its way per YOUR INSTRUCTIONS, then call done.
 TOOLS YOU MAY CALL: set_path, set_switch, clear_signal, send_message, set_override, clear_overrides,
-done — and NOTHING else. There is NO await_events, watch_arrivals, get_infrastructure, list_trains or
-any polling/notification tool: the situation is handed to you, so never try to wait for, watch, or fetch
-anything. Just act on what is described below with the tools above and call done.
+note, remember, report_to_superintendent, done — and NOTHING else. There is NO await_events,
+watch_arrivals, get_infrastructure, list_trains or any polling/notification tool: the situation is handed
+to you, so never try to wait for, watch, or fetch anything. Just act on what is described below with the
+tools above and call done.
+You have memory: a LONG-TERM MEMORY and a DAILY NOTEBOOK (wiped each midnight), both shown with every
+request. Use note() to record running state an instruction needs — e.g. "alternate trains from A and B":
+note which side you last let through, then read your notebook next time and pick the other. At END OF DAY
+you will be asked to report_to_superintendent and to remember (update long-term memory); your notebook is
+then cleared. Afterwards you are shown every station's reports and may note anything useful for tomorrow.
 If the operator messages you an instruction OVERRIDE ("until further notice, route ... like ..."), do
 NOT just acknowledge — a reply is forgotten by the next train. Call set_override with the rule FIRST,
 then send_message to acknowledge. Standing overrides are listed with each request and TAKE PRECEDENCE
@@ -99,15 +118,18 @@ over your base instructions until the operator cancels them (then call clear_ove
   }
   console.error(`[ollama master] game=${GAME || "(default)"} model=${MODEL} — managing ${STATIONS.join(", ")}`);
 
-  // Run one decision for a station through the model. The script fetches the current game time and any
-  // standing operator overrides and prepends them, so the model applies them without a fetch tool of its
-  // own — overrides especially must ride along every decision, not just the message that set them.
+  // Run one decision for a station through the model. The script fetches the current game time and the
+  // station's saved state (overrides, long-term memory, today's notebook) and prepends them, so the model
+  // applies them without any fetch tool — this state must ride along every decision, not just the message
+  // that set it.
   async function act(station, user){
     const t = await gameTime();
     const timeLine = t ? `Current game time: ${t.dayClock} into the day (secondsIntoDay=${t.secondsIntoDay} of dayLength=${t.dayLength}, day ${t.day}). If your instructions have time-of-day rules (e.g. "between 2 and 8 minutes" = secondsIntoDay 120..480), apply the branch that matches NOW.\n\n` : "";
-    const ovs = await overridesFor(station);
-    const ovLine = ovs.length ? `STANDING OPERATOR OVERRIDES for ${station} (these OVERRIDE your base instructions until cleared — apply the matching one before falling back to base instructions):\n${ovs.map(o => "- " + o).join("\n")}\n\n` : "";
-    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: timeLine + ovLine + user }];
+    const stt = await stateFor(station);
+    const memLine = stt.memory ? `YOUR LONG-TERM MEMORY for ${station}:\n${stt.memory}\n\n` : "";
+    const noteLine = stt.notebook ? `TODAY'S NOTEBOOK for ${station} (running notes; use note() to add more):\n${stt.notebook}\n\n` : "";
+    const ovLine = stt.overrides.length ? `STANDING OPERATOR OVERRIDES for ${station} (these OVERRIDE your base instructions until cleared — apply the matching one before falling back to base instructions):\n${stt.overrides.map(o => "- " + o).join("\n")}\n\n` : "";
+    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: timeLine + memLine + noteLine + ovLine + user }];
     for (let round = 0; round < 6; round++){
       let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error(`  [${station}] llm error:`, e.message); return; }
       messages.push(msg);
@@ -134,9 +156,13 @@ over your base instructions until the operator cancels them (then call clear_ove
   let cursor = 0;
   const owner = STATIONS.map(encodeURIComponent).join(",");
   while (true){
-    // 1) Anything stopped? Act on it immediately, longest-waiting first, then re-check at once.
-    let trains; try { trains = (await gj("/api/trains")).trains || []; } catch { trains = []; }
-    const stuck = trains
+    // 1) Anything stopped? Act on it immediately, longest-waiting first, then re-check at once. But during
+    // the end-of-day ceremony the game is PAUSED (dayPhase set) — skip routing and fall through to the
+    // poll so we receive and handle the end_of_day / review_reports events instead of spinning on
+    // not-moving trains.
+    let tr; try { tr = await gj("/api/trains"); } catch { tr = {}; }
+    const trains = tr.trains || [];
+    const stuck = tr.dayPhase ? [] : trains
       .filter(t => STATIONS.includes(t.station) && !t.moving && t.waitingFor !== "dwelling at stop")
       .sort((a, b) => (b.waitedSeconds || 0) - (a.waitedSeconds || 0));
     if (stuck.length){
@@ -159,10 +185,19 @@ over your base instructions until the operator cancels them (then call clear_ove
     } catch (e){ console.error(`[${STATIONS.join(",")}] poll error:`, e.message); await new Promise(r => setTimeout(r, 500)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
-      if (ev.mode !== "message") continue;     // stopped trains are step 1's job; ignore waiting/pass here
       const st = ev.owner || STATIONS[0];
-      console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
-      await act(st, `The operator sent you a message: "${ev.text}". If it is an instruction OVERRIDE ("until further notice …", a lasting change to how you route), call set_override with the rule FIRST (or clear_overrides if they cancel one), then reply with send_message. Otherwise reply with send_message if warranted and take any switch/signal actions they ask for.`);
+      if (ev.mode === "message"){
+        console.error(`\n→ [${st}] operator: "${ev.text}" (${ev.clock})`);
+        await act(st, `The operator sent you a message: "${ev.text}". If it is an instruction OVERRIDE ("until further notice …", a lasting change to how you route), call set_override with the rule FIRST (or clear_overrides if they cancel one), then reply with send_message. Otherwise reply with send_message if warranted and take any switch/signal actions they ask for.`);
+      } else if (ev.mode === "end_of_day"){
+        console.error(`\n🌙 [${st}] end of day ${ev.day} — wrapping up`);
+        await act(st, `END OF DAY ${ev.day} at ${st}. The game is paused for the daily wrap-up. Today's notebook:\n${ev.notebook || "(empty)"}\n\nLong-term memory:\n${ev.memory || "(empty)"}\n\nDo, in order: (1) call report_to_superintendent with a SHORT summary of how the day went at ${st}; (2) call remember with your updated long-term memory — fold in anything from today worth keeping, keep it concise (your notebook is cleared automatically after). Then call done.`);
+      } else if (ev.mode === "review_reports"){
+        const lines = (ev.reports || []).map(r => `- ${r.station}: ${r.text}`).join("\n") || "(no reports)";
+        console.error(`\n📋 [${st}] reviewing ${(ev.reports || []).length} report(s) for day ${ev.day}`);
+        await act(st, `Day ${ev.day} reports from every station:\n${lines}\n\nIf anything here is worth acting on at ${st} tomorrow, call note to jot it in your fresh daily notebook. Then call done.`);
+      }
+      // other modes (waiting/pass) are step 1's job — ignore here
     }
   }
 })().catch(e => { console.error(e); process.exit(1); });
