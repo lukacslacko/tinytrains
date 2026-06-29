@@ -423,6 +423,7 @@
       <button id="zoomInBtn" type="button" title="Zoom in">+</button>
       <select id="stationJump" title="Center the map on a station"><option value="">Go to station&hellip;</option></select>
       <button id="themeToggle" type="button" title="Toggle light / dark theme">&#9788;</button>
+      <button id="soundToggle" type="button" title="Enable sound effects">&#128263;</button>
     </div>
     <section id="notifyPanel" aria-label="Notifications">
       <div id="notifyHead">
@@ -468,6 +469,74 @@
       btn.title = mode === "light" ? "Switch to dark theme" : "Switch to light theme"; }
     rebuildShapePreviews();   // the toolbar shape swatches are pre-rendered, so re-tint them
     draw();
+  }
+
+  // ---- Sound effects (synthesised with Web Audio — no files). Detected by diffing each snapshot:
+  //   switch thrown/set            -> "click"
+  //   manual signal cleared/redded -> "clack"
+  //   automatic change (a train consuming a manual signal, or an automatic block signal flipping) -> "plop"
+  let sfxOn = false, audioCtx = null;
+  function ensureAudio(){
+    if (!audioCtx){ try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  }
+  function blip(freq, dur, type, vol, slideTo){
+    ensureAudio(); if (!audioCtx) return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  const playClick = () => blip(1500, 0.035, "square", 0.10);          // crisp switch click
+  const playClack = () => blip(520, 0.075, "square", 0.16, 360);      // heavier signal clack
+  const playPlop  = () => blip(300, 0.13, "sine", 0.085, 165);        // soft automatic plop
+  // A fingerprint of the sound-relevant state: switch directions, automatic-main green, manual greens.
+  function soundFingerprint(){
+    const sw = {}, autoG = {};
+    for (const [k, tile] of state.tiles){
+      if (tile.kind === "switch"){ sw[k] = switchCurrent(tile); }
+      else if (tile.kind === "signal"){
+        const { x, y } = readKey(k);
+        for (const dir of signalDirs(tile)){
+          if (manualDirs(tile).includes(dir)) continue;            // manual mains tracked via manualGreen
+          autoG[mkMain(x, y, dir)] = !!(state.sys && mainRenderGreen(mkMain(x, y, dir), state.sys, false));
+        }
+      }
+    }
+    return { sw, autoG, manG: new Set(state.manualGreen) };
+  }
+  function trainCoversTile(x, y){
+    const tk = key(x, y);
+    for (const t of state.trains){ const bt = t._tiles || computeBodyTiles(t); if (bt.has(tk)) return true; }
+    return false;
+  }
+  let lastSfxFp = null;
+  function detectSounds(prev, cur){
+    if (!prev) return;
+    let click = false, clack = false, plop = false;
+    for (const k in cur.sw) if (prev.sw[k] !== undefined && prev.sw[k] !== cur.sw[k]) click = true;
+    for (const mk in cur.autoG) if (prev.autoG[mk] !== undefined && prev.autoG[mk] !== cur.autoG[mk]) plop = true;
+    for (const mk of cur.manG) if (!prev.manG.has(mk)) clack = true;            // a manual signal cleared
+    for (const mk of prev.manG) if (!cur.manG.has(mk)){                          // a manual signal went red:
+      const { x, y } = parseMain(mk);
+      if (trainCoversTile(x, y)) plop = true; else clack = true;                 // consumed by a pass vs set red
+    }
+    if (click) playClick();
+    if (clack) playClack();
+    if (plop) playPlop();
+  }
+  function setSound(on){
+    sfxOn = !!on;
+    try { localStorage.setItem("tt-sound", sfxOn ? "on" : "off"); } catch {}
+    const btn = document.getElementById("soundToggle");
+    if (btn){ btn.innerHTML = sfxOn ? "&#128266;" : "&#128263;";  // 🔊 / 🔇
+      btn.title = sfxOn ? "Mute sound effects" : "Enable sound effects"; }
+    if (sfxOn){ ensureAudio(); lastSfxFp = soundFingerprint(); }   // baseline now so we don't replay history
   }
   const contextMenu = document.getElementById("contextMenu");
   const stats = document.getElementById("stats");
@@ -1286,8 +1355,12 @@
     if (payload.snapshot){
       applySnapshot(payload.snapshot);
       // On (re)connect / game switch, skip the event backlog so we don't replay old notifications.
-      if (server._resync){ server._resync = false; lastEventSeq = state.events.reduce((mx, e) => Math.max(mx, e.seq), 0); }
-      else drainEvents();
+      if (server._resync){ server._resync = false; lastEventSeq = state.events.reduce((mx, e) => Math.max(mx, e.seq), 0); lastSfxFp = null; }
+      else {
+        drainEvents();
+        // Play SFX for what changed this snapshot (skip on a game switch — that's a whole new board).
+        if (sfxOn){ const fp = soundFingerprint(); if (!gameChanged) detectSounds(lastSfxFp, fp); lastSfxFp = fp; }
+      }
     }
     state.paused = !!(payload.game && !payload.game.running);
     updatePauseButton();
@@ -2042,6 +2115,7 @@
     document.getElementById("zoomOutBtn").addEventListener("click", () => zoomButton(1 / 1.25));
     document.getElementById("themeToggle").addEventListener("click", () =>
       applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
+    document.getElementById("soundToggle").addEventListener("click", () => setSound(!sfxOn));
     document.getElementById("stationJump").addEventListener("change", e => {
       const st = state.stations.find(s => String(s.id) === e.target.value);
       e.target.value = ""; if (st) jumpToStation(st);
@@ -4541,6 +4615,10 @@
   updateSignals();
   resize();
   { let saved = "dark"; try { saved = localStorage.getItem("tt-theme") || "dark"; } catch {} applyTheme(saved); }
+  { let on = false; try { on = localStorage.getItem("tt-sound") === "on"; } catch {} setSound(on);
+    // Browsers only let audio start after a user gesture; if sound was left on, resume on the first one.
+    if (on){ const wake = () => { ensureAudio(); window.removeEventListener("pointerdown", wake); window.removeEventListener("keydown", wake); };
+      window.addEventListener("pointerdown", wake); window.addEventListener("keydown", wake); } }
   notify("info", "Connecting to the game server…");
   serverStart(); // server-only: pick a game to view and subscribe to its streamed state
   animation();
