@@ -20,6 +20,9 @@ const DIRS = ["N","NE","E","SE","S","SW","W","NW"];
 
 async function gj(path){ const r = await fetch(SERVER + path + (path.includes("?") ? "&" : "?") + (GAME ? "game=" + encodeURIComponent(GAME) : "")); return r.json(); }
 async function gp(path, body){ const r = await fetch(SERVER + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ game: GAME }, body)) }); return r.json(); }
+// Current simulation time of day (for time-of-day instruction rules). The SCRIPT fetches it and hands
+// it to the model in the prompt — the model itself never fetches anything. null if unavailable.
+async function gameTime(){ try { const t = await gj("/api/time"); return t && t.ok ? t : null; } catch { return null; } }
 
 const TOOLS = [
   { type: "function", function: { name: "set_path", description: "Route a train the easy way: path = [entry signal, then the switches in order, optional final compass dir]. Lines up every switch and clears the entry signal. Use for any 'set path …' instruction, e.g. set path 1,2,3 at A → [\"A\",\"1\",\"2\",\"3\"].",
@@ -52,7 +55,9 @@ const SHARED_NOTE = `A train's "line N" / "train N" in the instructions means tr
 For a "set path …" order call set_path with the entry signal first then the switches, e.g. "arrives at
 A: set path 1,2,3" -> set_path(["A","1","2","3"]). For a single switch use set_switch then clear_signal.
 Then call "done". Only use THIS station's elements. If the instructions don't cover the case (or are
-ambiguous), do your best and also send_message a short "Suggestion: ..." for the operator, then "done".`;
+ambiguous), do your best and also send_message a short "Suggestion: ..." for the operator, then "done".
+Some instructions depend on game time (e.g. "during game time between 2 and 8 minutes: ..."); the
+current game time is given with each request — apply the branch that matches it.`;
 
 // The script owns the loop; the model just makes the routing decision it's handed. So it gets THIS
 // focused brief, NOT the /api/guide text (that guide is for the MCP master and tells it to "loop with
@@ -80,9 +85,12 @@ described below with the tools above and call done.`;
   }
   console.error(`[ollama master] game=${GAME || "(default)"} model=${MODEL} — managing ${STATIONS.join(", ")}`);
 
-  // Run one decision for a station through the model.
+  // Run one decision for a station through the model. The script fetches the current game time and
+  // prepends it, so the model can apply time-of-day rules without any fetch tool of its own.
   async function act(station, user){
-    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: user }];
+    const t = await gameTime();
+    const timeLine = t ? `Current game time: ${t.dayClock} into the day (secondsIntoDay=${t.secondsIntoDay} of dayLength=${t.dayLength}, day ${t.day}). If your instructions have time-of-day rules (e.g. "between 2 and 8 minutes" = secondsIntoDay 120..480), apply the branch that matches NOW.\n\n` : "";
+    const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: timeLine + user }];
     for (let round = 0; round < 6; round++){
       let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error(`  [${station}] llm error:`, e.message); return; }
       messages.push(msg);
