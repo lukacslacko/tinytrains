@@ -309,6 +309,8 @@ const server = http.createServer(async (req, res) => {
   res._reqLine = req.method + " " + req.url;   // so sendJSON can label the response it logs
   if (req.method === "OPTIONS") return sendJSON(res, 204, {});
 
+  // Bare browser/tab requests for /favicon.ico get the SVG (pages also <link> it directly).
+  if (url === "/favicon.ico"){ req.url = "/favicon.svg"; return serveStatic(req, res); }
   if (!url.startsWith("/api/")) return serveStatic(req, res);
 
   // The game a request targets (?game=<id|name> or body.game). Most endpoints need one; the helper
