@@ -147,6 +147,7 @@
     tick: 0,
     frame: 0,
     simFrame: 0,        // monotonic sim-clock frames (60 = one sim-second)
+    dayLength: 600,     // sim-seconds per simulation "day"; time-of-day = simSeconds mod dayLength
     paused: false,
     selectedTool: "operate",
     lastTool: "track",   // the build tool to return to when Tab leaves Operate
@@ -1004,6 +1005,18 @@
     function setPaused(p){ state.paused = !!p; return {ok:true, paused: state.paused}; }
     state.speedScale = state.speedScale || 1;
     function setSpeed(scale){ const s = Number(scale); state.speedScale = Number.isFinite(s) ? Math.max(0.05, Math.min(3, s)) : 1; return {ok:true, speedScale: state.speedScale}; }
+    state.dayLength = state.dayLength || 600;
+    function setDayLength(seconds){ const s = Number(seconds); state.dayLength = Number.isFinite(s) ? Math.max(10, Math.min(86400, Math.round(s))) : (state.dayLength || 600); return {ok:true, dayLength: state.dayLength}; }
+    // Time of day: whole sim-seconds elapsed within the current simulation day (0 .. dayLength). Lets
+    // station instructions key on the clock, e.g. "during game time between 2 and 8 minutes" = 120..480.
+    function dayTime(){
+      const len = state.dayLength || 600;
+      const simSeconds = Math.floor(state.simFrame / FRAMES_PER_SECOND);
+      const secondsIntoDay = ((simSeconds % len) + len) % len;
+      return { simFrame: state.simFrame, simSeconds, dayLength: len, secondsIntoDay,
+        day: Math.floor(simSeconds / len), clock: formatClock(state.simFrame),
+        dayClock: formatClock(secondsIntoDay * FRAMES_PER_SECOND) };
+    }
 
     // ---- Operate commands (return {ok, ...} or {ok:false, error}) ----
     function cmdThrowSwitch(x,y){
@@ -1136,6 +1149,7 @@
         case "setPath":       return cmdSetPath(cmd.station, cmd.path);
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
+        case "setDayLength":  return setDayLength(cmd.seconds);
         case "step":          simStep(); return {ok:true, simFrame: state.simFrame};
         default:              return {ok:false, error:"unknown command type: " + cmd.type};
       }
@@ -1514,7 +1528,7 @@
     function snapshot(){
       return {
         version: 3,
-        simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused, speedScale: state.speedScale || 1,
+        simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused, speedScale: state.speedScale || 1, dayLength: state.dayLength || 600,
         nextTrainId: state.nextTrainId, nextStationId: state.nextStationId, selectedType: state.selectedType,
         trainTypes: state.trainTypes, stations: state.stations,
         tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
@@ -1534,6 +1548,7 @@
       state.simFrame = s.simFrame||0; state.frame = s.frame||0; state.tick = s.tick||0;
       state.paused = !!s.paused;
       state.speedScale = s.speedScale || 1;
+      state.dayLength = s.dayLength || 600;
       state.nextTrainId = s.nextTrainId||1; state.nextStationId = s.nextStationId||1;
       state.trainTypes = (Array.isArray(s.trainTypes) && s.trainTypes.length)
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
@@ -1550,7 +1565,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
   }
   return { createEngine };
 });

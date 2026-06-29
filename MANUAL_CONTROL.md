@@ -151,8 +151,10 @@ then open `http://localhost:8765/manual.html`.
   one), and it **autosaves the current game after every change** to `./games/<id>.json`, so
   "whenever anything changes" the saved state is updated. Edit commands feed a layout undo/redo
   history that does not rewind the running sim.
-  - General API: `GET /api/state`, `GET /api/events` (SSE), `GET /api/games`, `POST /api/command`
-    (any of the command types above), `POST /api/game/{new,load,save,save-as,rename,pause,step,undo,redo}`.
+  - General API: `GET /api/state`, `GET /api/time` (simulation time of day — seconds within the
+    current `dayLength`), `GET /api/events` (SSE), `GET /api/games`, `POST /api/command`
+    (any of the command types above, incl. `setSpeed` and `setDayLength`),
+    `POST /api/game/{new,load,save,save-as,rename,pause,step,undo,redo}`.
   - **Station Master API:** `GET /api/stations` (each station's **instructions** plus its switches
     and manual signals, by station-local name, with live settings),
     `POST /api/stations/:id/switch` `{name|x,y, to}` and

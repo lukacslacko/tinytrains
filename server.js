@@ -15,6 +15,7 @@
 // REST API (all JSON; CORS-open for local tooling):
 //   GET  /api/health                      → { ok, hasGame, name }
 //   GET  /api/state                       → { ok, game, snapshot }            (full live state)
+//   GET  /api/time                        → { ok, secondsIntoDay, dayLength, day, dayClock, simSeconds }
 //   GET  /api/events                      → text/event-stream of snapshots     (Server-Sent Events)
 //   GET  /api/games                       → [ { id, name, savedAt, simFrame } ] (saved games)
 //   POST /api/game/new   { name, layout } → start a fresh game from a builder layout
@@ -22,7 +23,8 @@
 //   POST /api/game/save  { name? }        → persist the current game to disk
 //   POST /api/game/pause { paused }       → pause/resume the tick loop
 //   POST /api/game/step                   → advance one sim frame (when paused)
-//   POST /api/command    { type, ... }    → operate command (throwSwitch/setSwitch/toggleSignal/…)
+//   POST /api/command    { type, ... }    → operate command (throwSwitch/setSwitch/toggleSignal/…,
+//                                            setSpeed { scale }, setDayLength { seconds })
 //   Station Master API:
 //   GET  /api/stations                    → every station with instructions + its switches/signals
 //   GET  /api/stations/:id                → one station's report
@@ -299,6 +301,9 @@ destination), or they will conflict.
 - The operator may message you (arrives via await_events as \`mode:"message"\`); reply with
   send_message. Once you've worked a while, if an instruction is ambiguous or has a gap, send a
   "Suggestion: …" (don't spam, and not the same one twice).
+- Some instructions are time-of-day rules — e.g. "during game time between 2 and 8 minutes: … /
+  outside that: …". Call **get_time** for the current \`secondsIntoDay\` (0..\`dayLength\`) and pick the
+  matching branch (2 minutes = 120s, 8 minutes = 480s). The day wraps every \`dayLength\` seconds.
 - Stay in your station; trains hand off to other stations' masters.
 `;
 
@@ -334,6 +339,15 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/state" && req.method === "GET"){
       const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       return sendJSON(res, 200, { ok: true, ...snapshotPayload(lg) });
+    }
+
+    // Current simulation time of day: seconds within the current day (0..dayLength), for time-of-day
+    // rules in station instructions ("during game time between 2 and 8 minutes" = secondsIntoDay 120..480).
+    if (url === "/api/time" && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const t = lg.engine.dayTime();
+      smlog(`${gname(lg)} | get_time -> ${t.dayClock} (day ${t.day}, ${t.secondsIntoDay}/${t.dayLength}s)`);
+      return sendJSON(res, 200, { ok: true, game: gameMeta(lg), ...t });
     }
 
     if (url === "/api/stations" && req.method === "GET"){

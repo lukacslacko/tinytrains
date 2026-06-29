@@ -345,6 +345,9 @@
           <option value="0.1">0.1× crawl</option>
         </select>
       </label>
+      <label class="field" style="margin-top:6px"><span>Day length (sim-seconds; wraps the time-of-day clock)</span>
+        <input id="dayLengthInput" type="number" min="10" max="86400" step="10" title="Length of one simulation day in seconds. The time API returns seconds within the current day, wrapping every this many seconds — so instructions can say e.g. 'during game time between 2 and 8 minutes'.">
+      </label>
     </div>
     <div class="toolbar">
       <section class="group">
@@ -579,7 +582,7 @@
     maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed,
     formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
     moveTrain, spawnTrains, simStep, serialize, migrateTile,
-    command, snapshot, applySnapshot, setPaused, stationsReport
+    command, snapshot, applySnapshot, setPaused, stationsReport, dayTime
   } = ENG;
   function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
   // Movement is speed-based: trains accelerate up to MAX_SPEED and brake along a sqrt curve so
@@ -1238,7 +1241,8 @@
     // Only the signal/switch IDS are drawn last — centred, on top of everything (even trains).
     for (const [k,t] of tiles){ const {x,y} = readKey(k); drawElementId(x,y,t); }
     drawFlash();
-    stats.textContent = `${formatClock(state.simFrame)} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
+    const dt = dayTime();
+    stats.textContent = `${dt.clock} | day ${dt.day} ${dt.dayClock} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
     hint.textContent = state.message || `Selected: ${state.selectedTool || "none"}`;
   }
 
@@ -1427,6 +1431,8 @@
     if (nameInput && document.activeElement !== nameInput) nameInput.value = (server.meta && server.meta.name) || "";
     const speedSel = document.getElementById("speedSelect");
     if (speedSel && document.activeElement !== speedSel && state.speedScale != null) speedSel.value = String(state.speedScale);
+    const dayLenInput = document.getElementById("dayLengthInput");
+    if (dayLenInput && document.activeElement !== dayLenInput && state.dayLength != null) dayLenInput.value = String(state.dayLength);
     const jump = document.getElementById("stationJump");
     if (jump && document.activeElement !== jump)
       jump.innerHTML = `<option value="">Go to station&hellip;</option>` +
@@ -2119,6 +2125,7 @@
     document.getElementById("undoBtn").addEventListener("click", serverUndo);
     document.getElementById("redoBtn").addEventListener("click", serverRedo);
     document.getElementById("speedSelect").addEventListener("change", e => mutate({ type: "setSpeed", scale: Number(e.target.value) }));
+    document.getElementById("dayLengthInput").addEventListener("change", e => mutate({ type: "setDayLength", seconds: Number(e.target.value) }));
     document.getElementById("zoomInBtn").addEventListener("click", () => zoomButton(1.25));
     document.getElementById("zoomOutBtn").addEventListener("click", () => zoomButton(1 / 1.25));
     document.getElementById("themeToggle").addEventListener("click", () =>

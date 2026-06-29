@@ -90,6 +90,11 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { game: { type: "string" } } },
     run: async (a) => (await api("GET", "/api/trains", null, someGame(a))).body.trains },
 
+  { name: "get_time",
+    description: "The current simulation time of day. Returns secondsIntoDay (0..dayLength), dayLength (seconds per day), day (day number), simSeconds (total elapsed), and dayClock (MM:SS within the day). Use for time-of-day rules in your instructions: 'during game time between 2 and 8 minutes' means secondsIntoDay between 120 and 480; outside that means below 120 or above 480. The day wraps every dayLength seconds.",
+    inputSchema: { type: "object", properties: { game: { type: "string" } } },
+    run: async (a) => (await api("GET", "/api/time", null, someGame(a))).body },
+
   { name: "set_switch",
     description: "Set one switch so its stem connects to the given branch. direction is a compass bearing (N/NE/E/SE/S/SW/W/NW) and must be one of the switch's branches. Refused if locked by a route in progress.",
     inputSchema: { type: "object", properties: { element: { type: "string", description: "switch name, e.g. '1'" }, direction: { type: "string", description: "compass N/NE/E/SE/S/SW/W/NW" }, ...STATION_PROP }, required: ["element", "direction"] },
