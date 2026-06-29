@@ -452,10 +452,10 @@
   const THEMES = {
     dark:  { canvasBg:"#0d1116", tileBg:"#121820", grid:"#242b34", gridAxis:"#3f4b58",
              rail:"#dde6ef", railMuted:"#71808e", idInk:"#eef3f7", idBg:"rgba(10,14,20,.55)",
-             previewBg:"#10161d", previewLine:"#26313b" },
+             previewBg:"#10161d", previewLine:"#26313b", inactiveBranch:"#39424e" },
     light: { canvasBg:"#eef1f5", tileBg:"#e0e6ed", grid:"#d3dae2", gridAxis:"#a9b4c1",
              rail:"#39434f", railMuted:"#8893a0", idInk:"#18202a", idBg:"rgba(245,247,250,.72)",
-             previewBg:"#e8ecf1", previewLine:"#c8d0db" },
+             previewBg:"#e8ecf1", previewLine:"#c8d0db", inactiveBranch:"#aeb8c4" },
   };
   let T = THEMES.dark;
   // Apply a theme: flip the DOM (CSS [data-theme=light]) and the canvas palette, persist, redraw.
@@ -936,8 +936,8 @@
   function drawTileRoutes(x,y,tile){
     if (tile.kind === "switch"){
       const cur = switchCurrent(tile), other = switchOther(tile);
-      if (other != null) drawRoute(x,y,[tile.stem, other], false, INACTIVE_BRANCH); // darker: set-against side
-      drawRoute(x,y,[tile.stem, cur], false);                                       // bright: the set route
+      if (other != null) drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch); // dimmed: set-against side
+      drawRoute(x,y,[tile.stem, cur], false);                                        // full rail: the set route
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
