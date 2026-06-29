@@ -480,9 +480,9 @@
     if (!audioCtx){ try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
     if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
   }
-  function blip(freq, dur, type, vol, slideTo){
+  function blip(freq, dur, type, vol, slideTo, delay){
     ensureAudio(); if (!audioCtx) return;
-    const t0 = audioCtx.currentTime;
+    const t0 = audioCtx.currentTime + (delay || 0);
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
     o.type = type; o.frequency.setValueAtTime(freq, t0);
     if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
@@ -492,9 +492,9 @@
     o.connect(g).connect(audioCtx.destination);
     o.start(t0); o.stop(t0 + dur + 0.02);
   }
-  const playClick = () => blip(1500, 0.035, "square", 0.10);          // crisp switch click
-  const playClack = () => blip(520, 0.075, "square", 0.16, 360);      // heavier signal clack
-  const playPlop  = () => blip(300, 0.13, "sine", 0.085, 165);        // soft automatic plop
+  const playClick = d => blip(1500, 0.035, "square", 0.10, null, d);  // crisp switch click
+  const playClack = d => blip(520, 0.075, "square", 0.16, 360, d);    // heavier signal clack
+  const playPlop  = d => blip(300, 0.13, "sine", 0.085, 165, d);      // soft automatic plop
   // A fingerprint of the sound-relevant state: switch directions, automatic-main green, manual greens.
   function soundFingerprint(){
     const sw = {}, autoG = {};
@@ -518,17 +518,21 @@
   let lastSfxFp = null;
   function detectSounds(prev, cur){
     if (!prev) return;
-    let click = false, clack = false, plop = false;
-    for (const k in cur.sw) if (prev.sw[k] !== undefined && prev.sw[k] !== cur.sw[k]) click = true;
-    for (const mk in cur.autoG) if (prev.autoG[mk] !== undefined && prev.autoG[mk] !== cur.autoG[mk]) plop = true;
-    for (const mk of cur.manG) if (!prev.manG.has(mk)) clack = true;            // a manual signal cleared
-    for (const mk of prev.manG) if (!cur.manG.has(mk)){                          // a manual signal went red:
+    // One sound per individual change, ordered like the action that caused it (a set_path throws its
+    // switches, then clears the entry signal): clicks, then clacks, then automatic plops.
+    const seq = [], plops = [];
+    for (const k in cur.sw) if (prev.sw[k] !== undefined && prev.sw[k] !== cur.sw[k]) seq.push(playClick);  // each switch thrown
+    for (const mk of cur.manG) if (!prev.manG.has(mk)) seq.push(playClack);                                 // each signal cleared
+    for (const mk of prev.manG) if (!cur.manG.has(mk)){                                                     // each signal gone red:
       const { x, y } = parseMain(mk);
-      if (trainCoversTile(x, y)) plop = true; else clack = true;                 // consumed by a pass vs set red
+      if (trainCoversTile(x, y)) plops.push(playPlop); else seq.push(playClack);                            // consumed by a pass vs set red
     }
-    if (click) playClick();
-    if (clack) playClack();
-    if (plop) playPlop();
+    for (const mk in cur.autoG) if (prev.autoG[mk] !== undefined && prev.autoG[mk] !== cur.autoG[mk]) plops.push(playPlop); // automatic block signals
+    for (const p of plops) seq.push(p);
+    // Play them in order, a small gap apart (scheduled on the audio clock so they don't block); cap a
+    // busy frame so it can't turn into a long drone.
+    const GAP = 0.08, MAX = 12;
+    seq.slice(0, MAX).forEach((fn, i) => fn(i * GAP));
   }
   function setSound(on){
     sfxOn = !!on;
