@@ -173,12 +173,18 @@ function broadcast(lg){
 }
 
 // ---- HTTP plumbing -----------------------------------------------------------------------
+// Highlight error lines: bold red when the log is a terminal, plus an always-on "✗" marker so they
+// still stand out (and grep) when the log is redirected to a file.
+const LOG_RED = process.stdout.isTTY ? "\x1b[1;31m" : "", LOG_RESET = process.stdout.isTTY ? "\x1b[0m" : "";
+function logLine(text, isError){ console.log(isError ? `${LOG_RED}${text}${LOG_RESET}` : text); }
 function sendJSON(res, code, obj){
   const body = JSON.stringify(obj);
-  // Log the response we return, compact and on one line (JSON.stringify has no whitespace). Set
-  // TINYTRAINS_QUIET=1 to silence (same switch as the [SM] request log).
-  if (!process.env.TINYTRAINS_QUIET)
-    console.log(`${new Date().toISOString().slice(11, 19)} [RES ${code}] ${res._reqLine || ""} -> ${body}`);
+  // Log the response we return, compact and on one line (JSON.stringify has no whitespace). An error
+  // response (4xx/5xx, or ok:false) is highlighted with the request that caused it. TINYTRAINS_QUIET=1 silences.
+  if (!process.env.TINYTRAINS_QUIET){
+    const isErr = code >= 400 || (obj && obj.ok === false);
+    logLine(`${new Date().toISOString().slice(11, 19)} [RES ${code}${isErr ? " ✗" : ""}] ${res._reqLine || ""} -> ${body}`, isErr);
+  }
   res.writeHead(code, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
   res.end(body);
@@ -192,7 +198,11 @@ function readBody(req){
 }
 // Print every Station Master API call (the operator UI uses /api/command + /api/events instead, so
 // this stays focused on what the masters do). Set TINYTRAINS_QUIET=1 to silence.
-function smlog(summary){ if (process.env.TINYTRAINS_QUIET) return; console.log(`${new Date().toISOString().slice(11, 19)} [SM] ${summary}`); }
+function smlog(summary){
+  if (process.env.TINYTRAINS_QUIET) return;
+  const isErr = /REFUSED/.test(summary);   // the [SM] summary embeds the result; a refusal is the request half of an error pair
+  logLine(`${new Date().toISOString().slice(11, 19)} [SM]${isErr ? " ✗" : ""} ${summary}`, isErr);
+}
 function gname(lg){ return lg ? lg.name : "?"; }
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
