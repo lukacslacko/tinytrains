@@ -241,9 +241,9 @@ signals, following each station's instructions. Elements have short local names 
 names the instructions use. Trains run on sight and never crash; a train stops only at a red signal, a
 switch set against it, or an occupied tile.
 
-If you manage SEVERAL stations, do the setup (get_my_instructions, watch_arrivals) for EACH, then run
-the one loop below: every await_events event is tagged with the station (and game) it belongs to —
-act on it at that station, and pass that station to each tool.
+If you manage SEVERAL stations, do the setup (get_my_instructions) for EACH, then run the one loop
+below: every await_events event is tagged with the station (and game) it belongs to — act on it at
+that station, and pass that station to each tool.
 
 ## The easy way to route a train: set_path
 Your instructions read like "when a train arrives at A: set path 1,2,3" or "train 2 → set path 5,3".
@@ -257,28 +257,24 @@ If set_path reports a problem, read it and fix the path. ("line N"/"train N" = t
 with every event.) You can still set one switch with set_switch(element, compass) or open/close a
 signal with clear_signal / set_signal_red when an instruction is that specific.
 
-## Clear a signal only for the train that is ACTUALLY at it
-A manual signal releases whichever train is physically FIRST at it — NOT the one you had in mind. So a
-set_path + clear sends *that* train down the route you set. Before you route, check get_infrastructure
-(each signal's \`waiting\`: its trainType + wantsDir) or list_trains to confirm WHICH train is at the
-signal, and set the path for THAT train's type. Never clear a signal for an approaching train while a
-DIFFERENT train is already waiting at it — the waiting one takes your route and is misrouted; route the
-waiting train first (send it where IT should go), or wait until it has left and the train you mean is
-the one at the signal. Also check no other train is already sitting on the path you open (between the
-signal and its destination), or they will conflict.
+## Route by the train that is ACTUALLY at the signal
+A manual signal releases whichever train is physically FIRST at it — NOT whichever you had in mind. So
+a set_path + clear sends *that* train down the route you set. Each "waiting" event names the train at
+the signal (its trainType + wantsDir); if two trains are queued at one signal, route the one that is
+FIRST, and set the path for THAT train's type — if unsure, confirm with get_infrastructure (each
+signal's \`waiting\`) or list_trains before clearing, so you don't send the wrong train the wrong way.
+Also check no other train is already sitting on the path you open (between the signal and its
+destination), or they will conflict.
 
 ## Your job, in a loop
 1. Once: get_my_instructions, get_infrastructure (your switches + signals, and any train WAITING at
-   each signal), then watch_arrivals (be told when trains approach).
+   each signal).
 2. Loop with await_events — call it, act on every event it returns, then call it AGAIN immediately.
-   It returns three kinds of event, each tagged with its station:
-   - mode "approach"/"reach"/"pass" → a train at a watched element. Route an approaching train with
-     set_path NOW, before it arrives, so it doesn't stop — BUT if a different train is already waiting
-     at that signal, route THAT one first (a signal releases whoever is physically first at it).
-   - mode "waiting" → a train already STUCK at a red signal (it carries waitedSeconds). await_events
-     surfaces these on its own (a stopped train fires no fresh event), so you never need to leave one
-     stranded. Route it. When several are returned they come longest-wait first — clear the HIGHEST
-     waitedSeconds FIRST; treat a large waitedSeconds as urgent.
+   You are told about a train only once it is STOPPED at a signal — there is NO advance/approach notice
+   (this keeps you from routing too early and locking switches before they're needed). It returns:
+   - mode "waiting" → a train STOPPED at a red signal (it carries waitedSeconds). When several are
+     returned they come longest-wait first — clear the HIGHEST waitedSeconds FIRST; treat a large
+     waitedSeconds as urgent.
    - mode "message" → the operator; reply with send_message.
    Re-try anything refused earlier (a conflicting route may have cleared). get_infrastructure (which
    also lists each signal's waiting train + waitedSeconds) and list_trains give the fuller picture.

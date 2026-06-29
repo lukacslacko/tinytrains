@@ -66,7 +66,7 @@ function someGame(a){ return (a && a.game) || DEFAULT_GAME || (POSTS[0] && POSTS
 const STATION_PROP = { station: { type: "string", description: "which of your stations (omit if you manage only one)" }, game: { type: "string", description: "game name (only if a station name is ambiguous across games)" } };
 const TOOLS = [
   { name: "get_guide",
-    description: "Read the global Station Master operating brief FIRST: how the railway works, set_path, and the proactive loop. If you manage several stations, you run the same loop for each.",
+    description: "Read the global Station Master operating brief FIRST: how the railway works, set_path, and the await_events loop. If you manage several stations, you run the same loop for each.",
     inputSchema: { type: "object", properties: {} },
     run: async () => (await api("GET", "/api/guide")).body.guide },
 
@@ -111,26 +111,12 @@ const TOOLS = [
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/path`, { path: a.path }, p.game)).body; } },
 
   { name: "watch",
-    description: "Be notified about a train at one of a station's elements — a SIGNAL or a SWITCH. mode: 'approach' (EARLY, while still a few tiles away — route proactively), 'reach' (arrives on it), 'pass' (its tail has CLEARED it). Use 'pass' on a SWITCH to learn when it's free to re-throw, on a SIGNAL to learn when the block behind cleared. Returns a watch id.",
-    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal or switch name" }, mode: { type: "string", enum: ["approach", "reach", "pass"], description: "default 'approach'" }, tiles: { type: "number", description: "for 'approach': tiles of lead (default 6)" }, ...STATION_PROP }, required: ["element"] },
-    run: async (a) => { const p = post(a); return (await api("POST", "/api/watches", { station: p.station, owner: p.station, element: a.element, mode: a.mode || "approach", tiles: a.tiles }, p.game)).body.watch; } },
-
-  { name: "watch_arrivals",
-    description: "Set an 'approach' watch on EVERY signal in a station at once. Call it once per station you manage at startup, then loop on await_events.",
-    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["approach", "reach", "pass"] }, ...STATION_PROP } },
-    run: async (a) => {
-      const p = post(a);
-      const station = (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station;
-      const made = [];
-      for (const sig of (station.signals || [])){ if (!sig.name) continue;
-        const w = (await api("POST", "/api/watches", { station: p.station, owner: p.station, element: sig.name, mode: a.mode || "approach" }, p.game)).body.watch;
-        if (w) made.push(w);
-      }
-      return { station: p.station, watching: made.map(w => ({ element: w.element, mode: w.mode, id: w.id })) };
-    } },
+    description: "Optional: be notified when a train has PASSED an element (its tail has CLEARED it) — on a SWITCH that means it is now free to re-throw, on a SIGNAL that the block behind has cleared for a following train. ('reach' = a train's head is on the element.) There is NO advance/approach notice: you are told about a train only once it is STOPPED at a signal, via await_events. Returns a watch id.",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal or switch name" }, mode: { type: "string", enum: ["pass", "reach"], description: "default 'pass'" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", "/api/watches", { station: p.station, owner: p.station, element: a.element, mode: a.mode || "pass" }, p.game)).body.watch; } },
 
   { name: "await_events",
-    description: "BLOCK until something happens at ANY of your stations, then return the event(s), EACH TAGGED with its station and game: a watched TRAIN approaching/reaching/passing (mode approach/reach/pass), a MESSAGE from the operator (mode 'message'), or a train currently STUCK at a red signal (mode 'waiting', with waitedSeconds — these are surfaced even though no fresh event fired, so trains never get stranded; handle the highest waitedSeconds FIRST). THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on each event at the station it names (route per that station's instructions; answer messages with send_message), then call it AGAIN immediately. Empty just means call it again.",
+    description: "BLOCK until something happens at ANY of your stations, then return the event(s), EACH TAGGED with its station and game: a train currently STOPPED at a red signal (mode 'waiting', with waitedSeconds — handle the HIGHEST waitedSeconds FIRST), a MESSAGE from the operator (mode 'message'), or — only if you set a pass-watch — a watched element a train has PASSED (mode 'pass'). There is NO advance/approach notice: you hear about a train only once it is stopped at a signal. THIS IS HOW YOU RECEIVE NOTIFICATIONS — call it, act on each event at the station it names (route per that station's instructions; answer messages with send_message), then call it AGAIN immediately. Empty just means call it again.",
     inputSchema: { type: "object", properties: { timeout_seconds: { type: "number", description: "how long to block, default 25, max 55" } } },
     run: async (a) => {
       if (!POSTS.length) throw new Error("no stations configured — start with --station");
@@ -190,7 +176,7 @@ async function handle(msg){
       protocolVersion: (params && params.protocolVersion) || "2024-11-05",
       capabilities: { tools: {} },
       serverInfo: { name: "tinytrains-station-master", version: "0.2.0" },
-      instructions: `You are the Station Master for: ${list}. Call get_guide once, then get_my_instructions and watch_arrivals for EACH station you manage. Then loop on await_events — it returns each event TAGGED with its station${multi ? " and game" : ""}; act on it at that station (pass the station argument to every tool${multi ? "" : "; you have just one, so you may omit it"}).`
+      instructions: `You are the Station Master for: ${list}. Call get_guide once, then get_my_instructions for EACH station you manage. Then loop on await_events — it returns each event TAGGED with its station${multi ? " and game" : ""} (a train STOPPED at a signal, or an operator message); act on it at that station (pass the station argument to every tool${multi ? "" : "; you have just one, so you may omit it"}).`
     });
   }
   if (method === "notifications/initialized" || method === "notifications/cancelled") return; // no response
