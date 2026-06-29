@@ -25,6 +25,29 @@
     --yellow:#f1ca57;
     --violet:#b58cff;
   }
+  /* Light theme — overrides only; the dark rules above stay the default. Toggle via the sun/moon
+     button by the zoom controls (sets data-theme="light" on <html>). Canvas colors flip in JS (THEMES). */
+  :root[data-theme="light"]{
+    color-scheme:light;
+    --bg:#f3f5f8; --panel:#e9edf2; --panel-2:#dce2ea; --line:#c3ccd6;
+    --ink:#1b2129; --muted:#5c6976; --accent:#1399a0;
+    --warn:#b9791a; --danger:#d23b46; --green:#1f9d57; --red:#d23b46;
+  }
+  :root[data-theme="light"] details.palette{background:#e4e9ef}
+  :root[data-theme="light"] .shape-preview{background:#e8ecf1;border-color:#c8d0db}
+  :root[data-theme="light"] button:hover,:root[data-theme="light"] select:hover{border-color:#9aa6b4}
+  :root[data-theme="light"] #stage{background:#eef1f5}
+  :root[data-theme="light"] #contextMenu,:root[data-theme="light"] #stationMenu,:root[data-theme="light"] #ioPanel{background:#fff;border-color:#c3ccd6;box-shadow:0 16px 40px rgba(40,50,65,.22)}
+  :root[data-theme="light"] .chatlog{background:#f0f3f7}
+  :root[data-theme="light"] .chat-op{background:#d4e2f4}
+  :root[data-theme="light"] .chat-master{background:#d9f0e1;border-color:#a8d6ba}
+  :root[data-theme="light"] .note-master{background:#e1f4ea}
+  :root[data-theme="light"] #viewControls,:root[data-theme="light"] #notifyPanel{background:#ffffffe8;border-color:#c3ccd6;box-shadow:0 12px 32px rgba(40,50,65,.18)}
+  :root[data-theme="light"] #notifyHead{border-bottom-color:#d4dbe3}
+  :root[data-theme="light"] .note{background:#eef2f7}
+  :root[data-theme="light"] .note-warn{background:#fbf0d8}
+  :root[data-theme="light"] .note-alert{background:#fbe1e4}
+  :root[data-theme="light"] .field input,:root[data-theme="light"] .field select,:root[data-theme="light"] .field textarea{background:#fff}
   *{box-sizing:border-box}
   html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink)}
   html{overflow-x:hidden}
@@ -399,6 +422,7 @@
       <button id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
       <button id="zoomInBtn" type="button" title="Zoom in">+</button>
       <select id="stationJump" title="Center the map on a station"><option value="">Go to station&hellip;</option></select>
+      <button id="themeToggle" type="button" title="Toggle light / dark theme">&#9788;</button>
     </div>
     <section id="notifyPanel" aria-label="Notifications">
       <div id="notifyHead">
@@ -420,6 +444,31 @@
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
   const stage = document.getElementById("stage");
+
+  // Canvas structural colours per theme (the DOM flips via the CSS [data-theme=light] block; the canvas
+  // is drawn in JS so its colours live here). Semantic colours — train types, signal aspects, accents,
+  // error reds — are kept the same in both themes. `T` is the active palette; applyTheme() swaps it.
+  const THEMES = {
+    dark:  { canvasBg:"#0d1116", tileBg:"#121820", grid:"#242b34", gridAxis:"#3f4b58",
+             rail:"#dde6ef", railMuted:"#71808e", idInk:"#eef3f7", idBg:"rgba(10,14,20,.55)",
+             previewBg:"#10161d", previewLine:"#26313b" },
+    light: { canvasBg:"#eef1f5", tileBg:"#e0e6ed", grid:"#d3dae2", gridAxis:"#a9b4c1",
+             rail:"#39434f", railMuted:"#8893a0", idInk:"#18202a", idBg:"rgba(245,247,250,.72)",
+             previewBg:"#e8ecf1", previewLine:"#c8d0db" },
+  };
+  let T = THEMES.dark;
+  // Apply a theme: flip the DOM (CSS [data-theme=light]) and the canvas palette, persist, redraw.
+  function applyTheme(mode){
+    if (mode !== "light") mode = "dark";
+    document.documentElement.dataset.theme = mode;
+    T = THEMES[mode];
+    try { localStorage.setItem("tt-theme", mode); } catch {}
+    const btn = document.getElementById("themeToggle");
+    if (btn){ btn.innerHTML = mode === "light" ? "&#9790;" : "&#9788;"; // ☾ in light, ☀ in dark
+      btn.title = mode === "light" ? "Switch to dark theme" : "Switch to light theme"; }
+    rebuildShapePreviews();   // the toolbar shape swatches are pre-rendered, so re-tint them
+    draw();
+  }
   const contextMenu = document.getElementById("contextMenu");
   const stats = document.getElementById("stats");
   const hint = document.getElementById("hint");
@@ -545,7 +594,7 @@
   }
   function drawPreviewRoute(pctx,w,h,route,muted){
     const c = {x:w / 2, y:h / 2};
-    pctx.strokeStyle = muted ? "#71808e" : "#dde6ef";
+    pctx.strokeStyle = muted ? T.railMuted : T.rail;
     pctx.lineWidth = 5;
     pctx.lineCap = "round";
     pctx.lineJoin = "round";
@@ -587,6 +636,7 @@
   function drawPreviewStopMarker(pctx,w,h,d){
     drawPreviewTriangle(pctx,w,h,d,STOP_BROWN,.385,"#ffffff",2.4,0);
   }
+  const shapePreviewPainters = [];   // each redraws one toolbar swatch (re-run on theme change)
   function addShapePreview(button, shape, kind){
     const preview = document.createElement("canvas");
     const w = 64;
@@ -599,35 +649,40 @@
     preview.style.height = "auto";
     const pctx = preview.getContext("2d");
     pctx.setTransform(dpr,0,0,dpr,0,0);
-    pctx.clearRect(0,0,w,h);
-    pctx.fillStyle = "#10161d";
-    pctx.fillRect(0,0,w,h);
-    pctx.strokeStyle = "#26313b";
-    pctx.lineWidth = 1;
-    pctx.strokeRect(.5,.5,w-1,h-1);
-    if (kind === "track"){
-      drawPreviewRoute(pctx,w,h,shape.route,false);
-    } else if (kind === "crossPlus"){
-      drawPreviewRoute(pctx,w,h,[6,2],false);
-      drawPreviewRoute(pctx,w,h,[0,4],false);
-    } else if (kind === "crossX"){
-      drawPreviewRoute(pctx,w,h,[7,3],false);
-      drawPreviewRoute(pctx,w,h,[1,5],false);
-    } else if (kind === "spawn"){
-      drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewTriangle(pctx,w,h,shape.dir,typeColor(state.selectedType),.18);
-    } else if (kind === "stop"){
-      drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewStopMarker(pctx,w,h,shape.dir);
-    } else if (kind === "signal"){
-      drawPreviewRoute(pctx,w,h,shape.route,false);
-      drawPreviewTriangle(pctx,w,h,shape.dir,"#16a34a",.385,null,null,0);
-    } else {
-      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
-      drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
+    function paint(){
+      pctx.clearRect(0,0,w,h);
+      pctx.fillStyle = T.previewBg;
+      pctx.fillRect(0,0,w,h);
+      pctx.strokeStyle = T.previewLine;
+      pctx.lineWidth = 1;
+      pctx.strokeRect(.5,.5,w-1,h-1);
+      if (kind === "track"){
+        drawPreviewRoute(pctx,w,h,shape.route,false);
+      } else if (kind === "crossPlus"){
+        drawPreviewRoute(pctx,w,h,[6,2],false);
+        drawPreviewRoute(pctx,w,h,[0,4],false);
+      } else if (kind === "crossX"){
+        drawPreviewRoute(pctx,w,h,[7,3],false);
+        drawPreviewRoute(pctx,w,h,[1,5],false);
+      } else if (kind === "spawn"){
+        drawPreviewRoute(pctx,w,h,shape.route,false);
+        drawPreviewTriangle(pctx,w,h,shape.dir,typeColor(state.selectedType),.18);
+      } else if (kind === "stop"){
+        drawPreviewRoute(pctx,w,h,shape.route,false);
+        drawPreviewStopMarker(pctx,w,h,shape.dir);
+      } else if (kind === "signal"){
+        drawPreviewRoute(pctx,w,h,shape.route,false);
+        drawPreviewTriangle(pctx,w,h,shape.dir,"#16a34a",.385,null,null,0);
+      } else {
+        drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[0]],false);
+        drawPreviewRoute(pctx,w,h,[shape.stem, shape.branches[1]],false);
+      }
     }
+    paint();
+    shapePreviewPainters.push(paint);
     button.insertBefore(preview, button.firstChild);
   }
+  function rebuildShapePreviews(){ for (const p of shapePreviewPainters) p(); }
 
   function drawGrid(){
     const s = tileSize();
@@ -637,24 +692,24 @@
     const right = Math.ceil((w/2 - state.view.x) / s) + 1;
     const top = Math.floor((-h/2 - state.view.y) / s) - 1;
     const bottom = Math.ceil((h/2 - state.view.y) / s) + 1;
-    ctx.fillStyle = "#0d1116";
+    ctx.fillStyle = T.canvasBg;
     ctx.fillRect(0,0,w,h);
     ctx.lineWidth = 1;
     for (let x=left; x<=right; x++){
       const p = worldToScreen(x,0).x;
-      ctx.strokeStyle = x === 0 ? "#3f4b58" : "#242b34";
+      ctx.strokeStyle = x === 0 ? T.gridAxis : T.grid;
       ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,h); ctx.stroke();
     }
     for (let y=top; y<=bottom; y++){
       const p = worldToScreen(0,y).y;
-      ctx.strokeStyle = y === 0 ? "#3f4b58" : "#242b34";
+      ctx.strokeStyle = y === 0 ? T.gridAxis : T.grid;
       ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(w,p); ctx.stroke();
     }
   }
 
   function drawRoute(x,y,route,muted,color){
     const c = centerPoint(x,y);
-    ctx.strokeStyle = color || (muted ? "#71808e" : "#dde6ef");
+    ctx.strokeStyle = color || (muted ? T.railMuted : T.rail);
     ctx.lineWidth = Math.max(3, tileSize() * .085);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -779,8 +834,8 @@
     const tw = ctx.measureText(tile.name).width;
     const bw = tw + Math.max(8, s*.16), bh = Math.max(13, s*.32);
     ctx.beginPath(); ctx.roundRect(c.x - bw/2, c.y - bh/2, bw, bh, Math.min(6, bh/2));
-    ctx.fillStyle = "rgba(10,14,20,.55)"; ctx.fill();
-    ctx.fillStyle = "#eef3f7"; ctx.fillText(tile.name, c.x, c.y + 0.5);
+    ctx.fillStyle = T.idBg; ctx.fill();
+    ctx.fillStyle = T.idInk; ctx.fillText(tile.name, c.x, c.y + 0.5);
     ctx.restore();
   }
   // Red flash overlay on refused-operation tiles; expires by wall clock (works while paused).
@@ -806,7 +861,7 @@
   // tile boundaries instead of a later tile's background erasing an earlier tile's rail.
   function drawTileBg(x,y){
     const p = worldToScreen(x,y), s = tileSize();
-    ctx.fillStyle = "#121820";
+    ctx.fillStyle = T.tileBg;
     ctx.fillRect(p.x+1,p.y+1,s-2,s-2);
   }
   function drawTileRoutes(x,y,tile){
@@ -1985,6 +2040,8 @@
     document.getElementById("speedSelect").addEventListener("change", e => mutate({ type: "setSpeed", scale: Number(e.target.value) }));
     document.getElementById("zoomInBtn").addEventListener("click", () => zoomButton(1.25));
     document.getElementById("zoomOutBtn").addEventListener("click", () => zoomButton(1 / 1.25));
+    document.getElementById("themeToggle").addEventListener("click", () =>
+      applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"));
     document.getElementById("stationJump").addEventListener("change", e => {
       const st = state.stations.find(s => String(s.id) === e.target.value);
       e.target.value = ""; if (st) jumpToStation(st);
@@ -4483,6 +4540,7 @@
   setupControls();
   updateSignals();
   resize();
+  { let saved = "dark"; try { saved = localStorage.getItem("tt-theme") || "dark"; } catch {} applyTheme(saved); }
   notify("info", "Connecting to the game server…");
   serverStart(); // server-only: pick a game to view and subscribe to its streamed state
   animation();
