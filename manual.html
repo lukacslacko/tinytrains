@@ -780,10 +780,13 @@
     }
   }
 
-  function drawRoute(x,y,route,muted,color){
+  // Track thickness: rails are drawn thick; only a switch's set-against (inactive) branch stays thin.
+  function trackW(){ return Math.max(4, tileSize() * .12); }
+  function thinTrackW(){ return Math.max(3, tileSize() * .085); }
+  function drawRoute(x,y,route,muted,color,thin){
     const c = centerPoint(x,y);
     ctx.strokeStyle = color || (muted ? T.railMuted : T.rail);
-    ctx.lineWidth = Math.max(3, tileSize() * .085);
+    ctx.lineWidth = thin ? thinTrackW() : trackW();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -814,7 +817,7 @@
   // set path. Tiles a cleared train has already passed are dropped; the tiles ahead stay marked.
   function drawManualRouteOutlines(){
     if (!state.routeLocks || !state.routeLocks.length) return;
-    const railW = Math.max(3, tileSize() * .085);
+    const railW = trackW();
     const greenW = railW + tileSize() * .18;
     const blackW = railW + tileSize() * .09;
     const segs = [];
@@ -834,7 +837,7 @@
   function drawOccupiedBlockOutlines(){
     const sys = state.sys;
     if (!sys) return;
-    const railW = Math.max(3, tileSize() * .085);
+    const railW = trackW();
     const bandW = railW + tileSize() * .18;
     const blackW = railW + tileSize() * .09;
     const segs = [];
@@ -940,8 +943,8 @@
   function drawTileRoutes(x,y,tile){
     if (tile.kind === "switch"){
       const cur = switchCurrent(tile), other = switchOther(tile);
-      if (other != null) drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch); // dimmed: set-against side
-      drawRoute(x,y,[tile.stem, cur], false);                                        // full rail: the set route
+      if (other != null) drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch, true); // dimmed + THIN: set-against side
+      drawRoute(x,y,[tile.stem, cur], false);                                              // full rail: the set route
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
