@@ -84,10 +84,10 @@ described below with the tools above and call done.`;
   async function act(station, user){
     const messages = [{ role: "system", content: ctx[station] || ctx[STATIONS[0]] }, { role: "user", content: user }];
     for (let round = 0; round < 6; round++){
-      let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error("  llm error:", e.message); return; }
+      let msg; try { msg = await ollamaChat(messages); } catch (e){ console.error(`  [${station}] llm error:`, e.message); return; }
       messages.push(msg);
       const calls = msg.tool_calls || [];
-      if (!calls.length){ if (msg.content) console.error("  (model said:", msg.content.slice(0, 120).replace(/\n/g, " ") + ")"); return; }
+      if (!calls.length){ if (msg.content) console.error(`  [${station}] (model said:`, msg.content.slice(0, 120).replace(/\n/g, " ") + ")"); return; }
       for (const c of calls){
         const a = c.function.arguments || {};
         const out = await runTool(station, c.function.name, a);
@@ -131,7 +131,7 @@ described below with the tools above and call done.`;
       const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 30000);
       const r = await fetch(`${SERVER}/api/notifications?owner=${owner}&after=${cursor}&wait=20${GAME ? "&game=" + encodeURIComponent(GAME) : ""}`, { signal: ctrl.signal });
       clearTimeout(to); res = await r.json();
-    } catch (e){ console.error("poll error:", e.message); await new Promise(r => setTimeout(r, 500)); continue; }
+    } catch (e){ console.error(`[${STATIONS.join(",")}] poll error:`, e.message); await new Promise(r => setTimeout(r, 500)); continue; }
     if (typeof res.cursor === "number") cursor = res.cursor;
     for (const ev of (res.events || [])){
       if (ev.mode !== "message") continue;     // stopped trains are step 1's job; ignore waiting/pass here

@@ -132,14 +132,34 @@ and passes the station to each tool. (A master with a single station may omit th
 
 **A local model (via Ollama) — no API, runs on your Mac:**
 ```
-./ollama-station-master.sh <station> [game]      # e.g. ./ollama-station-master.sh Tiszai Miskolc
+./ollama-station-master.sh <station[,station2,…]> [game]   # e.g. ./ollama-station-master.sh Tiszai Miskolc
 OLLAMA_MODEL=llama3.1:8b ./ollama-station-master.sh Tiszai Miskolc
 ```
-Here the **script** owns the event loop (registers approach watches, long-polls for arrivals); the
-local LLM only decides the switch/signal actions for each arriving train. That keeps each decision
-in a short, fresh context, so a small tool-calling model is reliable. Verified working with
-`qwen3.5` (it produced the correct `set_switch`/`clear_signal` calls for Tiszai's instructions);
-`qwen2.5:7b`, `llama3.1:8b`, and `mistral-nemo` are also good choices.
+Here the **script** owns the loop: it polls `/api/trains` for trains STOPPED at the station and asks
+the local LLM only for the routing decision (no pre-announcement / look-ahead). Each decision is a
+short, fresh context, so a small tool-calling model is reliable. Verified working with `qwen3.5`;
+`qwen2.5:7b`, `llama3.1:8b`, and `mistral-nemo` are also good choices. One process can run several
+stations (comma list), deciding each in its own context.
+
+**A fleet — one process per station, each its own model, in parallel.** `ollama-fleet.sh` launches an
+INDEPENDENT agent per station so you can give each a different model and they run concurrently:
+```
+./ollama-fleet.sh <game> <station[:model]> [station[:model] …]
+./ollama-fleet.sh Miskolc Tiszai:qwen2.5:7b Foter:llama3.1:8b Szikra   # Szikra uses $OLLAMA_MODEL
+```
+Ctrl-C stops the whole fleet.
+
+*Why this is the right way (the "which session?" worry):* Ollama's `/api/chat` is **stateless** — the
+agent sends the full prompt (system + user + tool turns) on every request, so Ollama keeps no
+per-session state and the clients never clash. Each station is just a separate process with its own
+model and its own fresh context per decision. The only shared resource is the Ollama server's compute,
+set by two knobs that apply only when `ollama serve` STARTS: **`OLLAMA_NUM_PARALLEL`** (concurrent
+requests one model serves at once — so same-model stations run together instead of queueing) and
+**`OLLAMA_MAX_LOADED_MODELS`** (distinct models kept resident — so different-model stations don't
+thrash). `ollama-fleet.sh` sets both when it starts `ollama serve`; if Ollama is already running it
+prints the `OLLAMA_NUM_PARALLEL=… OLLAMA_MAX_LOADED_MODELS=… ollama serve` line to restart it with.
+Multiple `ollama-station-master.sh` runs in separate terminals work identically — the fleet script
+just orchestrates them and tunes the parallelism knobs for you.
 
 ## Operator ↔ station-master chat
 
