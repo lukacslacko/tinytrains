@@ -257,13 +257,24 @@ If set_path reports a problem, read it and fix the path. ("line N"/"train N" = t
 with every event.) You can still set one switch with set_switch(element, compass) or open/close a
 signal with clear_signal / set_signal_red when an instruction is that specific.
 
+## Clear a signal only for the train that is ACTUALLY at it
+A manual signal releases whichever train is physically FIRST at it — NOT the one you had in mind. So a
+set_path + clear sends *that* train down the route you set. Before you route, check get_infrastructure
+(each signal's \`waiting\`: its trainType + wantsDir) or list_trains to confirm WHICH train is at the
+signal, and set the path for THAT train's type. Never clear a signal for an approaching train while a
+DIFFERENT train is already waiting at it — the waiting one takes your route and is misrouted; route the
+waiting train first (send it where IT should go), or wait until it has left and the train you mean is
+the one at the signal. Also check no other train is already sitting on the path you open (between the
+signal and its destination), or they will conflict.
+
 ## Your job, in a loop
 1. Once: get_my_instructions, get_infrastructure (your switches + signals, and any train WAITING at
    each signal), then watch_arrivals (be told when trains approach).
 2. Loop with await_events — call it, act on every event it returns, then call it AGAIN immediately.
    It returns three kinds of event, each tagged with its station:
    - mode "approach"/"reach"/"pass" → a train at a watched element. Route an approaching train with
-     set_path NOW, before it arrives, so it doesn't stop.
+     set_path NOW, before it arrives, so it doesn't stop — BUT if a different train is already waiting
+     at that signal, route THAT one first (a signal releases whoever is physically first at it).
    - mode "waiting" → a train already STUCK at a red signal (it carries waitedSeconds). await_events
      surfaces these on its own (a stopped train fires no fresh event), so you never need to leave one
      stranded. Route it. When several are returned they come longest-wait first — clear the HIGHEST
