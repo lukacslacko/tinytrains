@@ -34,29 +34,34 @@ fi
 GAME_ARG=""; [ -n "$GAME" ] && GAME_ARG=", \"--game\", \"$GAME\""
 MCP="{ \"mcpServers\": { \"tinytrains\": { \"command\": \"node\", \"args\": [\"$DIR/mcp-server.js\", \"--station\", \"$STATION\"$GAME_ARG, \"--server\", \"$SERVER\"] } } }"
 
-# Allow only this game's station tools to run without a prompt.
-TOOLS="mcp__tinytrains__get_guide mcp__tinytrains__get_my_instructions mcp__tinytrains__list_stations mcp__tinytrains__get_infrastructure mcp__tinytrains__set_switch mcp__tinytrains__clear_signal mcp__tinytrains__set_signal_red mcp__tinytrains__watch mcp__tinytrains__watch_arrivals mcp__tinytrains__await_events mcp__tinytrains__list_watches mcp__tinytrains__cancel_watch"
+# Allow exactly this game's station tools to run without a permission prompt (so the master is hands-off).
+TOOLS="mcp__tinytrains__get_guide mcp__tinytrains__get_my_instructions mcp__tinytrains__list_stations mcp__tinytrains__get_infrastructure mcp__tinytrains__list_trains mcp__tinytrains__set_switch mcp__tinytrains__clear_signal mcp__tinytrains__set_signal_red mcp__tinytrains__set_path mcp__tinytrains__watch mcp__tinytrains__await_events mcp__tinytrains__send_message mcp__tinytrains__list_watches mcp__tinytrains__cancel_watch"
 
 PROMPT="You are the Station Master for: \"$STATION\"${GAME:+ in game \"$GAME\"}. \
-First call get_guide. Then for EACH of your stations call get_my_instructions and watch_arrivals. \
-Then loop forever: call await_events — it returns events tagged with the station they belong to; for \
-an approaching train, route it per THAT station's instructions, preferring set_path (e.g. 'set path \
-1,2,3' at A -> set_path([\"A\",\"1\",\"2\",\"3\"])); answer operator messages with send_message; pass the \
-station argument to every tool. Then call await_events again. Keep going; do not stop. If after a \
-while you find a gap or ambiguity in a station's instructions, send a 'Suggestion:' to the operator."
+First call get_guide. Then for EACH of your stations call get_my_instructions. \
+Then loop forever: call await_events — it returns events tagged with the station they belong to; a \
+train STOPPED at one of your signals (route it per THAT station's instructions, preferring set_path, \
+e.g. 'set path 1,2,3' at A -> set_path([\"A\",\"1\",\"2\",\"3\"])), or an operator message (answer it with \
+send_message). Pass the station argument to every tool. Then call await_events again. Keep going \
+forever; never stop on your own. If after a while you find a gap or ambiguity in a station's \
+instructions, send a 'Suggestion:' to the operator."
 
 echo "▶ station master — station=$STATION game=${GAME:-<default>} model=$MODEL effort=$EFFORT server=$SERVER"
 
 if [ -n "${DRYRUN:-}" ]; then
   echo "MCP: $MCP"
-  echo "claude --model $MODEL --effort $EFFORT --mcp-config <json> --strict-mcp-config --allowedTools <12 tools> \"<prompt>\""
+  echo "claude --model $MODEL --effort $EFFORT --mcp-config <json> --strict-mcp-config --allowedTools <tools> -- \"<prompt>\""
   exit 0
 fi
 
+# NOTE: the `--` is required. --allowedTools is variadic and would otherwise swallow the positional
+# prompt (the initial request) as a 13th "tool", leaving the session with no kickoff. `--` ends option
+# parsing so "$PROMPT" is the initial prompt and the session starts working immediately.
 exec claude \
   --model "$MODEL" \
   --effort "$EFFORT" \
   --mcp-config "$MCP" \
   --strict-mcp-config \
   --allowedTools $TOOLS \
+  -- \
   "$PROMPT"
