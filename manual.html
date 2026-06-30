@@ -1822,14 +1822,20 @@
   function renderStationState(name){
     const box = document.getElementById("stationStateView");
     if (!box || stationMenu.dataset.station !== name) return;
-    const st = state.stations.find(s => s.name === name); if (!st){ box.innerHTML = ""; return; }
+    const st = state.stations.find(s => s.name === name); if (!st){ box.innerHTML = ""; box.dataset.fp = ""; return; }
+    const ovs = (st.overrides && st.overrides.length) ? st.overrides.map(o => "• " + o).join("\n") : "";
+    // This runs on EVERY snapshot (~20 Hz) while the pop-up is open. Rebuilding innerHTML each time
+    // would replace the Clear buttons between a click's mousedown and mouseup, so the click never lands
+    // (you can see the button but not click it) — re-render only when the saved state actually changed.
+    const fp = JSON.stringify([name, ovs, st.memory || "", st.notebook || ""]);
+    if (box.dataset.fp === fp) return;
+    box.dataset.fp = fp;
     // Each block: a header row (label + a Clear button that deletes that piece on the server) over a
     // scrollable read-only box. `kind` is the thing to clear: overrides / memory / notebook.
     const block = (label, val, kind, mono) => (val && val.trim())
       ? `<div class="field"><span class="state-row">${label} (read-only)`
         + `<button type="button" class="state-clear" data-clear="${kind}" title="Delete this from ${escapeHtml(name)}">Clear</button></span>`
         + `<div class="state-box${mono ? " mono" : ""}">${escapeHtml(val)}</div></div>` : "";
-    const ovs = (st.overrides && st.overrides.length) ? st.overrides.map(o => "• " + o).join("\n") : "";
     box.innerHTML = (block("Standing overrides", ovs, "overrides") + block("Long-term memory", st.memory, "memory") + block("Today's notebook", st.notebook, "notebook", true))
       || `<div class="help" style="opacity:0.6">No memory, notebook, or overrides yet.</div>`;
   }
