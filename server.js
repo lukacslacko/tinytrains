@@ -321,15 +321,18 @@ that station, and pass that station to each tool.
 
 ## The easy way to route a train: set_path
 Your instructions read like "when a train arrives at A: set path 1,2,3" or "train 2 → set path 5,3".
-Just call **set_path** with the entry signal followed by those switches — it lines up every switch for
-you and clears the entry signal:
-  - "a train arrives at A: set path 1,2,3"  →  set_path(["A","1","2","3"])
-  - "set path 4 East" (train at B)          →  set_path(["B","4","E"])   (final compass dir or signal
-    fixes the last switch's exit if needed)
+Just call **set_path** with ONE argument named \`path\` — the entry signal followed by those switches —
+and it lines up every switch for you and clears the entry signal:
+  - "a train arrives at A: set path 1,2,3"  →  set_path(path=["A","1","2","3"])
+  - "set path 4 East" (train at B)          →  set_path(path=["B","4","E"])   (final compass dir or
+    signal fixes the last switch's exit if needed)
 The entry signal is the one the train is arriving at — your instructions imply it, so put it first.
-If set_path reports a problem, read it and fix the path. ("line N"/"train N" = train TYPE N, reported
-with every event.) You can still set one switch with set_switch(element, compass) or open/close a
-signal with clear_signal / set_signal_red when an instruction is that specific.
+The argument is literally \`path\` (an array of names); if your host defers tool schemas, load set_path's
+schema before the first call — do NOT guess the argument name. The error "path needs an entry signal
+then at least one switch" is about what's IN the path, not a wrong argument name, so don't abandon
+set_path for manual set_switch/clear_signal over it — read it and fix the path. ("line N"/"train N" =
+train TYPE N, reported with every event.) You can still set one switch with set_switch(element, compass)
+or open/close a signal with clear_signal / set_signal_red when an instruction is that specific.
 
 ## Route by the train that is ACTUALLY at the signal
 A manual signal releases whichever train is physically FIRST at it — NOT whichever you had in mind. So
