@@ -79,7 +79,9 @@ one station, that calls the HTTP API. Tools:
 `get_guide`, `get_my_instructions`, `list_stations`, `get_infrastructure` (switches + signals, with
 any train **waiting** at each signal), `list_trains` (where every train is + its heading + why it is
 waiting), `get_time` (the current **simulation time of day** — `secondsIntoDay` within a `dayLength`,
-for instructions like "during game time between 2 and 8 minutes"), **`set_path`** (route a train in
+for instructions like "during game time between 2 and 8 minutes"), `pause_time` / `resume_time`
+(freeze / un-freeze the whole game's clock to buy thinking time — shared across all stations, so resume
+promptly), **`set_path`** (route a train in
 one call — `["A","1","2","3"]` lines up the switches and
 clears the entry signal; the easy way to follow "set path …" instructions), `set_switch`,
 `clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),

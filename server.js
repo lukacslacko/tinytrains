@@ -369,6 +369,10 @@ destination), or they will conflict.
 - Some instructions are time-of-day rules — e.g. "during game time between 2 and 8 minutes: … /
   outside that: …". Call **get_time** for the current \`secondsIntoDay\` (0..\`dayLength\`) and pick the
   matching branch (2 minutes = 120s, 8 minutes = 480s). The day wraps every \`dayLength\` seconds.
+- **Buying thinking time.** If trains are arriving faster than you can plan, call **pause_time** to
+  freeze the whole game while you read get_infrastructure and work out the routes, then **resume_time**.
+  Time is SHARED, so this pauses every station and the operator's view — use it sparingly, and ALWAYS
+  resume_time afterwards (while paused nothing moves, so await_events will never bring you a new train).
 - **Temporary overrides over chat.** The operator can change your orders on the fly, e.g. "Attention,
   instruction override! Until further notice, all trains arriving at B → set path 4,3,2,5." Do NOT just
   acknowledge in words — your memory of one message does not carry to the next train. Instead call
@@ -526,6 +530,9 @@ const server = http.createServer(async (req, res) => {
     if (url === "/api/game/pause" && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      // The end-of-day ceremony owns `running` (it pauses and then resumes on its own once every
+      // station has reported + reviewed); a manual pause/resume here would desync it, so refuse.
+      if (lg.eod) return sendJSON(res, 409, { ok: false, error: "the end-of-day ceremony is in progress; time resumes on its own once every station has reported and reviewed", running: lg.running });
       lg.running = !body.paused; lg.engine.setPaused(!lg.running); broadcast(lg);
       return sendJSON(res, 200, { ok: true, running: lg.running });
     }

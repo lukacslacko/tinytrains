@@ -235,6 +235,12 @@
   #stationMenu h2{cursor:move;user-select:none}
   #stationMenu h2::after{content:" ⠿";color:var(--muted);font-weight:400}
   #stationMenu .field.grow{flex:1 1 auto;min-height:90px;grid-template-rows:auto 1fr auto}
+  /* A station's saved state (overrides / memory / notebook): a header row with a Clear button, over a
+     scrollable read-only box so a long memory or notebook scrolls instead of stretching the pop-up. */
+  #stationMenu .state-row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  #stationMenu .state-clear{flex:0 0 auto;min-height:0;padding:2px 9px;font-size:11px}
+  #stationMenu .state-box{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-height:140px;overflow:auto}
+  #stationMenu .state-box.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
   .chatlog{min-height:70px;overflow-y:auto;border:1px solid var(--line);border-radius:7px;background:#0f141a;padding:6px;display:flex;flex-direction:column;gap:5px;font-size:13px}
   .chatrow{display:flex;gap:6px;margin-top:5px}
   .chatrow input{flex:1 1 auto;min-width:0}
@@ -1817,10 +1823,14 @@
     const box = document.getElementById("stationStateView");
     if (!box || stationMenu.dataset.station !== name) return;
     const st = state.stations.find(s => s.name === name); if (!st){ box.innerHTML = ""; return; }
-    const block = (label, val, mono) => (val && val.trim())
-      ? `<label class="field"><span>${label} (read-only)</span><div style="white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:6px 8px;max-height:120px;overflow:auto${mono?";font-family:monospace;font-size:12px":""}">${escapeHtml(val)}</div></label>` : "";
+    // Each block: a header row (label + a Clear button that deletes that piece on the server) over a
+    // scrollable read-only box. `kind` is the thing to clear: overrides / memory / notebook.
+    const block = (label, val, kind, mono) => (val && val.trim())
+      ? `<div class="field"><span class="state-row">${label} (read-only)`
+        + `<button type="button" class="state-clear" data-clear="${kind}" title="Delete this from ${escapeHtml(name)}">Clear</button></span>`
+        + `<div class="state-box${mono ? " mono" : ""}">${escapeHtml(val)}</div></div>` : "";
     const ovs = (st.overrides && st.overrides.length) ? st.overrides.map(o => "• " + o).join("\n") : "";
-    box.innerHTML = (block("Standing overrides", ovs) + block("Long-term memory", st.memory) + block("Today's notebook", st.notebook, true))
+    box.innerHTML = (block("Standing overrides", ovs, "overrides") + block("Long-term memory", st.memory, "memory") + block("Today's notebook", st.notebook, "notebook", true))
       || `<div class="help" style="opacity:0.6">No memory, notebook, or overrides yet.</div>`;
   }
   function sendChat(name, text){
@@ -1874,6 +1884,28 @@
     const st = stationById(Number(stationMenu.dataset.id));
     closeStationContext();
     if (st){ deleteStation(st.id); state.message = `Removed ${st.name}`; }
+  });
+  // Delete a station's saved memory / notebook / overrides (the Clear buttons in renderStationState).
+  // Each posts to the same endpoint the station master uses to write it; we optimistically blank the
+  // local copy so the box updates at once (the next server snapshot confirms it).
+  const CLEAR_ENDPOINT = {
+    overrides: ["/override", { action: "clear" }],
+    notebook:  ["/note",     { action: "clear" }],
+    memory:    ["/memory",   { text: "" }],
+  };
+  stationMenu.addEventListener("click", event => {
+    const btn = event.target.closest && event.target.closest(".state-clear"); if (!btn) return;
+    const kind = btn.dataset.clear, name = stationMenu.dataset.station, spec = CLEAR_ENDPOINT[kind];
+    if (!spec || !name) return;
+    const labels = { overrides: "standing overrides", memory: "long-term memory", notebook: "today's notebook" };
+    if (!confirm(`Delete ${labels[kind] || kind} for ${name}? This cannot be undone.`)) return;
+    apiFetch(`/api/stations/${encodeURIComponent(name)}${spec[0]}`, { method: "POST", body: JSON.stringify(withGame(spec[1])) })
+      .then(r => {
+        if (r.body && r.body.ok === false){ state.message = r.body.error || "Could not clear"; draw(); return; }
+        const st = state.stations.find(s => s.name === name);   // optimistic: blank it locally now
+        if (st){ if (kind === "overrides") st.overrides = []; else st[kind] = ""; }
+        renderStationState(name);
+      });
   });
   contextMenu.addEventListener("click", event => {
     const t = event.target;

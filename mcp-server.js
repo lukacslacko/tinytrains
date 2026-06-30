@@ -95,6 +95,16 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { game: { type: "string" } } },
     run: async (a) => (await api("GET", "/api/time", null, someGame(a))).body },
 
+  { name: "pause_time",
+    description: "Freeze the whole game's clock: every train stops where it is and the time-of-day clock holds. Use it to buy yourself thinking time while you read get_infrastructure and plan a multi-step route, so trains don't pile up while you decide — then resume_time. NOTE: time is SHARED, so this pauses EVERY station in the game (and the operator's view); and while paused await_events will never surface a new waiting train (nothing moves), so ALWAYS resume_time before you loop back to await_events.",
+    inputSchema: { type: "object", properties: { game: { type: "string" } } },
+    run: async (a) => (await api("POST", "/api/game/pause", { paused: true }, someGame(a))).body },
+
+  { name: "resume_time",
+    description: "Let the clock run again after pause_time (trains move and the time-of-day clock advances). Always call this once you've finished planning — a paused game is frozen for the operator and every other station too.",
+    inputSchema: { type: "object", properties: { game: { type: "string" } } },
+    run: async (a) => (await api("POST", "/api/game/pause", { paused: false }, someGame(a))).body },
+
   { name: "set_switch",
     description: "Set one switch so its stem connects to the given branch. direction is a compass bearing (N/NE/E/SE/S/SW/W/NW) and must be one of the switch's branches. Refused if locked by a route in progress.",
     inputSchema: { type: "object", properties: { element: { type: "string", description: "switch name, e.g. '1'" }, direction: { type: "string", description: "compass N/NE/E/SE/S/SW/W/NW" }, ...STATION_PROP }, required: ["element", "direction"] },
