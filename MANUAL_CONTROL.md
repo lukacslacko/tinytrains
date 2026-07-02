@@ -128,6 +128,60 @@ Points are listed here with status, and the work was delivered incrementally.
 
 ---
 
+## Server-only authoritative mode + external control API — **done**
+
+The game **always** runs on a **server** (there is no single-page / offline mode), so it can be
+driven from outside through an API (now the **Station Master**; later the engine driver), and games
+are saved/loaded/continued directly on disk. Run it with **`node server.js`** (default port 8765),
+then open `http://localhost:8765/manual.html`.
+
+- **Shared engine (`engine.js`).** The DOM-free simulation was extracted out of `manual.html`
+  into `engine.js` and is the single source of truth — the **same code** runs in the browser and
+  on the server. `TinyTrainsEngine.createEngine()` returns one isolated sim with: the state +
+  rules (tiles, switches, signals, route locks, `simStep`, `updateSignals`, …), `serialize` /
+  `deserialize` / `applyLayout`, a full `snapshot()` / `applySnapshot()` (Sets made JSON-safe), an
+  event buffer (`emit`, replacing the old DOM `notify`), **one `command()` dispatch for every
+  mutation** — operate (`throwSwitch`/`setSwitch`/`toggleSignal`/`clearSignal`/`redSignal`/`spawn`/
+  `removeTrain`) **and** edit (`setTile`/`removeTile`/`setStations`/`setTrainTypes`/`pasteTiles`/
+  `removeTiles`) — plus Station Master helpers (`stationsReport`, `resolveElement`).
+
+- **Server (`server.js`, Node, zero deps).** Serves the static files; owns the **one live game**;
+  ticks it with the shared engine (authoritative — runs with no browser open); streams snapshots
+  over Server-Sent Events. On boot it **resumes the most recently saved game** (or creates an empty
+  one), and it **autosaves the current game after every change** to `./games/<id>.json`, so
+  "whenever anything changes" the saved state is updated. Edit commands feed a layout undo/redo
+  history that does not rewind the running sim.
+  - General API: `GET /api/state`, `GET /api/time` (simulation time of day — seconds within the
+    current `dayLength`), `GET /api/events` (SSE), `GET /api/games`, `POST /api/command`
+    (any of the command types above, incl. `setSpeed` and `setDayLength`),
+    `POST /api/game/{new,load,save,save-as,rename,pause,step,undo,redo}`.
+  - **Station Master API:** `GET /api/stations` (each station's **instructions** plus its switches
+    and manual signals, by station-local name, with live settings),
+    `POST /api/stations/:id/switch` `{name|x,y, to}` and
+    `POST /api/stations/:id/signal` `{name|x,y, dir?, action:clear|red}` — the station master sets
+    switches and clears/holds manual signals by the same station-local labels a human uses;
+    `POST /api/stations/:id/override` `{text}` / `{action:"clear"}` — set or clear a **standing
+    instruction override** (temporary chat orders that take precedence until cleared; persisted).
+
+- **Client (server-only).** `manual.html` is a thin client: on load it connects to the live game
+  (`/api/events`), renders each streamed snapshot, and sends **every** action — operate *and* edit
+  (build, stations, train types, paste/delete, pause/step, undo/redo) — to the server as a command
+  (`POST /api/command` or the `/api/game/*` endpoints). It never simulates locally. The **Game**
+  panel shows the live status, the current game's name (editable → autosaved rename), a **Load
+  game** dropdown of saved games, **Save as new game** (fork to a new save), **New from template**,
+  and Export/Import JSON (Import starts a new game). There is no browser save / "Run on server" /
+  "Disconnect" — the server is always the source of truth and autosaves continuously.
+
+## Station Master instructions — **done**
+
+Every station carries free-text **`instructions`** for its Station Master (the operator/API that
+sets the station's switches and manual signals). **Right-click a station's name** on the map (or
+the `✎` button in the sidebar station list) to rename it and edit the instructions; a station with
+instructions shows a `✎` after its name. The field travels with the layout (serialize/deserialize)
+and is surfaced to the Station Master API via `GET /api/stations`.
+
+---
+
 ## Implementation notes (where things live in `manual.html`)
 
 - **Switch model & traversal**: `defaultSwitch` (manual only — `current`),

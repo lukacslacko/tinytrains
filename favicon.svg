@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Tiny Trains">
+  <!-- rounded dark tile so the icon reads on both light and dark browser tabs -->
+  <rect width="64" height="64" rx="14" fill="#161b22"/>
+  <!-- rail -->
+  <rect x="9" y="49" width="46" height="3.5" rx="1.75" fill="#3a4250"/>
+  <!-- locomotive: red, matching train type 1 in the game palette -->
+  <rect x="11" y="22" width="33" height="20" rx="3.5" fill="#f05264"/>   <!-- boiler / body -->
+  <rect x="29" y="13" width="16" height="13" rx="3.5" fill="#f05264"/>   <!-- cab -->
+  <rect x="16" y="14" width="6.5" height="9" rx="2" fill="#f05264"/>     <!-- chimney -->
+  <rect x="32" y="16" width="10" height="7" rx="1.5" fill="#cfe9ff"/>    <!-- cab window -->
+  <circle cx="13.5" cy="31" r="3.2" fill="#f1ca57"/>                     <!-- headlight -->
+  <!-- wheels -->
+  <circle cx="21" cy="44" r="6.3" fill="#11151a"/><circle cx="21" cy="44" r="2.5" fill="#f1ca57"/>
+  <circle cx="38" cy="44" r="6.3" fill="#11151a"/><circle cx="38" cy="44" r="2.5" fill="#f1ca57"/>
+</svg>
