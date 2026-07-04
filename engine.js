@@ -1616,14 +1616,29 @@
       const geomF = bodyGeometry(F), geomR = bodyGeometry(R);
       const LF = trainTotalLength(F), LR = trainTotalLength(R);
       if (geomF.covered + ARC_EPS < LF || geomR.covered + ARC_EPS < LR) return {ok:false, error:"a consist's body geometry is incomplete — drive it a little first"};
-      // merge tile paths at the junction (the tile under the touching buffers)
-      const fLoc = locateArc(geomF, Math.min(LF, geomF.covered));
-      const fDepth = fLoc ? (fLoc.atCenter ? fLoc.k : fLoc.k + 1) : geomF.path.length - 1;
+      // Merge the tile paths at the junction (under the touching buffers). Two traps here:
+      // F's path must end at the tile that actually CONTAINS its tail — a tail sitting exactly
+      // ON a tile boundary belongs to the shallower tile (the deeper one has no F body); and a
+      // mid-transition R starts its path with a committed destination tile its head has not
+      // actually entered — that tile carries no body and usually duplicates an fPath tile.
+      // Getting either wrong doubles tiles back and forth in the merged path, which corrupts
+      // any later reversal until movement trims the garbage away.
+      const fArc = Math.min(LF, geomF.covered);
+      const fLoc = locateArc(geomF, fArc);
+      let fDepth;
+      if (!fLoc) fDepth = geomF.path.length - 1;
+      else if (fLoc.atCenter) fDepth = fLoc.k;
+      else fDepth = (fArc <= fLoc.edgeArc + ARC_EPS) ? fLoc.k : fLoc.k + 1;
       const fPath = geomF.path.slice(0, fDepth + 1).map(e => ({...e}));
-      const rPath = geomR.path.map(e => ({...e}));
-      const lastF = fPath[fPath.length-1], firstR = rPath[0];
+      const rStart = (trainMoving(R) && R.progress < 0.5) ? 1 : 0;   // skip R's never-entered tile
+      const rPath = geomR.path.slice(rStart).map(e => ({...e}));
       const dirIndex = (dx,dy) => DIRS.findIndex(dd => dd.dx === dx && dd.dy === dy);
-      if (lastF.x === firstR.x && lastF.y === firstR.y){
+      const sameTile = (a,b) => a && b && a.x === b.x && a.y === b.y;
+      const lastF = fPath[fPath.length-1];
+      if (!sameTile(rPath[0], lastF) && sameTile(rPath[1], lastF)) rPath.shift(); // stray duplicate
+      const firstR = rPath[0];
+      if (!firstR) return {ok:false, error:"the consists are not lined up on the same track"};
+      if (sameTile(lastF, firstR)){
         lastF.enter = firstR.enter;                       // one shared tile under the coupling
         rPath.shift();
       } else {
@@ -1631,6 +1646,13 @@
         if (dj < 0) return {ok:false, error:"the consists are not lined up on the same track"};
         lastF.enter = dj;
         firstR.exit = opposite(dj);
+      }
+      const mergedPath = fPath.concat(rPath);
+      // sanity: consecutive tiles must link via their enter/exit dirs — truncate at any break
+      // (a short path only means a later reverse asks to drive forward a little first)
+      for (let i = 0; i < mergedPath.length - 1; i++){
+        const d = dirIndex(mergedPath[i+1].x - mergedPath[i].x, mergedPath[i+1].y - mergedPath[i].y);
+        if (d < 0 || mergedPath[i].enter !== d || mergedPath[i+1].exit !== opposite(d)){ mergedPath.length = i + 1; break; }
       }
       const mergedUnits = trainUnits(F).concat(trainUnits(R));
       const aActive = activeEngine(a);
@@ -1641,7 +1663,7 @@
         units: mergedUnits, mode: a.mode || "drive",
         type: aActive && aActive.type != null ? aActive.type : a.type,
         trail: trailSpan(geomF.pts, 0, LF).concat(trailSpan(geomR.pts, 0, LR)),
-        path: fPath.concat(rPath)
+        path: mergedPath
       };
       if (trainMoving(F)){ merged.prevX = F.prevX; merged.prevY = F.prevY; merged.moveDir = F.moveDir; merged.progress = F.progress; }
       state.trains = state.trains.filter(t => t.id !== a.id && t.id !== b.id);
@@ -1705,7 +1727,7 @@
       const train = {
         id: state.nextTrainId++, x, y, from,
         speed: 0, wait: 0, holds: [], wantSince: null,
-        units, mode: cmd.mode === "shunt" ? "shunt" : "drive",
+        units, mode: cmd.mode === "shunt" ? "shunt" : (cmd.mode === "stop" ? "stop" : "drive"),
         trail: pts, path
       };
       const eng = units.find(u => u.kind === "engine");

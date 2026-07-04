@@ -162,6 +162,9 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
   and an Uncouple button per coupling; manual signals gain per-direction "clear for shunting"
   buttons. A shunt-cleared main renders as a **red triangle with a green ring** (vs. the proper
   green of a normal clear); the front-of-consist dot is white/amber/red for drive/shunt/stop.
+  Every **closed coupling** carries a small light disc, so connected vehicles read differently
+  from ones merely standing buffer-to-buffer; a cut with **no engine** draws a **red outline**
+  (handbrakes on) instead of the normal black one.
   Left-clicking a **bidirectional** manual signal in Operate operates the main on the side of the
   track that was clicked (each main's triangle sits to the right of its travel direction).
   Spawning a train (right-click a track tile, or a spawn tile's config) takes a **number of

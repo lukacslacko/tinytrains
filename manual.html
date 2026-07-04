@@ -1088,6 +1088,8 @@
     for (const train of state.trains){
       const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
       const units = trainUnits(train);
+      // A cut with no engine stands on its handbrakes: its outline turns red instead of black.
+      const handbrake = !hasActiveEngine(train);
       // Coupled vehicles TOUCH: each unit's rounded caps are inset by the cap radius so the
       // drawn bodies meet exactly at the coupling without overlapping.
       const capR = CAR_WIDTH / 2;
@@ -1097,14 +1099,28 @@
         const pts = trailSpan(trail, dist + inset, dist + u.len - inset).map(worldPtToScreen);
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        // dark outline then body
-        ctx.strokeStyle = "#06090d";
+        // outline then body (red outline = handbrakes on)
+        ctx.strokeStyle = handbrake ? "#c22a38" : "#06090d";
         ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
         strokePolyline(pts);
         ctx.strokeStyle = u.kind === "engine" ? (u.active ? typeColor(u.type) : dimColor(typeColor(u.type))) : "#7c8898";
         ctx.lineWidth = CAR_WIDTH * s;
         strokePolyline(pts);
         dist += u.len + CAR_GAP;
+      }
+      // coupling discs: a small disc at every CLOSED coupling, so connected vehicles are
+      // visibly distinct from ones that merely stand buffer-to-buffer
+      if (units.length > 1){
+        const r = Math.max(1.5, s * 0.055);
+        ctx.fillStyle = "#cfd8e3";
+        ctx.strokeStyle = "#06090d";
+        ctx.lineWidth = Math.max(1, s * 0.02);
+        let bd = 0;
+        for (let i = 0; i < units.length - 1; i++){
+          bd += units[i].len + CAR_GAP;
+          const p = worldPtToScreen(trailSpan(trail, bd, bd)[0]);
+          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        }
       }
       // front-of-consist highlight: white when driving, amber while shunting, red on the
       // handbrake (stop mode). Parked cuts (no active engine) get none — their "front" is

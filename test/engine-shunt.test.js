@@ -177,6 +177,40 @@ console.log("snapshot round trip preserves consists mid-shunt");
 }
 
 // ---------------------------------------------------------------------------
+// Regression: couple with a TWO-car cut whose tail sits exactly ON a tile boundary,
+// then reverse IMMEDIATELY (before anything moves). The merged tile path used to pick
+// up doubled-back duplicate tiles at the junction (F's path cut one tile too deep +
+// R's committed-but-never-entered destination tile), corrupting the reversal geometry
+// until movement trimmed it away.
+console.log("couple at a tile-boundary junction, then reverse immediately");
+{
+  const E = engineWith(straightLine(14));
+  const r0 = assertOk(E.command({type:"placeTrain", x:10, y:0, heading:"E", mode:"stop",
+    units:[{kind:"engine", len:0.5, type:1}, {kind:"car", len:0.5}, {kind:"car", len:0.5}]}), "place E+2C on the handbrake");
+  const d = assertOk(E.command({type:"detach", train: r0.id, keep: 0}), "cut the engine off");
+  // the cut's front is exactly at the 9/10 tile edge, its tail exactly at the 8/9 edge
+  // a 0.6 engine makes the merged length 1.6 — misaligned with the corrupted path's
+  // landmarks, which is exactly the case that used to reverse the train the WRONG way
+  const r = assertOk(E.command({type:"placeTrain", x:3, y:0, heading:"E", units:[{kind:"engine", len:0.6, type:1}], mode:"shunt"}), "place a second engine");
+  const eng = trainById(E, r.id);
+  waitFor(E, () => eng._touch, 6000, "engine touches the cut's tail");
+  const c = assertOk(E.command({type:"couple", train: eng.id}), "couple at the boundary junction");
+  const merged = trainById(E, c.id);
+  // the merged path must visit each tile at most once — the old merge doubled back
+  const seen = new Set();
+  for (const e of merged.path){
+    assert(!seen.has(`${e.x},${e.y}`), `merged path visits ${e.x},${e.y} only once`);
+    seen.add(`${e.x},${e.y}`);
+  }
+  const rev = assertOk(E.command({type:"reverse", train: merged.id}), "reverse IMMEDIATELY after coupling");
+  assert(rev.ok && merged.units[0].kind === "engine", "engine leads after the immediate reversal");
+  // the new front is the old tail (the second engine's rear, ~x 8.35) — no teleporting
+  assert(near(E.headWorld(merged).x, 8.35, 0.12), `reversed head sits at the old tail (got x ${E.headWorld(merged).x.toFixed(3)})`);
+  assertOk(E.command({type:"setTrainMode", train: merged.id, mode: "drive"}), "drive");
+  waitFor(E, () => E.headWorld(merged).x < 6.5, 6000, "the coupled train pulls away west, engine leading");
+}
+
+// ---------------------------------------------------------------------------
 // The full shuttle choreography, in-process: one complete round trip
 // West A → East (run-around) → West (run-around) → back at West A facing E.
 console.log("shuttle: full round trip with run-arounds at both ends");
