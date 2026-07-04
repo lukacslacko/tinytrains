@@ -98,11 +98,12 @@ async function main(){
     const c = await eng(S, "couple", {}, `${S}: couple`);
     trainId = c.id;
     assert(c.units.length === 2, `${S}: coupled consist has engine + car`);
+    assert(c.mode === "stop", `${S}: coupled consist holds in stop mode (no creep)`);
     assert(!(await trains()).some(t => t.id === carId), `${S}: the standing car merged in`);
-    await waitFor(stoppedAt(trainId, P.bx, 0), 60000, `${S}: coupled train settles at B`);
+    // couple → reverse → drive: the auto stop mode means nothing moves until ordered
     await eng(S, "reverse", {}, `${S}: reverse the whole train`);
-    await waitFor(stoppedAt(trainId, P.ax, 0), 60000, `${S}: train ready at A`);
     await eng(S, "mode", { mode: "drive" }, `${S}: back to driving mode`);
+    await waitFor(stoppedAt(trainId, P.ax, 0), 60000, `${S}: train ready at A`);
     const t = (await trains()).find(t => t.id === trainId);
     assert(t.units[0].kind === "engine", `${S}: engine leads the departing train`);
     await clear(S, P.A, P.outDir, false, `${S}: clear A for the departure`);

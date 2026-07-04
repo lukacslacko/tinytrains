@@ -117,8 +117,8 @@ const TOOLS = [
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "reverse", train: a.train, engine: a.engine }, p.game)).body; } },
 
   { name: "set_drive_mode",
-    description: "Switch a consist between 'shunt' and 'drive'. SHUNT: slow, ignores passenger stops, and instead of holding a tile back it creeps up until buffers TOUCH other stock (so it can couple) — signals are still obeyed by the leading end. DRIVE: normal running with the one-tile standoff; set it back to drive before dispatching a train onto the line.",
-    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["shunt", "drive"] }, train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP }, required: ["mode"] },
+    description: "Switch a consist between 'drive', 'shunt' and 'stop'. SHUNT: slow, ignores passenger stops, and instead of holding a tile back it creeps up until buffers TOUCH other stock (so it can couple) — signals are still obeyed by the leading end. STOP: handbrake — the consist stands where it is even when it could move; a shunting consist that comes to a stand buffers-to-buffers enters STOP by itself (so after `couple` nothing creeps off — typically you couple, reverse, then set 'drive'). DRIVE: normal running with the one-tile standoff; set it before dispatching a train onto the line.",
+    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["drive", "shunt", "stop"] }, train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP }, required: ["mode"] },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "mode", mode: a.mode, train: a.train, engine: a.engine }, p.game)).body; } },
 
   { name: "uncouple",

@@ -299,9 +299,12 @@ destination), or they will conflict.
 ## Shunting (inside your station)
 Trains are CONSISTS of an engine plus cars. Engines can uncouple, run around and pick up cars —
 but ONLY while standing inside a station, and it is YOUR job at your station. The tools:
-  - **set_drive_mode(train, "shunt")** — shunting mode: the engine moves slowly and, instead of
-    holding a tile back from other stock, creeps up until the buffers TOUCH. "drive" restores
-    normal running (do this before dispatching a train onto the line).
+  - **set_drive_mode(train, "shunt" | "drive" | "stop")** — "shunt": the engine moves slowly and,
+    instead of holding a tile back from other stock, creeps up until the buffers TOUCH. "drive"
+    restores normal running (do this before dispatching a train onto the line). "stop" is the
+    handbrake: the consist stands where it is even when it could move. A shunting consist that
+    comes to a stand buffers-to-buffers enters "stop" BY ITSELF — so after **couple** nothing
+    creeps off: the usual sequence is couple → reverse_engine → set_drive_mode "drive".
   - **reverse_engine(train)** — change direction (an engine behind cars then pushes them). Only
     when stopped. If the front would roll past a red manual signal, the reverse is refused —
     clear that signal first.
@@ -533,7 +536,7 @@ const server = http.createServer(async (req, res) => {
     // POST /api/stations/:id/engine { action, train | engine, ... } — orders to one engine's
     // consist, allowed only while it stands inside THIS station:
     //   { action:"reverse" }                          change direction (push instead of pull)
-    //   { action:"mode", mode:"shunt"|"drive" }       switch driving mode
+    //   { action:"mode", mode:"shunt"|"drive"|"stop" } switch driving mode (stop = handbrake)
     //   { action:"uncouple", keep?, side?, cut? }     cut the consist (keep = cars kept on the engine)
     //   { action:"couple" }                           couple with the touching consist
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/engine$/)) && req.method === "POST"){

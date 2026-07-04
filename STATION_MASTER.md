@@ -88,8 +88,11 @@ every order below is refused unless the consist stands **inside the commanding s
 - **Modes.** `drive` (normal): trains run on sight and hold a full tile back from other stock.
   `shunt`: the consist moves at ~⅓ speed, ignores passenger-stop dwell, and creeps up to other
   stock until the **buffers touch** (reports show `touching: true`) — that is how you get close
-  enough to couple. Signals apply in *both* modes, always to the **leading end** of the consist
-  (a pushed car respects them like a flagman riding the leading step).
+  enough to couple. `stop`: the handbrake — the consist stands where it is, even when signals and
+  track would let it move. A shunting consist that comes to a stand buffers-to-buffers drops into
+  `stop` **by itself**, so a `couple` order never makes the merged train creep off — the usual
+  sequence is *couple → reverse → drive*. Signals apply in every mode, always to the **leading
+  end** of the consist (a pushed car respects them like a flagman riding the leading step).
 - **Reverse** flips the whole consist: the leading end becomes the trailing end, so an engine
   behind cars pushes them. Only while stopped. If the new front would roll past a **red** manual
   main (the consist stands right on the signal), the reverse is refused — clear that signal first;

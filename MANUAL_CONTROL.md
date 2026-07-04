@@ -146,17 +146,26 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
   standing portion becomes a new engineless consist. `couple` merges with the touching consist
   (either end; the other consist is reversed in place if needed) — the commanding engine stays
   active, picked-up engines go inactive, and the merge yields a new train id (engine ids persist).
-- **Shunt mode** (`setTrainMode`): ~⅓ speed, skips stop dwell, and replaces the one-tile standoff
-  with a per-frame forward scan that clamps motion to the **touch distance** of the next body.
-  Signals still apply to the leading end in both modes (3d: the "flagman" rides the leading car).
+- **Modes** (`setTrainMode`): `drive` (normal), `shunt` (~⅓ speed, skips stop dwell, and replaces
+  the one-tile standoff with a per-frame forward scan that clamps motion to the **touch distance**
+  of the next body) and `stop` (the handbrake: the consist stands where it is even when it could
+  move). A shunting consist that comes to a stand buffers-to-buffers enters `stop` by itself, so a
+  `couple` never sends the merged train creeping off — couple → reverse → drive is the idiom.
+  Signals apply to the leading end in every mode (3d: the "flagman" rides the leading car).
 - **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
   clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route
   lock releases once the move comes to a stand.
 - **Station rule.** reverse/uncouple/couple (and entering shunt mode) are refused unless the
   consist stands inside a station — and inside *that* station when ordered through the
   station-scoped API. Shunting is the station master's job (see `STATION_MASTER.md`).
-- **UI.** Right-click any tile under a consist: composition, Reverse, Shunt/Drive, Couple, and an
-  Uncouple button per coupling; manual signals gain per-direction "clear for shunting" buttons.
+- **UI.** Right-click any tile under a consist: composition, Reverse, Drive/Shunt/Stop, Couple,
+  and an Uncouple button per coupling; manual signals gain per-direction "clear for shunting"
+  buttons. A shunt-cleared main renders as a **red triangle with a green ring** (vs. the proper
+  green of a normal clear); the front-of-consist dot is white/amber/red for drive/shunt/stop.
+  Left-clicking a **bidirectional** manual signal in Operate operates the main on the side of the
+  track that was clicked (each main's triangle sits to the right of its travel direction).
+  Spawning a train (right-click a track tile, or a spawn tile's config) takes a **number of
+  cars** to put behind the engine.
 - **Test case.** `examples/shuttle.json` — a single line between two run-around termini; an
   engine+car shuttle whose engine runs around the car at each end. `node test/engine-shunt.test.js`
   (in-process geometry + a full round trip) and `node test/shuttle.test.js` (the same choreography

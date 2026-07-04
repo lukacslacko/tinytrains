@@ -578,7 +578,7 @@
     centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, hasActiveEngine, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
     trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor,
     buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion,
-    updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied,
+    updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied,
     maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed,
     formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
     moveTrain, spawnTrains, simStep, serialize, migrateTile,
@@ -648,6 +648,15 @@
     return {
       x: Math.floor((px - stage.clientWidth / 2 - state.view.x) / s),
       y: Math.floor((py - stage.clientHeight / 2 - state.view.y) / s)
+    };
+  }
+  // Fractional world coordinates (tile units) — for hit-testing WITHIN a tile, e.g. telling
+  // apart the two side-mounted mains of a bidirectional signal.
+  function screenToWorldF(px,py){
+    const s = tileSize();
+    return {
+      x: (px - stage.clientWidth / 2 - state.view.x) / s,
+      y: (py - stage.clientHeight / 2 - state.view.y) / s
     };
   }
   function centerPoint(x,y){
@@ -969,15 +978,18 @@
         const mk = mkMain(x,y,dir);
         const manual = manualDirs(tile).includes(dir);
         const error = !manual && state.sys && state.sys.errorMains.has(mk);
+        const shuntClear = manual && mainShuntCleared(mk);
         let color;
         if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
+        else if (shuntClear) color = SIGNAL_RED;                 // shunt clear: NOT a proper green —
         else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
         // A manual main with a train waiting at it (red) gets a thick white halo to flag it
         // to the operator, drawn behind the normal yellow-outlined triangle.
         if (manual && manualMainHasWaiter(x,y,dir))
           drawTriangle(x,y,dir,color,.385,"#ffffff",Math.max(4, tileSize()*.25),0,SIGNAL_SIDE_OFFSET);
-        // Manual mains carry a yellow outline; automatic mains a dark one.
-        const stroke = manual ? MANUAL_RING : "#0b0e12";
+        // Manual mains carry a yellow outline; automatic mains a dark one. A SHUNT-cleared main
+        // keeps its red triangle and swaps the ring to green: "proceed shunting, on sight".
+        const stroke = shuntClear ? LOCK_GREEN : (manual ? MANUAL_RING : "#0b0e12");
         drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
       }
     }
@@ -1094,11 +1106,13 @@
         strokePolyline(pts);
         dist += u.len + CAR_GAP;
       }
-      // front-of-consist highlight: white when driving, amber while shunting. Parked cuts
-      // (no active engine) get none — their "front" is just where they were cut off.
+      // front-of-consist highlight: white when driving, amber while shunting, red on the
+      // handbrake (stop mode). Parked cuts (no active engine) get none — their "front" is
+      // just where they were cut off.
       if (hasActiveEngine(train)){
         const hp = worldPtToScreen(trail[0]);
-        ctx.fillStyle = isShunting(train) ? "#ffb02e" : "#fff"; ctx.globalAlpha = .9;
+        ctx.fillStyle = train.mode === "stop" ? "#ff4d5e" : (isShunting(train) ? "#ffb02e" : "#fff");
+        ctx.globalAlpha = .9;
         ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.07), 0, Math.PI*2); ctx.fill();
         ctx.globalAlpha = 1;
       }
@@ -1461,10 +1475,21 @@
     }
   }
 
-  // Operate tool: left-click throws a switch or clears/cancels a manual signal. The action is a
-  // command to the authoritative server game (the same one the Station Master API issues); the
-  // result returns on the next streamed snapshot.
-  function operateClick(x,y){
+  // The world-space centre of the triangle marker of a signal's main facing `dir` — the same
+  // geometry drawTriangle uses (offset 0, drawn SIGNAL_SIDE_OFFSET to the RIGHT of travel).
+  function signalMarkerWorld(x,y,dir){
+    const c = centerW(x,y);
+    const e = endpointW(x,y,dir);
+    const len = Math.hypot(e.x-c.x, e.y-c.y) || 1;
+    const ux = (e.x-c.x)/len, uy = (e.y-c.y)/len;
+    return {x: c.x - uy*SIGNAL_SIDE_OFFSET, y: c.y + ux*SIGNAL_SIDE_OFFSET};
+  }
+  // Operate tool: left-click throws a switch or clears/cancels a manual signal. On a signal
+  // carrying manual mains BOTH ways, the click operates the main on the side of the track that
+  // was clicked (each main's triangle sits to the right of its travel direction). The action is
+  // a command to the authoritative server game (the same one the Station Master API issues);
+  // the result returns on the next streamed snapshot.
+  function operateClick(x,y,fpt){
     closeContext();
     const tile = getTile(x,y);
     if (!tile) return;
@@ -1473,7 +1498,19 @@
       return;
     }
     if (tile.kind === "signal"){
-      if (!manualDirs(tile).length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      const man = manualDirs(tile);
+      if (!man.length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      if (man.length > 1 && fpt){
+        let best = man[0], bestD = Infinity;
+        for (const d of man){
+          const m = signalMarkerWorld(x,y,d);
+          const dd = Math.hypot(fpt.x-m.x, fpt.y-m.y);
+          if (dd < bestD){ bestD = dd; best = d; }
+        }
+        state.message = `Signal ${DIRS[best].name} main`;
+        mutate({ type: "toggleSignal", x, y, dir: best });
+        return;
+      }
       mutate({ type: "toggleSignal", x, y });
       return;
     }
@@ -1607,7 +1644,7 @@
     }
     if (!state.drag.moved){
       const w = screenToWorld(p.x,p.y);
-      if (state.selectedTool === "operate") operateClick(w.x,w.y);
+      if (state.selectedTool === "operate") operateClick(w.x, w.y, screenToWorldF(p.x, p.y));
       else placeTile(w.x,w.y);
     }
     state.drag = null;
@@ -1686,14 +1723,17 @@
         ? `<b style="color:${u.active ? typeColor(u.type) : "#8a94a2"}">${u.active ? "engine" : "engine·off"}</b>`
         : "car").join(" + ");
       const inStation = !!stationContaining(x, y);
-      const shunting = isShunting(tr);
-      body += `<div class="field"><span>Consist ${tr.id} · ${shunting ? "shunting" : "driving"} · front: ${chips}</span>`;
+      const mode = tr.mode === "shunt" ? "shunt" : (tr.mode === "stop" ? "stop" : "drive");
+      const modeName = {drive: "driving", shunt: "shunting", stop: "stopped"}[mode];
+      body += `<div class="field"><span>Consist ${tr.id} · ${modeName} · front: ${chips}</span>`;
       if (hasActiveEngine(tr)){
+        const modeBtn = (m, label) => `<button type="button" data-action="modetrain" data-train="${tr.id}" data-mode="${m}" ` +
+          `${mode === m ? "disabled" : (m === "shunt" && !inStation ? "disabled title='only inside a station'" : "")}>${label}</button>`;
         body += `<div class="row">` +
           `<button type="button" data-action="revtrain" data-train="${tr.id}" ${inStation ? "" : "disabled title='only inside a station'"}>Reverse</button>` +
-          `<button type="button" data-action="modetrain" data-train="${tr.id}" data-mode="${shunting ? "drive" : "shunt"}" ${(shunting || inStation) ? "" : "disabled title='only inside a station'"}>${shunting ? "Drive mode" : "Shunt mode"}</button>` +
           `<button type="button" data-action="coupletrain" data-train="${tr.id}" title="couples with the stock the buffers are touching">Couple</button>` +
           `</div>`;
+        body += `<div class="row">` + modeBtn("drive", "Drive") + modeBtn("shunt", "Shunt") + modeBtn("stop", "Stop") + `</div>`;
         if (units.length > 1){
           body += `<div class="row"><span style="opacity:.75">Uncouple:</span>` +
             units.slice(0, -1).map((u, i) =>
@@ -1714,8 +1754,9 @@
       body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
     }
     if (tile.kind === "track"){
-      body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
+      body += `<div class="field"><span>Spawn a train heading (engine + cars)</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
+        `<input name="spawnCars" type="number" min="0" max="12" step="1" value="2" title="number of cars behind the engine" style="width:4em">` +
         `</div></div>`;
       body += `<div class="field"><span>Add a stop facing</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="addstop" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
@@ -1748,6 +1789,7 @@
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Train type</span><select name="type">${typeSelectOptions(tile.type)}</select></label>`;
+      body += `<label class="field"><span>Cars (behind the engine)</span><input name="cars" type="number" min="0" max="12" step="1" value="${tile.cars != null ? tile.cars : 2}"></label>`;
     }
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
@@ -1907,8 +1949,10 @@
     let cmd = null;                                       // every config action is a setTile / removeTrain
     if (action === "spawn"){
       if (tile.kind !== "track"){ closeContext(); return; }
-      cmd = {type:"setTile", x, y, tile:{kind:"spawn", route, dir, type: state.selectedType}};
-      state.message = `Spawn heading ${DIRS[dir].name}`;
+      const carsInput = contextMenu.querySelector('input[name="spawnCars"]');
+      const cars = carsInput ? Math.max(0, Math.min(12, Number(carsInput.value) || 0)) : 2;
+      cmd = {type:"setTile", x, y, tile:{kind:"spawn", route, dir, type: state.selectedType, cars}};
+      state.message = `Spawn heading ${DIRS[dir].name} (engine + ${cars} car${cars === 1 ? "" : "s"})`;
     } else if (action === "addstop"){
       if (tile.kind !== "track"){ closeContext(); return; }
       cmd = {type:"setTile", x, y, tile:{kind:"stop", route, dir, dwellSeconds:DEFAULT_DWELL_SECONDS}};
@@ -1977,6 +2021,7 @@
     if (routeShape != null) nt.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) nt.dir = Number(data.get("dir"));
     if (data.get("type")) nt.type = Number(data.get("type"));
+    if (nt.kind === "spawn" && data.get("cars") != null) nt.cars = Math.max(0, Math.min(12, Number(data.get("cars")) || 0));
     if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) nt.name = v; else delete nt.name; }
     if (data.get("dwellSeconds")){ nt.dwellSeconds = Number(data.get("dwellSeconds")); delete nt.dwell; }
     if (nt.kind === "switch"){

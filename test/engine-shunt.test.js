@@ -97,14 +97,19 @@ console.log("shunt vs drive: standoff distance and touching");
   waitFor(E, () => eng._touch, 4000, "shunting engine touches the cars");
   const gap = 8.5 - E.headWorld(eng).x;   // cars: head at x 9.5, body 1.0 long → rear buffer at x 8.5
   assert(gap >= -0.005 && gap < 0.1, `buffers touch (gap ${gap.toFixed(3)} tiles)`);
-  // couple: merged consist, engine stays active, cars ahead of it
+  // touching drops the shunter onto the handbrake: stop mode, so nothing creeps
+  assert(eng.mode === "stop", "touching auto-enters stop mode");
+  // couple: merged consist, engine stays active, cars ahead of it — and it HOLDS (stop mode)
   const c = assertOk(E.command({type:"couple", train: eng.id}), "couple");
   assert(c.units.length === 3, "merged consist has 3 vehicles");
   assert(c.activeEngine === r.activeEngine, "commanding engine stays active");
+  assert(c.mode === "stop", "coupled consist holds in stop mode");
   const merged = trainById(E, c.id);
   assert(trainById(E, eng.id) == null && trainById(E, cars.id) == null, "old consists are gone");
-  // reverse and pull the cars away westwards in drive mode
-  waitFor(E, () => stopped(E, merged), 2000, "merged consist settles");
+  const hx = E.headWorld(merged).x;
+  for (let i = 0; i < 300; i++) E.simStep();
+  assert(Math.abs(E.headWorld(merged).x - hx) < 0.001, "stop mode: the coupled train does not move by itself");
+  // couple → reverse → drive: pull the cars away westwards
   assertOk(E.command({type:"reverse", train: merged.id}), "reverse merged");
   assertOk(E.command({type:"setTrainMode", train: merged.id, mode: "drive"}), "drive mode");
   waitFor(E, () => E.headWorld(merged).x < 6.0, 4000, "engine hauls the cars west");
@@ -131,10 +136,11 @@ console.log("signals while shunting: red holds, buffer terminus, shunt clear int
   waitFor(E, () => eng._touch, 6000, "engine creeps through the green up to the car");
   assertOk(E.command({type:"couple", train: eng.id}), "couple beyond the signal");
   const merged = E.state.trains.find(t => E.hasActiveEngine(t));
+  assert(merged.mode === "stop", "merged holds in stop mode after coupling");
   // now clear the (empty) route ahead: it ends at a BUFFER, which is a valid terminus
-  waitFor(E, () => stopped(E, merged), 2000, "merged settles");
   const toBuffer = assertOk(E.command({type:"clearSignal", x:6, y:0, dir:2, shunt:true}), "clear to the buffer (already past signal — idempotent green)");
   assert(toBuffer.ok, "buffer counts as a route terminus");
+  assertOk(E.command({type:"setTrainMode", train: merged.id, mode: "shunt"}), "release the handbrake: back to shunting");
   waitFor(E, () => !E.trainMoving(merged) && merged.x === 12 && (merged.speed||0) === 0, 9000, "consist parks on the buffer");
 }
 
@@ -214,11 +220,12 @@ console.log("shuttle: full round trip with run-arounds at both ends");
     waitFor(E, () => { const tr = t(); return tr && tr._touch; }, 12000, side+": engine touches the car");
     const c = cmd({type:"couple", train: trainId}, side+": couple");
     trainId = c.id;
+    assert(c.mode === "stop", side+": coupled consist holds in stop mode (no creep)");
     assert(trainById(E, carId) == null, side+": the car cut merged into the new consist");
-    waitFor(E, stoppedAt(P.B.x, P.B.y), 8000, side+": coupled consist settles at B");
+    // couple → reverse → drive: the whole point of the auto stop mode
     cmd({type:"reverse", train: trainId}, side+": reverse the whole train");
-    waitFor(E, stoppedAt(P.A.x, P.A.y), 12000, side+": train stands at A ready to depart");
     cmd({type:"setTrainMode", train: trainId, mode:"drive"}, side+": back to driving mode");
+    waitFor(E, stoppedAt(P.A.x, P.A.y), 12000, side+": train stands at A ready to depart");
     const tr = t();
     assert(tr.units[0].kind === "engine" && tr.units.length === 2, side+": engine leads the two-vehicle train");
     // DEPARTURE
