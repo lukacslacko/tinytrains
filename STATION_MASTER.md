@@ -47,7 +47,14 @@ Read:
 Operate (by station-local element name, or `x,y`):
 - `POST /api/stations/:id/switch` `{ name, to }` — `to` is a compass bearing (N/NE/E/SE/S/SW/W/NW)
   or branch index.
-- `POST /api/stations/:id/signal` `{ name, action: "clear" | "red" }`.
+- `POST /api/stations/:id/signal` `{ name, action: "clear" | "red", dir?, shunt? }` — `dir`
+  (compass or index) picks one main of a both-ways manual signal; `shunt: true` clears a
+  **shunting route**: it may lead into occupied track (to go couple with standing stock) or end at
+  a buffer, and its route lock releases as soon as the move comes to a stand.
+- `POST /api/stations/:id/engine` `{ action, train | engine, ... }` — **shunting orders** to a
+  consist standing inside this station (see *Shunting* below):
+  `{action:"reverse"}` · `{action:"mode", mode:"shunt"|"drive"}` ·
+  `{action:"uncouple", keep?, side?, cut?}` · `{action:"couple"}`.
 - `POST /api/stations/:id/path` `{ path: [entrySignal, switch, switch, …, (signal|compass)?] }` —
   **sets a whole route at once**: traces the live track element-to-element and sets every switch so
   the route threads through it (one port is the stem, the other the set branch), then clears the entry
@@ -71,6 +78,56 @@ Notify:
 to `/api/command`, scaling the whole fleet so a (slower) operator or AI has more real time to act. The
 value is per game and saved.
 
+## Shunting (engines, cars, consists)
+
+Trains are **consists** of units — engines and cars, front-to-back, each with a persistent id.
+Exactly one engine per consist is **active** (it drives); a consist with no active engine is a cut
+of parked cars: it never moves but still occupies track. Shunting is the **station master's job**:
+every order below is refused unless the consist stands **inside the commanding station**.
+
+- **Modes.** `drive` (normal): trains run on sight and hold a full tile back from other stock.
+  `shunt`: the consist moves at ~⅓ speed, ignores passenger-stop dwell, and creeps up to other
+  stock until the **buffers touch** (reports show `touching: true`) — that is how you get close
+  enough to couple. `stop`: the handbrake — the consist stands where it is, even when signals and
+  track would let it move. A shunting consist that comes to a stand buffers-to-buffers drops into
+  `stop` **by itself**, so a `couple` order never makes the merged train creep off — the usual
+  sequence is *couple → reverse → drive*. Signals apply in every mode, always to the **leading
+  end** of the consist (a pushed car respects them like a flagman riding the leading step).
+  A shunting consist also **never leaves the station**: the station boundary halts it exactly
+  like a signal at danger — it stays in shunting mode, ready to be reversed back (entering a
+  station from outside is allowed; only the way out is barred). The boundary is thus a natural
+  shunting limit: run an engine up to it, throw the switches behind it, reverse.
+- **Reverse** flips the whole consist: the leading end becomes the trailing end, so an engine
+  behind cars pushes them. Only while stopped. If the new front would roll past a **red** manual
+  main (the consist stands right on the signal), the reverse is refused — clear that signal first;
+  reversing past a **green** one performs the normal pass bookkeeping (drops it red, arms its lock).
+- **Uncouple** (`keep` = cars kept on the active engine, `0` = engine alone; or an explicit `cut`
+  boundary, with `side: "front"|"back"` when the engine is mid-consist). The cut-off portion
+  becomes a **new consist** (identified by its first vehicle's id) standing exactly where it was, engineless unless it
+  contained an engine (then its first engine re-activates).
+- **Couple** merges with whatever the consist is touching, whichever ends meet (the other consist
+  is reversed in place if needed). The **commanded** engine stays active; engines in the picked-up
+  stock go **inactive** until cut off again. The merged consist **keeps the commanding train's
+  id**: a train is identified by its **active engine's fixed unit id**, so engine "2" dropping
+  some cars and picking up others is still train "2" (a pure cut of cars is identified by its
+  first vehicle's id; internal consist ids are never exposed).
+- **Shunting discs.** A bidirectional shunt-only signal on plain track (never on switches,
+  buffers, crossings or signal tiles): **clear by default** (white disc), and set to **stop**
+  (bright blue) it halts a SHUNTING move at the disc — ordinary trains ignore it completely, in
+  both states. Operate one with `POST /api/stations/:id/shunt-signal { name|x,y, action:
+  "stop" | "clear" | "toggle" }` (MCP: `set_shunt_signal(element, state)`); the station report
+  lists them under `shuntSignals` with their state, and a shunter held at one surfaces as a
+  `waiting` event. Place/remove them in the UI via the track tile's right-click menu.
+- **Finding targets.** `GET /api/stations/:id` (and `get_infrastructure`) lists the station's
+  `consists` — id, units, mode, active engine, what it waits for, `touching`; `/api/trains`
+  (`list_trains`) shows the same fleet-wide.
+
+`examples/shuttle.json` is a ready-made shunting playground: a single line between two terminus
+stations, each with a run-around loop and a stub — the per-station instructions walk a master
+through the full engine run-around (uncouple, park at the buffer, loop around the car, shunt-clear
+into the occupied track, touch, couple, reverse, depart). `test/shuttle.test.js` plays the whole
+round trip through this API; `node test/engine-shunt.test.js` covers the engine-level geometry.
+
 ## MCP server
 
 `mcp-server.js` is a zero-dependency MCP server over stdio (newline-delimited JSON-RPC), scoped to
@@ -82,7 +139,9 @@ waiting), `get_time` (the current **simulation time of day** — `secondsIntoDay
 for instructions like "during game time between 2 and 8 minutes"), **`set_path`** (route a train in
 one call — `["A","1","2","3"]` lines up the switches and
 clears the entry signal; the easy way to follow "set path …" instructions), `set_switch`,
-`clear_signal`, `set_signal_red`, `watch`, `watch_arrivals` (approach-watch every signal at once),
+`clear_signal` (takes `direction` for both-ways signals and `shunt: true` for shunting routes),
+`set_signal_red`, **`reverse_engine`**, **`set_drive_mode`**, **`uncouple`**, **`couple`** (the
+shunting orders — see *Shunting* above), `watch`, `watch_arrivals` (approach-watch every signal at once),
 `await_events` (the blocking notification receiver), `send_message`, `set_override` / `clear_override`
 (record/cancel a **standing operator override** given over chat — "until further notice …" — which
 takes precedence over the base instructions until cleared), `list_watches`, `cancel_watch`.

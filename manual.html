@@ -575,12 +575,12 @@
     switchCurrent, switchOther, switchLocked, switchAccepts,
     getTile, setTile, removeTile, defaultSwitch, makeTile,
     sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex,
-    centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
+    centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, hasActiveEngine, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
     trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor,
     buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion,
-    updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied,
+    updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied,
     maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed,
-    formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
+    formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
     moveTrain, spawnTrains, simStep, serialize, migrateTile,
     command, snapshot, applySnapshot, setPaused, stationsReport, dayTime
   } = ENG;
@@ -648,6 +648,15 @@
     return {
       x: Math.floor((px - stage.clientWidth / 2 - state.view.x) / s),
       y: Math.floor((py - stage.clientHeight / 2 - state.view.y) / s)
+    };
+  }
+  // Fractional world coordinates (tile units) — for hit-testing WITHIN a tile, e.g. telling
+  // apart the two side-mounted mains of a bidirectional signal.
+  function screenToWorldF(px,py){
+    const s = tileSize();
+    return {
+      x: (px - stage.clientWidth / 2 - state.view.x) / s,
+      y: (py - stage.clientHeight / 2 - state.view.y) / s
     };
   }
   function centerPoint(x,y){
@@ -837,15 +846,20 @@
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, "#0b0e12", blackW);  // …then black over it
   }
   // Occupied AUTOMATIC blocks get a grey outline (same band style as a locked manual route),
-  // marking every track in the flood-filled block while a train sits inside it.
+  // marking every track in the flood-filled block while a train sits inside it. The tile keys
+  // painted this frame are stashed so drawTileRoutes can bold a switch's SET branch on top —
+  // the band runs along BOTH branches, which would otherwise make the thin set-against branch
+  // read as a full-thickness rail.
+  let occupiedBandKeys = new Set();
   function drawOccupiedBlockOutlines(){
     const sys = state.sys;
+    occupiedBandKeys = new Set();
     if (!sys) return;
     const railW = trackW();
     const bandW = railW + tileSize() * .18;
     const blackW = railW + tileSize() * .09;
     const segs = [];
-    const seen = new Set();
+    const seen = occupiedBandKeys;
     for (const [id, tiles] of sys.blockTiles){
       if (!blockOccupiedByOther(id, sys, null)) continue;   // only occupied blocks
       for (const k of tiles){
@@ -901,6 +915,18 @@
     ctx.fillStyle = LOCK_GREEN; ctx.fill();
     ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
+  // A shunting disc at a tile's centre: white = clear, bright blue = stops shunting moves
+  // (ordinary trains ignore it). Drawn with the tile markers — above the rails, below the
+  // trains (a shunter standing on it covers it, like any lineside equipment).
+  function drawShuntDisc(x,y,tile){
+    if (tile.kind !== "track" || !tile.shuntSignal) return;
+    const c = centerPoint(x,y), s = tileSize();
+    const r = Math.max(4, s*0.15);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+    ctx.fillStyle = tile.shuntStop ? "#1e90ff" : "#f6f9fc";
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, s*0.045); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
+  }
   // The id (name) of a signal/switch, drawn in the MIDDLE of its tile on top of everything (even
   // trains) with a translucent background, so the operator can always read which element it is.
   function drawElementId(x,y,tile){
@@ -947,8 +973,25 @@
   function drawTileRoutes(x,y,tile){
     if (tile.kind === "switch"){
       const cur = switchCurrent(tile), other = switchOther(tile);
-      if (other != null) drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch, true); // dimmed + THIN: set-against side
-      drawRoute(x,y,[tile.stem, cur], false);                                              // full rail: the set route
+      if (other != null){
+        // Under a block/route halo the dark band runs along BOTH branches, and its outline
+        // visually overpowers the thin set-against marker — the dead leg reads as a live
+        // rail. Draw the INACTIVE marker thick there, cutting through the black band (the
+        // coloured rim stays), so the set-against branch clearly reads as "not available".
+        // Only the OUTBOUND set-against leg gets the stripe — the inbound (stem) segment
+        // belongs to the live route and keeps its normal outlined look.
+        if (occupiedBandKeys.has(key(x,y)) || switchLocked(x,y)){
+          const c = centerPoint(x,y), e = endpointPoint(x,y,other);
+          ctx.strokeStyle = T.inactiveBranch;
+          ctx.lineWidth = trackW() + tileSize() * .10;
+          ctx.lineCap = "butt";
+          ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(e.x,e.y); ctx.stroke();
+          ctx.lineCap = "round";
+        } else {
+          drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch, true); // dimmed + THIN: set-against side
+        }
+      }
+      drawRoute(x,y,[tile.stem, cur], false);                               // full rail: the set route
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
@@ -961,6 +1004,7 @@
       if (switchLocked(x,y)) drawLock(x,y);
       return;
     }
+    if (tile.kind === "track") drawShuntDisc(x,y,tile);
     if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,typeColor(tile.type),.2);
     if (tile.kind === "stop") drawStopMarker(x,y,tile.dir);
     if (tile.kind === "signal"){
@@ -969,15 +1013,18 @@
         const mk = mkMain(x,y,dir);
         const manual = manualDirs(tile).includes(dir);
         const error = !manual && state.sys && state.sys.errorMains.has(mk);
+        const shuntClear = manual && mainShuntCleared(mk);
         let color;
         if (error) color = blink ? SIGNAL_RED : SIGNAL_RED_DARK; // blinking-red: invalid automatic main
+        else if (shuntClear) color = SIGNAL_RED;                 // shunt clear: NOT a proper green —
         else color = (state.sys && mainRenderGreen(mk, state.sys, manual)) ? SIGNAL_GREEN : SIGNAL_RED;
         // A manual main with a train waiting at it (red) gets a thick white halo to flag it
         // to the operator, drawn behind the normal yellow-outlined triangle.
         if (manual && manualMainHasWaiter(x,y,dir))
           drawTriangle(x,y,dir,color,.385,"#ffffff",Math.max(4, tileSize()*.25),0,SIGNAL_SIDE_OFFSET);
-        // Manual mains carry a yellow outline; automatic mains a dark one.
-        const stroke = manual ? MANUAL_RING : "#0b0e12";
+        // Manual mains carry a yellow outline; automatic mains a dark one. A SHUNT-cleared main
+        // keeps its red triangle and swaps the ring to green: "proceed shunting, on sight".
+        const stroke = shuntClear ? LOCK_GREEN : (manual ? MANUAL_RING : "#0b0e12");
         drawTriangle(x,y,dir,color,.385,stroke,Math.max(1.5, tileSize()*(manual?.05:.03)),0,SIGNAL_SIDE_OFFSET);
       }
     }
@@ -1062,30 +1109,64 @@
   }
 
 
+  // Mix a colour toward grey for INACTIVE engines (hauled dead, till cut off again).
+  function dimColor(hex){
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return "#5a6470";
+    const v = parseInt(m[1], 16);
+    const mix = (c, g) => Math.round(c * .45 + g * .55);
+    const r = mix((v >> 16) & 255, 92), g = mix((v >> 8) & 255, 100), b = mix(v & 255, 112);
+    return `rgb(${r},${g},${b})`;
+  }
   function drawTrains(){
     const s = tileSize();
     for (const train of state.trains){
       const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
-      const cars = trainCars(train);
+      const units = trainUnits(train);
+      // A cut with no engine stands on its handbrakes: its outline turns red instead of black.
+      const handbrake = !hasActiveEngine(train);
+      // Coupled vehicles TOUCH: each unit's rounded caps are inset by the cap radius so the
+      // drawn bodies meet exactly at the coupling without overlapping.
+      const capR = CAR_WIDTH / 2;
       let dist = 0;
-      cars.forEach((len, idx) => {
-        const pts = trailSpan(trail, dist, dist+len).map(worldPtToScreen);
+      for (const u of units){
+        const inset = Math.min(capR, u.len * 0.45);
+        const pts = trailSpan(trail, dist + inset, dist + u.len - inset).map(worldPtToScreen);
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        // dark outline then body
-        ctx.strokeStyle = "#06090d";
+        // outline then body (red outline = handbrakes on)
+        ctx.strokeStyle = handbrake ? "#c22a38" : "#06090d";
         ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
         strokePolyline(pts);
-        ctx.strokeStyle = idx === 0 ? typeColor(train.type) : "#7c8898";
+        ctx.strokeStyle = u.kind === "engine" ? (u.active ? typeColor(u.type) : dimColor(typeColor(u.type))) : "#7c8898";
         ctx.lineWidth = CAR_WIDTH * s;
         strokePolyline(pts);
-        dist += len + CAR_GAP;
-      });
-      // engine front highlight
-      const hp = worldPtToScreen(trail[0]);
-      ctx.fillStyle = "#fff"; ctx.globalAlpha = .85;
-      ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.06), 0, Math.PI*2); ctx.fill();
-      ctx.globalAlpha = 1;
+        dist += u.len + CAR_GAP;
+      }
+      // coupling discs: a small disc at every CLOSED coupling, so connected vehicles are
+      // visibly distinct from ones that merely stand buffer-to-buffer
+      if (units.length > 1){
+        const r = Math.max(1.5, s * 0.055);
+        ctx.fillStyle = "#cfd8e3";
+        ctx.strokeStyle = "#06090d";
+        ctx.lineWidth = Math.max(1, s * 0.02);
+        let bd = 0;
+        for (let i = 0; i < units.length - 1; i++){
+          bd += units[i].len + CAR_GAP;
+          const p = worldPtToScreen(trailSpan(trail, bd, bd)[0]);
+          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        }
+      }
+      // front-of-consist highlight: white when driving, amber while shunting, red on the
+      // handbrake (stop mode). Parked cuts (no active engine) get none — their "front" is
+      // just where they were cut off.
+      if (hasActiveEngine(train)){
+        const hp = worldPtToScreen(trail[0]);
+        ctx.fillStyle = train.mode === "stop" ? "#ff4d5e" : (isShunting(train) ? "#ffb02e" : "#fff");
+        ctx.globalAlpha = .9;
+        ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.07), 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
     }
   }
   function worldPtToScreen(pt){
@@ -1445,10 +1526,21 @@
     }
   }
 
-  // Operate tool: left-click throws a switch or clears/cancels a manual signal. The action is a
-  // command to the authoritative server game (the same one the Station Master API issues); the
-  // result returns on the next streamed snapshot.
-  function operateClick(x,y){
+  // The world-space centre of the triangle marker of a signal's main facing `dir` — the same
+  // geometry drawTriangle uses (offset 0, drawn SIGNAL_SIDE_OFFSET to the RIGHT of travel).
+  function signalMarkerWorld(x,y,dir){
+    const c = centerW(x,y);
+    const e = endpointW(x,y,dir);
+    const len = Math.hypot(e.x-c.x, e.y-c.y) || 1;
+    const ux = (e.x-c.x)/len, uy = (e.y-c.y)/len;
+    return {x: c.x - uy*SIGNAL_SIDE_OFFSET, y: c.y + ux*SIGNAL_SIDE_OFFSET};
+  }
+  // Operate tool: left-click throws a switch or clears/cancels a manual signal. On a signal
+  // carrying manual mains BOTH ways, the click operates the main on the side of the track that
+  // was clicked (each main's triangle sits to the right of its travel direction). The action is
+  // a command to the authoritative server game (the same one the Station Master API issues);
+  // the result returns on the next streamed snapshot.
+  function operateClick(x,y,fpt){
     closeContext();
     const tile = getTile(x,y);
     if (!tile) return;
@@ -1456,8 +1548,25 @@
       mutate({ type: "throwSwitch", x, y });
       return;
     }
+    if (tile.kind === "track" && tile.shuntSignal){
+      state.message = tile.shuntStop ? "Shunting disc cleared" : "Shunting disc set to stop";
+      mutate({ type: "toggleShuntSignal", x, y });
+      return;
+    }
     if (tile.kind === "signal"){
-      if (!manualDirs(tile).length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      const man = manualDirs(tile);
+      if (!man.length){ state.message = "Automatic signal — set its block free to clear it"; draw(); return; }
+      if (man.length > 1 && fpt){
+        let best = man[0], bestD = Infinity;
+        for (const d of man){
+          const m = signalMarkerWorld(x,y,d);
+          const dd = Math.hypot(fpt.x-m.x, fpt.y-m.y);
+          if (dd < bestD){ bestD = dd; best = d; }
+        }
+        state.message = `Signal ${DIRS[best].name} main`;
+        mutate({ type: "toggleSignal", x, y, dir: best });
+        return;
+      }
       mutate({ type: "toggleSignal", x, y });
       return;
     }
@@ -1591,7 +1700,7 @@
     }
     if (!state.drag.moved){
       const w = screenToWorld(p.x,p.y);
-      if (state.selectedTool === "operate") operateClick(w.x,w.y);
+      if (state.selectedTool === "operate") operateClick(w.x, w.y, screenToWorldF(p.x, p.y));
       else placeTile(w.x,w.y);
     }
     state.drag = null;
@@ -1663,21 +1772,64 @@
     contextMenu.dataset.y = y;
     let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
     const trainsHere = state.trains.filter(t => trainOccupies(t,x,y));
+    for (const tr of trainsHere){
+      // Consist controls (shunting): front-first composition, mode, reverse, un/couple.
+      const units = trainUnits(tr);
+      const chips = units.map(u => u.kind === "engine"
+        ? `<b style="color:${u.active ? typeColor(u.type) : "#8a94a2"}">${u.active ? "engine" : "engine·off"}</b>`
+        : "car").join(" + ");
+      const inStation = !!stationContaining(x, y);
+      const pid = publicTrainId(tr);   // trains are identified by their active engine's fixed id
+      const mode = tr.mode === "shunt" ? "shunt" : (tr.mode === "stop" ? "stop" : "drive");
+      const modeName = {drive: "driving", shunt: "shunting", stop: "stopped"}[mode];
+      body += `<div class="field"><span>Consist ${pid} · ${modeName} · front: ${chips}</span>`;
+      if (hasActiveEngine(tr)){
+        const modeBtn = (m, label) => `<button type="button" data-action="modetrain" data-train="${pid}" data-mode="${m}" ` +
+          `${mode === m ? "disabled" : (m === "shunt" && !inStation ? "disabled title='only inside a station'" : "")}>${label}</button>`;
+        body += `<div class="row">` +
+          `<button type="button" data-action="revtrain" data-train="${pid}" ${inStation ? "" : "disabled title='only inside a station'"}>Reverse</button>` +
+          `<button type="button" data-action="coupletrain" data-train="${pid}" title="couples with the stock the buffers are touching">Couple</button>` +
+          `</div>`;
+        body += `<div class="row">` + modeBtn("drive", "Drive") + modeBtn("shunt", "Shunt") + modeBtn("stop", "Stop") + `</div>`;
+        if (units.length > 1){
+          body += `<div class="row"><span style="opacity:.75">Uncouple:</span>` +
+            units.slice(0, -1).map((u, i) =>
+              `<button type="button" data-action="uncoupletrain" data-train="${pid}" data-cut="${i}" ${inStation ? "" : "disabled title='only inside a station'"}>✂ after ${i + 1}</button>`).join("") +
+            `</div>`;
+        }
+      } else {
+        body += `<div class="row"><span style="opacity:.75">parked cars (no engine)</span></div>`;
+      }
+      body += `</div>`;
+    }
     if (trainsHere.length){
-      body += `<div class="field"><span>Train${trainsHere.length > 1 ? "s" : ""} here</span><div class="row">` +
-        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? ` (${trainsHere.length})` : ""}</button>` +
+      body += `<div class="field"><div class="row">` +
+        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? `s (${trainsHere.length})` : ""}</button>` +
         `</div></div>`;
     }
     if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "spawn"){
       body += `<label class="field"><span>Route</span><select name="routeShape">${shapeOptions(tile.route)}</select></label>`;
     }
     if (tile.kind === "track"){
-      body += `<div class="field"><span>Spawn a train heading</span><div class="row">` +
+      body += `<div class="field"><span>Spawn a train heading (engine + cars)</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="spawn" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
+        `<input name="spawnCars" type="number" min="0" max="12" step="1" value="2" title="number of cars behind the engine" style="width:4em">` +
         `</div></div>`;
       body += `<div class="field"><span>Add a stop facing</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="addstop" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
         `</div></div>`;
+      // Shunting disc: bidirectional, only on plain two-ended track (not on buffers).
+      if (tile.route.length === 2){
+        if (!tile.shuntSignal){
+          body += `<div class="field"><span>Shunting disc (halts shunting moves only)</span><div class="row">` +
+            `<button type="button" data-action="addshuntdisc">Add disc</button></div></div>`;
+        } else {
+          body += `<div class="field"><span>Shunting disc — ${tile.shuntStop ? "STOP (blue)" : "clear (white)"}</span><div class="row">` +
+            `<button type="button" data-action="toggleshuntdisc">${tile.shuntStop ? "Set clear" : "Set stop"}</button>` +
+            `<button type="button" data-action="rmshuntdisc">Remove disc</button>` +
+            `</div></div>`;
+        }
+      }
     }
     if (tile.kind === "track" || tile.kind === "signal"){
       const sig = tile.kind === "signal" ? signalDirs(tile) : [];
@@ -1695,10 +1847,18 @@
       body += `<div class="field"><span>Main type (click to switch automatic ↔ manual)</span><div class="row">` +
         signalDirs(tile).map(d => `<button type="button" data-action="togglemanual" data-dir="${d}">${dirArrow(d)} ${man.includes(d) ? "Manual" : "Auto"}</button>`).join("") +
         `</div></div>`;
+      if (man.length){
+        // A shunt clear may open a route INTO occupied track (to couple) or to a buffer,
+        // and releases its lock once the move stops. Normal clears: left-click in Operate.
+        body += `<div class="field"><span>Clear for shunting (into occupied track)</span><div class="row">` +
+          man.map(d => `<button type="button" data-action="clearshunt" data-dir="${d}">${dirArrow(d)} shunt</button>`).join("") +
+          `</div></div>`;
+      }
     }
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
       body += `<label class="field"><span>Train type</span><select name="type">${typeSelectOptions(tile.type)}</select></label>`;
+      body += `<label class="field"><span>Cars (behind the engine)</span><input name="cars" type="number" min="0" max="12" step="1" value="${tile.cars != null ? tile.cars : 2}"></label>`;
     }
     if (tile.kind === "stop"){
       body += `<label class="field"><span>Stop direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
@@ -1709,7 +1869,7 @@
       const branchOpts = sel => tile.branches.map(b => `<option value="${b}" ${sel===b?"selected":""}>${dirArrow(b)} ${DIRS[b].name}</option>`).join("");
       body += `<label class="field"><span>Set direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
     }
-    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal"){
+    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal" || (tile.kind === "track" && tile.shuntSignal)){
       const st = stationContaining(Number(x),Number(y));
       const hint = st ? ` in ${escapeHtml(st.name)}` : "";
       body += `<label class="field"><span>Name${hint}</span><input name="elname" type="text" maxlength="24" placeholder="e.g. 1E, A, 2" value="${escapeHtml(tile.name || "")}"></label>`;
@@ -1858,8 +2018,10 @@
     let cmd = null;                                       // every config action is a setTile / removeTrain
     if (action === "spawn"){
       if (tile.kind !== "track"){ closeContext(); return; }
-      cmd = {type:"setTile", x, y, tile:{kind:"spawn", route, dir, type: state.selectedType}};
-      state.message = `Spawn heading ${DIRS[dir].name}`;
+      const carsInput = contextMenu.querySelector('input[name="spawnCars"]');
+      const cars = carsInput ? Math.max(0, Math.min(12, Number(carsInput.value) || 0)) : 2;
+      cmd = {type:"setTile", x, y, tile:{kind:"spawn", route, dir, type: state.selectedType, cars}};
+      state.message = `Spawn heading ${DIRS[dir].name} (engine + ${cars} car${cars === 1 ? "" : "s"})`;
     } else if (action === "addstop"){
       if (tile.kind !== "track"){ closeContext(); return; }
       cmd = {type:"setTile", x, y, tile:{kind:"stop", route, dir, dwellSeconds:DEFAULT_DWELL_SECONDS}};
@@ -1897,6 +2059,35 @@
     } else if (action === "removetrain"){
       cmd = {type:"removeTrain", x, y};
       state.message = `Removed train`;
+    } else if (action === "clearshunt"){
+      cmd = {type:"clearSignal", x, y, dir, shunt:true};
+      state.message = `Cleared ${DIRS[dir].name} for shunting`;
+    } else if (action === "addshuntdisc"){
+      if (tile.kind !== "track" || tile.route.length !== 2){ closeContext(); return; }
+      const nt = JSON.parse(JSON.stringify(tile));
+      nt.shuntSignal = true; delete nt.shuntStop;            // placed clear (white)
+      cmd = {type:"setTile", x, y, tile: nt};
+      state.message = "Added a shunting disc (clear)";
+    } else if (action === "toggleshuntdisc"){
+      cmd = {type:"toggleShuntSignal", x, y};
+      state.message = "Toggled the shunting disc";
+    } else if (action === "rmshuntdisc"){
+      const nt = JSON.parse(JSON.stringify(tile));
+      delete nt.shuntSignal; delete nt.shuntStop;
+      cmd = {type:"setTile", x, y, tile: nt};
+      state.message = "Removed the shunting disc";
+    } else if (action === "revtrain"){
+      cmd = {type:"reverse", train: Number(t.dataset.train)};
+      state.message = `Reversing consist ${t.dataset.train}`;
+    } else if (action === "modetrain"){
+      cmd = {type:"setTrainMode", train: Number(t.dataset.train), mode: t.dataset.mode};
+      state.message = `Consist ${t.dataset.train} → ${t.dataset.mode === "shunt" ? "shunting" : "driving"} mode`;
+    } else if (action === "coupletrain"){
+      cmd = {type:"couple", train: Number(t.dataset.train)};
+      state.message = `Coupling consist ${t.dataset.train}`;
+    } else if (action === "uncoupletrain"){
+      cmd = {type:"detach", train: Number(t.dataset.train), cut: Number(t.dataset.cut)};
+      state.message = `Uncoupling consist ${t.dataset.train}`;
     }
     if (cmd) mutate(cmd);
     closeContext();
@@ -1913,6 +2104,7 @@
     if (routeShape != null) nt.route = cloneRoute(TRACK_SHAPES[Number(routeShape)].route);
     if (data.get("dir") != null) nt.dir = Number(data.get("dir"));
     if (data.get("type")) nt.type = Number(data.get("type"));
+    if (nt.kind === "spawn" && data.get("cars") != null) nt.cars = Math.max(0, Math.min(12, Number(data.get("cars")) || 0));
     if (data.has("elname")){ const v = (data.get("elname") || "").trim(); if (v) nt.name = v; else delete nt.name; }
     if (data.get("dwellSeconds")){ nt.dwellSeconds = Number(data.get("dwellSeconds")); delete nt.dwell; }
     if (nt.kind === "switch"){

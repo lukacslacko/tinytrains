@@ -33,11 +33,18 @@
   const ACCEL = 0.0008;
   const DECEL = 0.0002;
   const MIN_SPEED = 0.0016;
-  // Multi-part trains: an engine plus cars, each a length in tile units, joined by a small
-  // gap. Bodies trail the head along its path; block occupancy follows the whole body.
+  // Multi-part consists: engines and cars, each a length in tile units, coupled so their
+  // buffers TOUCH (no gap). Bodies trail the head along its path; block occupancy follows the
+  // whole body. CAR_GAP is kept (=0) for legacy callers that still add it between cars.
   const DEFAULT_CARS = [0.6, 0.5, 0.5];
-  const CAR_GAP = 0.12;
+  const CAR_GAP = 0;
   const CAR_WIDTH = 0.42;
+  // Shunting: a consist in "shunt" mode moves slower and, instead of holding a full tile back
+  // from the next train, creeps up until the buffers touch (so it can couple).
+  const SHUNT_SPEED_FACTOR = 0.35;
+  const TOUCH_SCAN_TILES = 2.5;    // how far ahead a shunting consist scans for a body to touch
+  const TOUCH_NEAR = 0.03;         // scan sample counts as "on the obstacle" within this distance
+  const COUPLE_DIST = 0.16;        // ends closer than this count as buffers-touching → may couple
   // Short pause after a held train's main signal turns green, so the clear is visible
   // before the train pulls away.
   const SIGNAL_REACTION_SECONDS = 0.5;
@@ -307,10 +314,39 @@
     return train.progress < .5 ? lerpW(start, joint, train.progress*2) : lerpW(joint, end, (train.progress-.5)*2);
   }
   function trainCars(train){ return train.cars && train.cars.length ? train.cars : DEFAULT_CARS; }
-  function trainTotalLength(train){
-    const cars = trainCars(train);
-    return cars.reduce((a,c)=>a+c,0) + (cars.length-1)*CAR_GAP;
+  // ---- Units (engines + cars) ----------------------------------------------------------
+  // A train is a CONSIST of units listed FRONT-TO-BACK. Each unit: {id, kind:"engine"|"car",
+  // len, type?, active?}. Exactly the consist's commanding engine has active:true; engines
+  // picked up by coupling are inactive until cut off again. Legacy trains carried only
+  // `cars` (an array of lengths, first = the engine) — migrated on first read.
+  function nextUnitId(){ state.nextUnitId = (state.nextUnitId || 0) + 1; return state.nextUnitId; }
+  function makeUnit(kind, len, type){
+    const u = {id: nextUnitId(), kind, len};
+    if (kind === "engine"){ u.type = type != null ? type : 1; u.active = true; }
+    return u;
   }
+  // An engine plus `nCars` cars (the standard consist shapes; default 2 cars).
+  function unitsFor(type, nCars){
+    const n = Number.isFinite(Number(nCars)) ? Math.max(0, Math.min(12, Math.round(Number(nCars)))) : DEFAULT_CARS.length - 1;
+    const units = [makeUnit("engine", DEFAULT_CARS[0], type)];
+    for (let i = 0; i < n; i++) units.push(makeUnit("car", DEFAULT_CARS[1] != null ? DEFAULT_CARS[1] : 0.5));
+    return units;
+  }
+  function defaultUnits(type){ return unitsFor(type, DEFAULT_CARS.length - 1); }
+  function trainUnits(train){
+    if (!train.units || !train.units.length){
+      // migrate a legacy train: first car length is the engine, the rest are cars
+      const cars = trainCars(train);
+      train.units = [makeUnit("engine", cars[0], train.type)].concat(cars.slice(1).map(len => makeUnit("car", len)));
+      delete train.cars;
+    }
+    return train.units;
+  }
+  function activeEngine(train){ return trainUnits(train).find(u => u.kind === "engine" && u.active) || null; }
+  function hasActiveEngine(train){ return !!activeEngine(train); }
+  function trainEngines(train){ return trainUnits(train).filter(u => u.kind === "engine"); }
+  function unitsLength(units){ return units.reduce((a,u)=>a+u.len,0) + Math.max(0, units.length-1)*CAR_GAP; }
+  function trainTotalLength(train){ return unitsLength(trainUnits(train)); }
   // Prepend the head's world position to the trail and trim it to the body length.
   function updateTrail(train){
     if (!train.trail) train.trail = [];
@@ -380,6 +416,275 @@
     }
     pts.push(at(d1));
     return pts;
+  }
+  // ---- Exact tile paths (the record shunting needs) -----------------------------------
+  // Besides the sampled `trail`, every train keeps `path`: the ordered tiles under it,
+  // HEAD-FIRST, each {x, y, enter, exit} — `enter` points at the next-deeper tile (where the
+  // train came from), `exit` at the next-shallower one (null on the head tile until it steps
+  // off). It is maintained exactly on every tile step, so reversing and splitting a consist
+  // can re-derive the head's discrete movement state without guessing from float samples.
+  function halfLen(d){ return d == null ? 0 : Math.hypot(DIRS[d].dx, DIRS[d].dy) / 2; }
+  function pathEntryLen(entry, isHead){
+    return (isHead ? 0 : halfLen(entry.exit)) + halfLen(entry.enter);
+  }
+  function trimPath(train){
+    if (!train.path) return;
+    const keep = trainTotalLength(train) + 1.6;
+    let acc = 0;
+    for (let i=0; i<train.path.length; i++){
+      acc += pathEntryLen(train.path[i], i === 0);
+      if (acc > keep){ train.path.length = i+1; return; }
+    }
+  }
+  // Straight back-fill (mirror of seedTrail) for spawned trains; the virtual rear tiles need
+  // not exist as track — they are geometry only, exactly like the seeded trail.
+  function seedPathStraight(train, dir){
+    const back = opposite(dir);
+    const n = Math.ceil(trainTotalLength(train)) + 2;
+    const path = [{x: train.x, y: train.y, enter: train.from, exit: null}];
+    let cx = train.prevX != null ? train.prevX : train.x + DIRS[back].dx;
+    let cy = train.prevY != null ? train.prevY : train.y + DIRS[back].dy;
+    for (let i=0; i<n; i++){
+      path.push({x: cx, y: cy, enter: back, exit: dir});
+      cx += DIRS[back].dx; cy += DIRS[back].dy;
+    }
+    train.path = path;
+  }
+  // Legacy trains (old saves) have no path: derive one from the sampled trail. Diagonal moves
+  // brush tile corners, so a tile the trail spends ~no length in between two diagonal
+  // neighbours is a sampling artifact and is collapsed away.
+  function derivePathFromTrail(train){
+    const trail = train.trail;
+    if (!trail || trail.length < 2) return null;
+    const seq = [];
+    let last = null, arcIn = 0;
+    const push = (tx,ty,arc) => {
+      if (last && last.x === tx && last.y === ty) return;
+      if (last) last.cover = arc - arcIn;
+      arcIn = arc;
+      last = {x:tx, y:ty, cover:0};
+      seq.push(last);
+    };
+    let acc = 0;
+    for (let i=0; i<trail.length; i++){
+      if (i > 0) acc += Math.hypot(trail[i].x-trail[i-1].x, trail[i].y-trail[i-1].y);
+      push(Math.floor(trail[i].x), Math.floor(trail[i].y), acc);
+    }
+    if (last) last.cover = acc - arcIn;
+    // collapse corner artifacts
+    for (let i=1; i<seq.length-1; i++){
+      const a = seq[i-1], b = seq[i], c = seq[i+1];
+      const dx = c.x-a.x, dy = c.y-a.y;
+      if (b.cover < 0.05 && Math.abs(dx) === 1 && Math.abs(dy) === 1) seq.splice(i--, 1);
+    }
+    const dirIndex = (dx,dy) => DIRS.findIndex(d => d.dx === dx && d.dy === dy);
+    const path = [];
+    for (let i=0; i<seq.length; i++){
+      const enter = i < seq.length-1 ? dirIndex(seq[i+1].x-seq[i].x, seq[i+1].y-seq[i].y) : null;
+      const exit = i > 0 ? dirIndex(seq[i-1].x-seq[i].x, seq[i-1].y-seq[i].y) : null;
+      if ((i < seq.length-1 && enter < 0) || (i > 0 && exit < 0)) return null; // non-adjacent: give up
+      path.push({x: seq[i].x, y: seq[i].y, enter, exit});
+    }
+    return path.length ? path : null;
+  }
+  function ensurePath(train){
+    if (train.path && train.path.length && train.path[0].x === train.x && train.path[0].y === train.y) return train.path;
+    train.path = derivePathFromTrail(train) || [{x: train.x, y: train.y, enter: train.from != null ? train.from : null, exit: null}];
+    return train.path;
+  }
+  // The exact corner polyline of a train's body, rear-ward from the head, with the arc
+  // distance of every tile centre and tile boundary along it. Arcs grow toward the tail;
+  // when the head is mid-transition the first centre/edge behind it can be "virtual"
+  // (negative arc — ahead of the head) so the placement maths stays uniform.
+  function bodyGeometry(train){
+    const path = ensurePath(train);
+    const h = headWorld(train);
+    const pts = [h];
+    const centers = {}, edges = {};
+    let arc = 0, k;
+    const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+    if (trainMoving(train) && path.length > 1){
+      const e = endpointW(train.prevX, train.prevY, train.moveDir); // edge between path[0] and path[1]
+      const c1 = centerW(path[1].x, path[1].y);
+      if (train.progress >= 0.5){
+        centers[0] = -dist(h, centerW(path[0].x, path[0].y));      // virtual: ahead of the head
+        arc += dist(h, e); edges[0] = arc; pts.push(e);
+        arc += dist(e, c1); centers[1] = arc; pts.push(c1);
+      } else {
+        edges[0] = -dist(h, e);                                     // virtual: ahead of the head
+        arc += dist(h, c1); centers[1] = arc; pts.push(c1);
+      }
+      k = 1;
+    } else {
+      centers[0] = 0;
+      k = 0;
+    }
+    const need = trainTotalLength(train) + 0.6;
+    for (; k < path.length-1 && arc < need; k++){
+      if (path[k].enter == null) break;
+      const e = endpointW(path[k].x, path[k].y, path[k].enter);
+      arc += dist(pts[pts.length-1], e); edges[k] = arc; pts.push(e);
+      const c = centerW(path[k+1].x, path[k+1].y);
+      arc += dist(e, c); centers[k+1] = arc; pts.push(c);
+    }
+    return {pts, centers, edges, covered: arc, path};
+  }
+  const ARC_EPS = 0.02;
+  // Where along a body an arc distance D falls: at a tile centre, or inside the transition
+  // between two consecutive path tiles (with the interpolation phase for train.progress).
+  function locateArc(geom, D){
+    const {centers, edges, path} = geom;
+    for (let k=0; k<path.length; k++){
+      if (centers[k] != null && Math.abs(D - centers[k]) <= ARC_EPS) return {atCenter: true, k};
+      if (centers[k] != null && centers[k+1] != null && D > centers[k] && D < centers[k+1]){
+        // inside the transition path[k] <-> path[k+1]; edges[k] splits the two phases
+        return {atCenter: false, k, edgeArc: edges[k], c0: centers[k], c1: centers[k+1]};
+      }
+    }
+    return null;
+  }
+  // Rebuild a train's discrete head state so its REVERSED front sits at arc D of the old
+  // body (D = the old body length). Also reverses units, path and trail. Internal: the
+  // caller has already validated that the train is stopped and the geometry covers D.
+  function applyReversal(train, geom, D){
+    const path = geom.path;
+    const loc = locateArc(geom, D);
+    if (!loc) return {ok:false, error:"the train's body geometry is incomplete — move it a little first"};
+    const L = D;
+    const wasShallow = (trainMoving(train) && train.progress < 0.5) ? 1 : 0; // old path[0] never entered
+    const newTrail = trailSpan(geom.pts, 0, L).reverse();
+    const flip = j => ({x: path[j].x, y: path[j].y, enter: path[j].exit, exit: path[j].enter});
+    const newPath = [];
+    let head;
+    if (loc.atCenter){
+      const m = loc.k;
+      if (path[m].exit == null) return {ok:false, error:"cannot reverse a zero-length body"};
+      head = {x: path[m].x, y: path[m].y, from: path[m].exit, moving: null};
+      for (let j=m; j>=wasShallow; j--) newPath.push(flip(j));
+    } else {
+      const k = loc.k;                     // reversed head moves from path[k] INTO path[k+1]
+      if (!path[k+1]) return {ok:false, error:"the train's body geometry is incomplete — move it a little first"};
+      const moveDir = path[k].enter;
+      const progress = (L <= loc.edgeArc)
+        ? 0.5 * (L - loc.c0) / Math.max(1e-9, loc.edgeArc - loc.c0)
+        : 0.5 + 0.5 * (L - loc.edgeArc) / Math.max(1e-9, loc.c1 - loc.edgeArc);
+      head = {x: path[k+1].x, y: path[k+1].y, from: opposite(moveDir),
+              moving: {prevX: path[k].x, prevY: path[k].y, moveDir, progress: Math.max(0.001, Math.min(0.999, progress))}};
+      for (let j=k+1; j>=wasShallow; j--) newPath.push(flip(j));
+      // The new front sits just past the tile it is leaving. If that tile is a signal
+      // governing this direction, the reversed front is PASSING it right now — moveTrain's
+      // step-off bookkeeping never runs for it, so do it here: refuse to reverse past a red
+      // manual main, and drop + arm a green one exactly as a normal pass would.
+      const leaveTile = getTile(path[k].x, path[k].y);
+      if (leaveTile && leaveTile.kind === "signal" && manualDirs(leaveTile).includes(moveDir)){
+        const mk = mkMain(path[k].x, path[k].y, moveDir);
+        if (!state.manualGreen.has(mk))
+          return {ok:false, error:`reversing would carry the front past the red signal at ${placeLabel(path[k].x, path[k].y)} — clear it first`};
+        head.dropGreen = mk;
+      }
+    }
+    newPath[0].exit = null;
+    trainUnits(train).reverse();
+    train.x = head.x; train.y = head.y; train.from = head.from;
+    if (head.moving){ train.prevX = head.moving.prevX; train.prevY = head.moving.prevY; train.moveDir = head.moving.moveDir; train.progress = head.moving.progress; }
+    else { delete train.prevX; delete train.prevY; delete train.moveDir; delete train.progress; }
+    if (head.dropGreen){                    // passed a cleared manual main while reversing
+      state.manualGreen.delete(head.dropGreen);
+      const rl = state.routeLocks.find(r => r.mk === head.dropGreen && !r.armed);
+      if (rl){ rl.armed = true; rl.trainId = train.id; }
+    }
+    train.path = newPath;
+    train.trail = newTrail;
+    train.speed = 0; train.wait = 0;
+    delete train.stopKey; train.reactedMain = null; train.wantSince = null; delete train._touch;
+    train._tiles = computeBodyTiles(train);
+    return {ok:true};
+  }
+  // Discrete head state for a NEW rear portion whose front sits at arc D of the original
+  // body (same orientation as the original — it faces the way the original was going).
+  function forwardHeadAt(geom, D){
+    const path = geom.path;
+    const loc = locateArc(geom, D);
+    if (!loc) return null;
+    const copy = j => ({x: path[j].x, y: path[j].y, enter: path[j].enter, exit: path[j].exit});
+    if (loc.atCenter){
+      const m = loc.k;
+      const newPath = path.slice(m).map((e,i) => i === 0 ? {...copy(m), exit: null} : copy(m+i));
+      return {x: path[m].x, y: path[m].y, from: path[m].enter, moving: null, path: newPath};
+    }
+    const k = loc.k;                        // front mid-transition from path[k+1] INTO path[k]
+    if (!path[k+1]) return null;
+    const moveDir = path[k+1].exit;
+    const progress = (D >= loc.edgeArc)
+      ? 0.5 * (loc.c1 - D) / Math.max(1e-9, loc.c1 - loc.edgeArc)
+      : 0.5 + 0.5 * (loc.edgeArc - D) / Math.max(1e-9, loc.edgeArc - loc.c0);
+    const newPath = path.slice(k).map((e,i) => i === 0 ? {...copy(k), exit: null} : copy(k+i));
+    return {x: path[k].x, y: path[k].y, from: path[k].enter,
+            moving: {prevX: path[k+1].x, prevY: path[k+1].y, moveDir, progress: Math.max(0.001, Math.min(0.999, progress))},
+            path: newPath};
+  }
+  // ---- Shunt-mode touch scan -----------------------------------------------------------
+  // The polyline a train's head is about to travel, following live switch settings, up to
+  // maxArc tiles ahead. Traced through signals (braking for them is handled elsewhere).
+  function forwardScanLine(train, maxArc){
+    const pts = [headWorld(train)];
+    let arc = 0;
+    const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+    const pushPt = p => { arc += dist(pts[pts.length-1], p); pts.push(p); };
+    let cx = train.x, cy = train.y, from = train.from;
+    if (trainMoving(train)){
+      if (train.progress < 0.5) pushPt(endpointW(train.prevX, train.prevY, train.moveDir));
+      pushPt(centerW(cx, cy));
+    }
+    while (arc < maxArc){
+      const tile = getTile(cx, cy);
+      if (!tile) break;
+      const ex = exitFor(tile, from);
+      if (ex == null) break;
+      const nx = cx + DIRS[ex].dx, ny = cy + DIRS[ex].dy;
+      const nt = getTile(nx, ny);
+      if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) break;
+      pushPt(endpointW(cx, cy, ex));
+      pushPt(centerW(nx, ny));
+      cx = nx; cy = ny; from = opposite(ex);
+    }
+    return pts;
+  }
+  function pointSegDist(p, a, b){
+    const vx = b.x-a.x, vy = b.y-a.y;
+    const len2 = vx*vx + vy*vy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x-a.x)*vx + (p.y-a.y)*vy) / len2)) : 0;
+    return Math.hypot(p.x - (a.x + vx*t), p.y - (a.y + vy*t));
+  }
+  // Arc distance from this train's head to the first point of another train's body along the
+  // forward line, or Infinity. This is what lets a shunting consist creep up and TOUCH.
+  function obstacleDistance(train){
+    const line = forwardScanLine(train, TOUCH_SCAN_TILES);
+    if (line.length < 2) return Infinity;
+    const bodies = [];
+    for (const t of state.trains){
+      if (t.id === train.id) continue;
+      const poly = (t.trail && t.trail.length) ? trailSpan(t.trail, 0, trainTotalLength(t)) : [headWorld(t)];
+      bodies.push(poly);
+    }
+    if (!bodies.length) return Infinity;
+    let arc = 0;
+    for (let i=0; i<line.length-1; i++){
+      const a = line[i], b = line[i+1];
+      const seg = Math.hypot(b.x-a.x, b.y-a.y);
+      const steps = Math.max(1, Math.ceil(seg / 0.04));
+      for (let s=0; s<=steps; s++){
+        const p = lerpW(a, b, s/steps);
+        for (const poly of bodies){
+          if (poly.length === 1){ if (Math.hypot(p.x-poly[0].x, p.y-poly[0].y) < TOUCH_NEAR) return arc + seg*(s/steps); continue; }
+          for (let j=0; j<poly.length-1; j++){
+            if (pointSegDist(p, poly[j], poly[j+1]) < TOUCH_NEAR) return arc + seg*(s/steps);
+          }
+        }
+      }
+      arc += seg;
+    }
+    return Infinity;
   }
   function trainMoving(train){
     return train.progress != null && train.progress < 1 && train.prevX != null && train.prevY != null;
@@ -573,6 +878,7 @@
     // gather contenders, then grant each free block to its longest-waiting contender
     const contenders = new Map();
     for (const t of state.trains){
+      if (!hasActiveEngine(t)){ t.wantSince = null; t._ap = null; continue; } // parked cars want nothing
       const ap = approachInfo(t, sys);
       t._ap = ap;
       if (!ap || trainHolds(t, ap.blockId)){ t.wantSince = null; continue; }
@@ -618,6 +924,11 @@
     }
     return false;
   }
+  // A manual main that is green because of a SHUNT clear (route may run into occupied track /
+  // end at a buffer). Renderers show it differently: red triangle, green ring.
+  function mainShuntCleared(mk){
+    return state.manualGreen.has(mk) && state.routeLocks.some(r => r.mk === mk && r.shunt && !r.armed);
+  }
   // True if this train may pass main `mk` without stopping (it reserved the block early at the
   // invisible distant). A train that had to stop at a red main reacts briefly before pulling away.
   function mayRollThrough(train, mk){
@@ -643,6 +954,8 @@
       if (!rl.armed) return state.manualGreen.has(rl.mk);      // awaiting a train: hold while still cleared
       const tr = state.trains.find(t => t.id === rl.trainId);
       if (!tr) return false;                                   // the cleared train vanished → release
+      if ((tr.speed || 0) > 0) rl.moved = true;
+      if (rl.shunt && rl.moved && trainStopped(tr)) return false; // shunt move came to a stand → release
       const bt = tr._tiles || computeBodyTiles(tr);
       for (const s of rl.path){
         if (rl.passedTile.has(s.k)) continue;
@@ -657,12 +970,16 @@
         if (!rl.passedTile.has(sk)) state.lockedSwitchKeys.add(sk);
   }
   // Trace the route a cleared manual signal opens: follow the live track (current switch
-  // settings) from the signal to the next signal facing the way we travel, checking that
-  // (2a) it crosses no already-locked switch and (2c) no axle sits anywhere on the path up to
-  // and including that signal. On success returns the switch tiles it crosses plus the per-tile
-  // path segments (the manual signal tile and every tile up to, but not including, the terminus
-  // signal); otherwise a reason and the obstacle tile.
-  function followManualRoute(sx,sy,dir){
+  // settings) from the signal to the next signal facing the way we travel — or a BUFFER (a
+  // route into a stub is a legitimate terminus) — checking that (2a) it crosses no
+  // already-locked switch and (2c) no axle sits anywhere on the path up to and including that
+  // signal. A SHUNT clear (opts.shunt) skips the occupancy check: it opens a route INTO
+  // occupied track so an engine can drive up to and couple with the cars standing there.
+  // On success returns the switch tiles it crosses plus the per-tile path segments (the manual
+  // signal tile and every tile up to, but not including, the terminus signal); otherwise a
+  // reason and the obstacle tile.
+  function followManualRoute(sx,sy,dir,opts){
+    opts = opts || {};
     const switchKeys = [];
     const path = [];
     const st = getTile(sx,sy);
@@ -674,7 +991,7 @@
       const from = opposite(d);
       const here = key(nx,ny);
       if (!nt || !tileAccepts(nt, from) || !switchAccepts(nt, from)) return {ok:false, reason:"the path is broken", obstacle:here};
-      if (occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied", obstacle:here}; // 2c (incl. the terminus signal)
+      if (!opts.shunt && occupied(nx,ny,null)) return {ok:false, reason:"the path is occupied", obstacle:here}; // 2c (incl. the terminus signal)
       if (nt.kind === "signal"){
         // 2b: the route is only complete at a main facing the WAY WE ARE GOING — one that will
         // actually stop/hand off the train. A signal facing the other way is transparent to it.
@@ -687,7 +1004,10 @@
         switchKeys.push(here);
       }
       const ex = exitFor(nt, from);
-      if (ex == null) return {ok:false, reason: nt.kind === "switch" ? "the path runs into a switch set against it" : "the path reaches a dead end before any signal", obstacle:here};
+      if (ex == null){
+        if (nt.route && nt.route.length === 1){ path.push({k: here, seg: [from]}); return {ok:true, switchKeys, path, buffer:true}; } // stub: ends at a buffer
+        return {ok:false, reason: nt.kind === "switch" ? "the path runs into a switch set against it" : "the path reaches a dead end before any signal", obstacle:here};
+      }
       path.push({k: here, seg: [from, ex]});
       cx = nx; cy = ny; d = ex;
     }
@@ -700,7 +1020,8 @@
   // train that has already taken the route holds it red, so a re-clear is blocked by occupancy).
   // Clears (or cancels) a manual main. DOM-free: returns {ok, action, reason?, flash?} so the
   // caller (client UI or server) can flash/redraw/report; never touches the DOM itself.
-  function toggleManualSignal(x,y,dir){
+  function toggleManualSignal(x,y,dir,opts){
+    opts = opts || {};
     const tile = getTile(x,y);
     if (!tile || tile.kind !== "signal" || !manualDirs(tile).includes(dir)) return {ok:false, action:"none", error:"no manual main in that direction"};
     const mk = mkMain(x,y,dir);
@@ -711,17 +1032,19 @@
       updateSignals();
       return {ok:true, action:"red"};
     }
-    const route = followManualRoute(x,y,dir);
+    const route = followManualRoute(x,y,dir,opts);
     if (!route.ok){
       state.message = `Cannot clear ${placeLabel(x,y)}: ${route.reason}`;
       return {ok:false, action:"refused", reason:route.reason, flash:[key(x,y), route.obstacle]};
     }
     state.flash = null;
     state.manualGreen.add(mk);
-    state.routeLocks.push({mk, switchKeys: route.switchKeys, path: route.path, trainId:null, armed:false, enteredTile:new Set(), passedTile:new Set()});
-    state.message = `Cleared ${placeLabel(x,y)}`;
+    // A shunt-cleared route lock is released as soon as the shunting move comes to a stand
+    // (see maintainManualState) — its job is only to protect the movement itself.
+    state.routeLocks.push({mk, switchKeys: route.switchKeys, path: route.path, trainId:null, armed:false, shunt: !!opts.shunt, moved:false, enteredTile:new Set(), passedTile:new Set()});
+    state.message = `Cleared ${placeLabel(x,y)}${opts.shunt ? " for shunting" : ""}`;
     updateSignals();
-    return {ok:true, action:"green"};
+    return {ok:true, action:"green", shunt: !!opts.shunt};
   }
 
   function trainOccupies(train,x,y){
@@ -729,6 +1052,7 @@
     return (train.x === x && train.y === y) || (trainMoving(train) && train.prevX === x && train.prevY === y);
   }
 
+  function isShunting(train){ return train.mode === "shunt"; }
   // True if a train arriving at (x,y) via `from` can immediately continue onward; its
   // negation is what tells a moving train to brake to a stop on the tile it is entering.
   function canLeave(train, x, y, from){
@@ -736,10 +1060,13 @@
     if (!tile) return false;
     const ex = exitFor(tile, from);
     if (ex == null) return false;
-    if (tile.kind === "stop" && ex === tile.dir){
+    if (tile.kind === "stop" && ex === tile.dir && !isShunting(train)){ // shunting moves skip passenger dwell
       if (train.stopKey !== key(x,y)) return false;          // hasn't docked yet
       if (state.simFrame < train.releaseFrame) return false; // still dwelling
     }
+    // A shunting DISC (bidirectional marker on plain track) set to "stop" holds SHUNTING
+    // moves only — every other train ignores it completely.
+    if (isShunting(train) && tile.shuntSignal && tile.shuntStop) return false;
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(x,y,ex);
       if (mainIsManual(x,y,ex)){
@@ -754,32 +1081,55 @@
     const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
     const nt = getTile(nx,ny);
     if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return false;
-    // All trains proceed with caution: never roll onto an occupied tile, brake to a stop.
-    if (occupied(nx,ny,train.id)) return false;
+    // Shunting never leaves the station: the boundary halts a shunting consist exactly like
+    // a signal at danger (it stays in shunting mode and can be reversed back). Entering a
+    // station from outside is fine — only the way OUT is barred.
+    if (isShunting(train) && !stationContaining(nx,ny)) return false;
+    // Driving on sight: never roll onto an occupied tile, brake to a stop one tile short.
+    // A SHUNTING consist is allowed closer — the touch clamp (advanceWithSpeed) stops it
+    // the moment its buffers meet the other body instead.
+    if (!isShunting(train) && occupied(nx,ny,train.id)) return false;
     return true;
   }
 
   // Advance a moving train by its current speed, easing toward MAX_SPEED or braking along
   // a sqrt curve so it coasts to a stop exactly on the tile it cannot continue past.
+  // Shunting consists run slower and additionally clamp to the touch distance of the next
+  // body ahead, so they come to rest buffers-to-buffers (possibly mid-tile).
   function advanceWithSpeed(train){
     if (!trainMoving(train)) return false;
     // state.speedScale (UI-adjustable, default 1) slows the whole fleet so an operator/AI has more
     // real time to act. It scales top speed + acceleration; DECEL is left so braking stays safe.
     const ss = state.speedScale || 1;
-    const maxV = MAX_SPEED * ss, accV = ACCEL * ss, minV = MIN_SPEED * ss;
+    const shunt = isShunting(train);
+    const maxV = MAX_SPEED * ss * (shunt ? SHUNT_SPEED_FACTOR : 1), accV = ACCEL * ss, minV = MIN_SPEED * ss;
     const d = DIRS[train.moveDir];
     const seg = Math.hypot(d.dx,d.dy) || 1;
     const halt = !canLeave(train, train.x, train.y, train.from);
     const remaining = (1 - train.progress) * seg;
     let target = maxV;
     if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
+    let obstDist = Infinity;
+    // Shunting always creeps under the touch clamp. Driving normally relies on the one-tile
+    // standoff instead — but when the head SHARES its tile with another body (e.g. the mode
+    // was switched off shunting while standing buffers-to-buffers), that standoff is already
+    // gone: engage the clamp there too, so a train can never drive THROUGH stock.
+    if (shunt || occupied(train.x, train.y, train.id)) obstDist = obstacleDistance(train);
+    if (obstDist < Infinity) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, obstDist)));
     if (train.speed < target) train.speed = Math.min(target, train.speed + accV);
     else train.speed = target;
-    if (halt && train.speed < minV && remaining < 0.5){
+    let advance = train.speed;
+    if (advance > obstDist){ advance = Math.max(0, obstDist); train.speed = 0; } // buffers met: hard stop
+    if (halt && train.speed < minV && remaining < 0.5 && obstDist >= remaining){
       train.progress = 1; // crawling and almost there: dock on the tile centre
     } else {
-      train.progress = Math.min(1, train.progress + train.speed / seg);
+      train.progress = Math.min(1, train.progress + advance / seg);
     }
+    train._touch = train.speed === 0 && obstDist <= 0.1;
+    // Coming to a stand buffers-to-buffers drops the consist into STOP mode: after a couple
+    // (or an accidental nudge) it must not creep off on its own — the master reverses it or
+    // picks a mode explicitly.
+    if (train._touch) train.mode = "stop";
     if (train.progress >= 1){
       delete train.prevX; delete train.prevY; delete train.moveDir;
       if (halt) train.speed = 0;
@@ -803,10 +1153,21 @@
     if (t && t.name) parts.push(t.name);
     return parts.length ? parts.join(" ") : `${x},${y}`;
   }
+  // The PUBLIC identity of a consist — what the UI, API, MCP and every event expose. A train
+  // is identified by its ACTIVE ENGINE's fixed unit id, so it keeps its identity through
+  // uncoupling and coupling as long as the same engine commands it (engine "2" dropping some
+  // cars and picking up others is still train "2"). A pure cut of cars (no engine) is
+  // identified by its first vehicle's unit id. Internal train ids stay internal.
+  function publicTrainId(train){
+    const ae = activeEngine(train);
+    if (ae) return ae.id;
+    const units = trainUnits(train);
+    return units.length ? units[0].id : train.id;
+  }
   function trainDesc(train){
     const t = trainTypeById(train.type);
     const nm = t && t.name ? t.name : `type ${train.type}`;
-    return `Train ${train.id} (${nm})`;
+    return `Train ${publicTrainId(train)} (${nm})`;
   }
   // Called the first frame a train docks at a stop: records when it may leave (arrival + dwell).
   function registerStopArrival(train, tile){
@@ -832,12 +1193,14 @@
 
   function moveTrain(train){
     if (train.speed == null) train.speed = 0;
+    if (!hasActiveEngine(train)){ train.speed = 0; return; } // a cut of cars never moves by itself
+    if (train.mode === "stop"){ train.speed = 0; return; }   // held on the handbrake, even mid-tile
     if (trainMoving(train)){ advanceWithSpeed(train); return; }
     if (train.wait > 0){ train.wait--; train.speed = 0; return; }
     const tile = getTile(train.x,train.y);
     const ex = exitFor(tile, train.from);
     if (ex == null){ train.speed = 0; return; }
-    if (tile.kind === "stop" && ex === tile.dir){
+    if (tile.kind === "stop" && ex === tile.dir && !isShunting(train)){
       const stopKey = key(train.x,train.y);
       if (train.stopKey !== stopKey){
         registerStopArrival(train, tile);
@@ -846,6 +1209,7 @@
       }
       if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
     }
+    if (isShunting(train) && tile.shuntSignal && tile.shuntStop){ train.speed = 0; return; } // held at a shunting disc
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(train.x, train.y, ex);
       if (mainIsManual(train.x, train.y, ex)){
@@ -873,7 +1237,12 @@
     const nf = opposite(ex);
     const nextTile = getTile(nx,ny);
     if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf)){ train.speed = 0; return; }
-    if (occupied(nx,ny,train.id)){ train.speed = 0; return; } // proceed with caution: never collide
+    if (isShunting(train)){
+      // the station boundary halts a shunting move (still in shunting mode, ready to reverse)
+      if (!stationContaining(nx,ny)){ train.speed = 0; return; }
+      // buffers already touching the next body: stay put (in stop mode) instead of committing a step
+      if (obstacleDistance(train) <= TOUCH_NEAR + 0.02){ train.speed = 0; train._touch = true; train.mode = "stop"; return; }
+    } else if (occupied(nx,ny,train.id)){ train.speed = 0; return; } // drive on sight: stop a tile short
     // Passing a cleared MANUAL main drops it back to red and arms its route lock to this train,
     // so the switches it set stay locked until this train has fully passed them.
     if (tile.kind === "signal" && signalDirs(tile).includes(ex) && state.manualGreen.has(mkMain(train.x,train.y,ex))){
@@ -885,6 +1254,8 @@
     if (train.stopKey === key(train.x, train.y) && tile.kind === "stop") notifyDeparture(train, tile, train.x, train.y);
     delete train.stopKey;
     train.reactedMain = null; // leaving this tile; the next main needs its own reaction
+    delete train._touch;
+    ensurePath(train);
     train.prevX = train.x;
     train.prevY = train.y;
     train.moveDir = ex;
@@ -892,6 +1263,9 @@
     train.x = nx;
     train.y = ny;
     train.from = nf;
+    train.path[0].exit = ex;
+    train.path.unshift({x: nx, y: ny, enter: nf, exit: null});
+    trimPath(train);
     advanceWithSpeed(train);
   }
 
@@ -905,8 +1279,9 @@
       const nf = opposite(tile.dir);
       const nextTile = getTile(nx,ny);
       if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf) || occupied(x,y,null) || occupied(nx,ny,null)) continue;
-      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, type:tile.type, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, cars:DEFAULT_CARS.slice()};
+      const train = {id:state.nextTrainId++, x:nx, y:ny, from:nf, type:tile.type, wait:0, prevX:x, prevY:y, moveDir:tile.dir, progress:0, speed:0, holds:[], wantSince:null, units:unitsFor(tile.type, tile.cars), mode:"drive"};
       seedTrail(train, tile.dir);
+      seedPathStraight(train, tile.dir);
       train._tiles = computeBodyTiles(train);
       state.trains.push(train);
       spent.push({x, y, route:cloneRoute(tile.route)});
@@ -954,6 +1329,12 @@
       if (tile.current == null) tile.current = (tile.default != null ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]));
       delete tile.mode; delete tile.default; delete tile.filters; delete tile.defaultBranch;
     }
+    // A shunting disc lives only on plain two-ended track (never on switches, buffers,
+    // crossings, stops or signal tiles — a manual signal already halts shunting moves).
+    if (tile.shuntSignal && !(tile.kind === "track" && Array.isArray(tile.route) && tile.route.length === 2)){
+      delete tile.shuntSignal; delete tile.shuntStop;
+    }
+    if (!tile.shuntSignal) delete tile.shuntStop;
     return tile;
   }
   function deserialize(text){
@@ -974,6 +1355,7 @@
     state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
+    state.nextUnitId = 0;
     state.tick = 0;
     state.frame = 0;
     state.simFrame = 0;
@@ -1039,17 +1421,19 @@
       tile.current = to; updateSignals();
       return {ok:true, current: to};
     }
-    function cmdToggleSignal(x,y,dir){
+    function cmdToggleSignal(x,y,dir,opts){
       const tile = getTile(x,y);
       if (!tile || tile.kind !== "signal") return {ok:false, error:"no signal here"};
       const dirs = dir != null ? [Number(dir)] : manualDirs(tile).slice();
       if (!dirs.length) return {ok:false, error:"no manual main here"};
       let last = {ok:false, error:"no manual main in that direction"};
-      for (const d of dirs) last = toggleManualSignal(x,y,d);
+      for (const d of dirs) last = toggleManualSignal(x,y,d,opts);
       return last;
     }
     // green=true → clear a route; green=false → drop to red. Idempotent.
-    function cmdSetSignal(x,y,dir,green){
+    // opts.shunt clears the route for a SHUNTING move: it may lead into occupied track (to
+    // couple) and its lock is released once the move comes to a stand.
+    function cmdSetSignal(x,y,dir,green,opts){
       const tile = getTile(x,y);
       if (!tile || tile.kind !== "signal") return {ok:false, error:"no signal here"};
       const dirs = dir != null ? [Number(dir)] : manualDirs(tile).slice();
@@ -1058,14 +1442,16 @@
       for (const d of dirs){
         const isGreen = state.manualGreen.has(mkMain(x,y,d));
         if (green === isGreen) last = {ok:true, action: isGreen ? "green" : "red", noop:true};
-        else last = toggleManualSignal(x,y,d);
+        else last = toggleManualSignal(x,y,d,opts);
       }
       return last;
     }
-    function cmdSpawn(x,y,dir,type){
+    function cmdSpawn(x,y,dir,type,cars){
       const tile = getTile(x,y);
       if (!tile || tile.kind !== "track") return {ok:false, error:"can only spawn on plain track"};
-      setTile(x,y,{kind:"spawn", route: cloneRoute(tile.route), dir: Number(dir), type: type != null ? Number(type) : state.selectedType});
+      const spawn = {kind:"spawn", route: cloneRoute(tile.route), dir: Number(dir), type: type != null ? Number(type) : state.selectedType};
+      if (cars != null && Number.isFinite(Number(cars))) spawn.cars = Math.max(0, Math.min(12, Math.round(Number(cars))));
+      setTile(x,y,spawn);
       updateSignals();
       return {ok:true};
     }
@@ -1074,6 +1460,339 @@
       state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
       updateSignals();
       return {ok:true, removed: before - state.trains.length};
+    }
+
+    // ---- Shunting discs (operate state, like throwing a switch — no layout undo) ----
+    // A shunting disc is a bidirectional marker on plain track: clear by default, and when
+    // set to "stop" it halts SHUNTING moves only. Placing/removing one is a tile edit
+    // (setTile with shuntSignal on the track tile); these commands flip its state.
+    function cmdSetShuntSignal(x,y,stop){
+      const tile = getTile(x,y);
+      if (!tile || !tile.shuntSignal) return {ok:false, error:"no shunting disc here"};
+      const to = !!stop;
+      const was = !!tile.shuntStop;
+      if (to) tile.shuntStop = true; else delete tile.shuntStop;
+      updateSignals();
+      if (was !== to) emit("info", `Shunting disc ${placeLabel(x,y)} set to ${to ? "stop" : "clear"}`);
+      return {ok:true, stop: to, noop: was === to};
+    }
+    function cmdToggleShuntSignal(x,y){
+      const tile = getTile(x,y);
+      if (!tile || !tile.shuntSignal) return {ok:false, error:"no shunting disc here"};
+      return cmdSetShuntSignal(x, y, !tile.shuntStop);
+    }
+
+    // ---- Shunting commands (reverse / mode / uncouple / couple / place) ----
+    // These are STATION MASTER moves: every one of them requires the consist to stand inside
+    // a station (and, when the command is scoped to a station, inside THAT station). Consists
+    // are addressed by their PUBLIC id (the active engine's fixed unit id — see publicTrainId)
+    // or by any unit id they contain; the internal train id is accepted as a last resort.
+    function findConsist(ref){
+      if (ref == null) return null;
+      const n = Number(ref);
+      return state.trains.find(t => publicTrainId(t) === n) ||
+             state.trains.find(t => trainUnits(t).some(u => u.id === n)) ||
+             state.trains.find(t => t.id === n) || null;
+    }
+    function resolveConsist(cmd){
+      if (cmd.engine != null){
+        const t = state.trains.find(tr => trainUnits(tr).some(u => u.id === Number(cmd.engine) && u.kind === "engine"));
+        if (t) return t;
+      }
+      return findConsist(cmd.train != null ? cmd.train : cmd.engine);
+    }
+    function shuntGuard(t, stationRef){
+      if (!t) return {ok:false, error:"no such consist (give train id or engine id)"};
+      const st = stationContaining(t.x, t.y);
+      if (!st) return {ok:false, error:"shunting is only allowed inside a station"};
+      if (stationRef != null){
+        const want = findStation(stationRef);
+        if (!want) return {ok:false, error:"no such station"};
+        if (want.id !== st.id) return {ok:false, error:`that consist is in ${st.name}, not ${want.name}`};
+      }
+      return {ok:true, station: st};
+    }
+    function consistStanding(t){ return (t.speed || 0) === 0; }
+    function unitPublic(u){ return {id:u.id, kind:u.kind, len:u.len, type:u.type != null ? u.type : null, active:!!u.active}; }
+    function consistSummary(t){
+      const units = trainUnits(t);
+      const ae = activeEngine(t);
+      return {id: publicTrainId(t), mode: t.mode || "drive", length: trainTotalLength(t),
+        units: units.map(unitPublic), engines: units.filter(u => u.kind === "engine").map(u => u.id),
+        activeEngine: ae ? ae.id : null};
+    }
+    function ensureActive(units){
+      if (!units.some(u => u.kind === "engine" && u.active)){
+        const e = units.find(u => u.kind === "engine");
+        if (e) e.active = true;
+      }
+      return units;
+    }
+    // Reverse a whole consist in place: the leading end becomes the trailing end, so an
+    // engine that pulled now pushes. Requires the consist to be standing (it may be standing
+    // buffers-to-buffers mid-tile — that is fine, the geometry handles it).
+    function reverseConsist(t){
+      const L = trainTotalLength(t);
+      const geom = bodyGeometry(t);
+      if (geom.covered + ARC_EPS < L) return {ok:false, error:"the consist's body geometry is incomplete — drive it forward a little first"};
+      return applyReversal(t, geom, L);
+    }
+    function cmdReverse(cmd){
+      const t = resolveConsist(cmd);
+      const g = shuntGuard(t, cmd.station); if (!g.ok) return g;
+      if (!hasActiveEngine(t)) return {ok:false, error:"no active engine in that consist"};
+      if (!consistStanding(t)) return {ok:false, error:"the consist is still moving — wait for it to stop"};
+      const r = reverseConsist(t);
+      if (!r.ok) return r;
+      updateSignals();
+      const tile = getTile(t.x, t.y);
+      const ex = tile ? exitFor(tile, t.from) : null;
+      emit("info", `${trainDesc(t)} reversed at ${placeLabel(t.x,t.y)}`);
+      return {ok:true, train: publicTrainId(t), heading: ex != null ? DIRNAMES[ex] : null, ...consistSummary(t)};
+    }
+    // Modes: "drive" (normal), "shunt" (slow, creeps to touch), "stop" (handbrake — the
+    // consist stands where it is, even when signals and track would let it move). A shunting
+    // consist that comes to a stand buffers-to-buffers drops into "stop" by itself, so a
+    // couple order doesn't send the merged train creeping off.
+    function cmdSetTrainMode(cmd){
+      const t = resolveConsist(cmd);
+      if (!t) return {ok:false, error:"no such consist (give train id or engine id)"};
+      const mode = cmd.mode === "shunt" ? "shunt" : (cmd.mode === "stop" ? "stop" : "drive");
+      if (!hasActiveEngine(t)) return {ok:false, error:"no active engine in that consist"};
+      if (mode === "shunt"){
+        const g = shuntGuard(t, cmd.station); if (!g.ok) return g;
+      }
+      // Driving assumes a one-tile standoff to other stock; standing buffers-to-buffers that
+      // is already gone, so a consist touching stock AHEAD may not switch to drive — it would
+      // pull straight through it. Couple, or reverse away first.
+      if (mode === "drive" && obstacleDistance(t) <= 0.12)
+        return {ok:false, error:"the buffers are touching the stock ahead — couple or reverse away first (or keep shunting)"};
+      t.mode = mode;
+      if (mode === "drive") delete t._touch;
+      updateSignals();
+      const modeName = mode === "shunt" ? "shunting" : (mode === "stop" ? "stop (standing)" : "driving");
+      emit("info", `${trainDesc(t)} switched to ${modeName} mode`);
+      return {ok:true, train: publicTrainId(t), mode};
+    }
+    // Uncouple: cut the consist at a coupling. The cut is given either as `cut` (boundary
+    // index: between units[cut] and units[cut+1]) or as `keep` — how many vehicles stay with
+    // the ACTIVE ENGINE beyond the engine itself (keep:0 cuts the engine free; keep:2 keeps
+    // two cars on it). `side` ("front"/"back") disambiguates when the engine is mid-consist.
+    function cmdDetach(cmd){
+      const t = resolveConsist(cmd);
+      const g = shuntGuard(t, cmd.station); if (!g.ok) return g;
+      if (!consistStanding(t)) return {ok:false, error:"the consist is still moving — wait for it to stop"};
+      const units = trainUnits(t);
+      if (units.length < 2) return {ok:false, error:"nothing to uncouple — the consist is a single vehicle"};
+      let c;
+      if (cmd.cut != null){
+        c = Number(cmd.cut);
+        if (!(c >= 0 && c < units.length-1)) return {ok:false, error:`cut must be 0..${units.length-2}`};
+      } else {
+        const ae = activeEngine(t);
+        if (!ae) return {ok:false, error:"no active engine in that consist"};
+        const ai = units.indexOf(ae);
+        const keep = Math.max(0, Number(cmd.keep) || 0);
+        let side = cmd.side;
+        if (!side) side = ai === 0 ? "back" : (ai === units.length-1 ? "front" : null);
+        if (!side) return {ok:false, error:"the engine is mid-consist — say side:\"front\" or side:\"back\""};
+        if (side === "back"){
+          c = ai + keep;
+          if (c > units.length-2) return {ok:false, error:`only ${units.length-1-ai} vehicle(s) behind the engine`};
+        } else {
+          c = ai - keep - 1;
+          if (c < 0) return {ok:false, error:`only ${ai} vehicle(s) in front of the engine`};
+        }
+      }
+      const frontUnits = units.slice(0, c+1);
+      const rearUnits = units.slice(c+1);
+      const L1 = unitsLength(frontUnits);
+      const L = unitsLength(units);
+      const geom = bodyGeometry(t);
+      if (geom.covered + ARC_EPS < L) return {ok:false, error:"the consist's body geometry is incomplete — drive it forward a little first"};
+      const rearHead = forwardHeadAt(geom, L1);
+      if (!rearHead) return {ok:false, error:"could not place the uncoupled portion — drive forward a little first"};
+      const rear = {
+        id: state.nextTrainId++, x: rearHead.x, y: rearHead.y, from: rearHead.from,
+        speed: 0, wait: 0, holds: [], wantSince: null,
+        units: ensureActive(rearUnits), mode: t.mode || "drive",
+        trail: trailSpan(geom.pts, L1, L),
+        path: rearHead.path
+      };
+      if (rearHead.moving){ rear.prevX = rearHead.moving.prevX; rear.prevY = rearHead.moving.prevY; rear.moveDir = rearHead.moving.moveDir; rear.progress = rearHead.moving.progress; }
+      const rearEngine = rear.units.find(u => u.kind === "engine" && u.active);
+      rear.type = rearEngine && rearEngine.type != null ? rearEngine.type : t.type;
+      t.units = ensureActive(frontUnits);
+      const frontEngine = t.units.find(u => u.kind === "engine" && u.active);
+      if (frontEngine && frontEngine.type != null) t.type = frontEngine.type;
+      trimPath(t);
+      rear._tiles = computeBodyTiles(rear);
+      state.trains.push(rear);
+      updateSignals();
+      emit("info", `${trainDesc(t)} uncoupled at ${placeLabel(t.x,t.y)} — ${rearUnits.length} vehicle(s) left standing`);
+      return {ok:true, front: consistSummary(t), detached: consistSummary(rear)};
+    }
+    // Couple: merge with the consist this one is touching (buffers within COUPLE_DIST). The
+    // commanded consist's active engine stays in charge; every engine in the picked-up
+    // consist goes inactive until cut off again. The merged consist is a NEW train.
+    function cmdCouple(cmd){
+      const a = resolveConsist(cmd);
+      const g = shuntGuard(a, cmd.station); if (!g.ok) return g;
+      if (!hasActiveEngine(a)) return {ok:false, error:"no active engine in that consist"};
+      if (!consistStanding(a)) return {ok:false, error:"the consist is still moving — wait for it to stop"};
+      const LA = trainTotalLength(a);
+      const geomA = bodyGeometry(a);
+      if (geomA.covered + ARC_EPS < LA) return {ok:false, error:"the consist's body geometry is incomplete"};
+      const headA = geomA.pts[0];
+      const tailA = trailSpan(geomA.pts, LA, LA)[0];
+      let best = null;
+      for (const b of state.trains){
+        if (b.id === a.id || !consistStanding(b)) continue;
+        const LB = trainTotalLength(b);
+        const geomB = bodyGeometry(b);
+        const headB = geomB.pts[0];
+        const tailB = trailSpan(geomB.pts, LB, LB)[0];
+        const pairs = [
+          {d: Math.hypot(headA.x-tailB.x, headA.y-tailB.y), mode: "aBehindB", revB: false},
+          {d: Math.hypot(tailA.x-headB.x, tailA.y-headB.y), mode: "bBehindA", revB: false},
+          {d: Math.hypot(headA.x-headB.x, headA.y-headB.y), mode: "aBehindB", revB: true},
+          {d: Math.hypot(tailA.x-tailB.x, tailA.y-tailB.y), mode: "bBehindA", revB: true}
+        ];
+        for (const p of pairs) if (p.d < COUPLE_DIST && (!best || p.d < best.d)) best = {...p, b};
+      }
+      if (!best) return {ok:false, error:"no consist within coupling distance — drive up to it in shunting mode first"};
+      const b = best.b;
+      if (best.revB){
+        const r = reverseConsist(b);
+        if (!r.ok) return {ok:false, error:"cannot line up with the other consist: " + r.error};
+      }
+      // Front consist F leads the merged train; R hangs behind it.
+      const F = best.mode === "aBehindB" ? b : a;
+      const R = best.mode === "aBehindB" ? a : b;
+      const geomF = bodyGeometry(F), geomR = bodyGeometry(R);
+      const LF = trainTotalLength(F), LR = trainTotalLength(R);
+      if (geomF.covered + ARC_EPS < LF || geomR.covered + ARC_EPS < LR) return {ok:false, error:"a consist's body geometry is incomplete — drive it a little first"};
+      // Merge the tile paths at the junction (under the touching buffers). Two traps here:
+      // F's path must end at the tile that actually CONTAINS its tail — a tail sitting exactly
+      // ON a tile boundary belongs to the shallower tile (the deeper one has no F body); and a
+      // mid-transition R starts its path with a committed destination tile its head has not
+      // actually entered — that tile carries no body and usually duplicates an fPath tile.
+      // Getting either wrong doubles tiles back and forth in the merged path, which corrupts
+      // any later reversal until movement trims the garbage away.
+      const fArc = Math.min(LF, geomF.covered);
+      const fLoc = locateArc(geomF, fArc);
+      let fDepth;
+      if (!fLoc) fDepth = geomF.path.length - 1;
+      else if (fLoc.atCenter) fDepth = fLoc.k;
+      else fDepth = (fArc <= fLoc.edgeArc + ARC_EPS) ? fLoc.k : fLoc.k + 1;
+      const fPath = geomF.path.slice(0, fDepth + 1).map(e => ({...e}));
+      const rStart = (trainMoving(R) && R.progress < 0.5) ? 1 : 0;   // skip R's never-entered tile
+      const rPath = geomR.path.slice(rStart).map(e => ({...e}));
+      const dirIndex = (dx,dy) => DIRS.findIndex(dd => dd.dx === dx && dd.dy === dy);
+      const sameTile = (a,b) => a && b && a.x === b.x && a.y === b.y;
+      const lastF = fPath[fPath.length-1];
+      if (!sameTile(rPath[0], lastF) && sameTile(rPath[1], lastF)) rPath.shift(); // stray duplicate
+      const firstR = rPath[0];
+      if (!firstR) return {ok:false, error:"the consists are not lined up on the same track"};
+      if (sameTile(lastF, firstR)){
+        lastF.enter = firstR.enter;                       // one shared tile under the coupling
+        rPath.shift();
+      } else {
+        const dj = dirIndex(firstR.x - lastF.x, firstR.y - lastF.y);
+        if (dj < 0) return {ok:false, error:"the consists are not lined up on the same track"};
+        lastF.enter = dj;
+        firstR.exit = opposite(dj);
+      }
+      const mergedPath = fPath.concat(rPath);
+      // sanity: consecutive tiles must link via their enter/exit dirs — truncate at any break
+      // (a short path only means a later reverse asks to drive forward a little first)
+      for (let i = 0; i < mergedPath.length - 1; i++){
+        const d = dirIndex(mergedPath[i+1].x - mergedPath[i].x, mergedPath[i+1].y - mergedPath[i].y);
+        if (d < 0 || mergedPath[i].enter !== d || mergedPath[i+1].exit !== opposite(d)){ mergedPath.length = i + 1; break; }
+      }
+      const mergedUnits = trainUnits(F).concat(trainUnits(R));
+      const aActive = activeEngine(a);
+      for (const u of mergedUnits) if (u.kind === "engine") u.active = (aActive && u.id === aActive.id);
+      const merged = {
+        id: state.nextTrainId++, x: F.x, y: F.y, from: F.from,
+        speed: 0, wait: 0, holds: [], wantSince: null,
+        units: mergedUnits, mode: a.mode || "drive",
+        type: aActive && aActive.type != null ? aActive.type : a.type,
+        trail: trailSpan(geomF.pts, 0, LF).concat(trailSpan(geomR.pts, 0, LR)),
+        path: mergedPath
+      };
+      if (trainMoving(F)){ merged.prevX = F.prevX; merged.prevY = F.prevY; merged.moveDir = F.moveDir; merged.progress = F.progress; }
+      state.trains = state.trains.filter(t => t.id !== a.id && t.id !== b.id);
+      merged._tiles = computeBodyTiles(merged);
+      state.trains.push(merged);
+      updateSignals();
+      emit("info", `Coupled: ${trainDesc(merged)} is now ${mergedUnits.length} vehicles at ${placeLabel(merged.x,merged.y)}`);
+      return {ok:true, ...consistSummary(merged)};
+    }
+    // Place a standing consist on the track (head at x,y, facing `heading`), its body laid
+    // rearward along the existing rails. For building test scenarios and custom trains.
+    function cmdPlaceTrain(cmd){
+      const x = Number(cmd.x), y = Number(cmd.y);
+      const heading = typeof cmd.heading === "string" ? DIRNAMES.indexOf(cmd.heading.trim().toUpperCase()) : Number(cmd.heading);
+      const tile = getTile(x,y);
+      if (!tile) return {ok:false, error:"no track at that tile"};
+      if (!(heading >= 0 && heading < 8)) return {ok:false, error:"bad heading (N/NE/E/SE/S/SW/W/NW)"};
+      let from = null;
+      for (const route of routesFor(tile)){
+        if (route.length >= 2 && route.includes(heading)){ from = route[0] === heading ? route[1] : route[0]; break; }
+        if (route.length === 1 && route[0] === heading) from = null;
+      }
+      if (from == null) return {ok:false, error:"that tile has no route exiting " + DIRNAMES[heading]};
+      const specs = Array.isArray(cmd.units) && cmd.units.length ? cmd.units : null;
+      const units = specs
+        ? specs.map(u => makeUnit(u.kind === "engine" ? "engine" : "car", Math.max(0.2, Math.min(2, Number(u.len) || 0.5)), u.type != null ? Number(u.type) : (cmd.type != null ? Number(cmd.type) : state.selectedType)))
+        : unitsFor(cmd.type != null ? Number(cmd.type) : state.selectedType, cmd.cars);
+      for (const u of units) if (u.kind === "engine") u.active = false;
+      ensureActive(units);
+      const L = unitsLength(units);
+      // walk the rails rearward from the head to lay out the body
+      const path = [{x, y, enter: from, exit: null}];
+      let covered = halfLen(from), cx = x, cy = y, cFrom = from;
+      while (covered < L + 1.2){
+        const rx = cx + DIRS[cFrom].dx, ry = cy + DIRS[cFrom].dy;
+        const rt = getTile(rx, ry);
+        if (!rt) break;
+        const exR = opposite(cFrom);                    // the train left the rear tile this way
+        let enR = null;
+        if (rt.kind === "switch"){
+          if (exR === rt.stem) enR = switchCurrent(rt);
+          else if (rt.branches.includes(exR) && exR === switchCurrent(rt)) enR = rt.stem;
+          else return {ok:false, error:`the switch at ${rx},${ry} is set against the train's body`};
+        } else {
+          const route = routesFor(rt).find(r => r.includes(exR));
+          if (!route) break;
+          enR = route.length >= 2 ? (route[0] === exR ? route[1] : route[0]) : null;
+        }
+        path.push({x: rx, y: ry, enter: enR, exit: exR});
+        covered += halfLen(exR) + halfLen(enR);
+        if (enR == null) break;
+        cx = rx; cy = ry; cFrom = enR;
+      }
+      if (covered + ARC_EPS < L) return {ok:false, error:"not enough track behind the head for the whole consist"};
+      const pts = [centerW(x,y)];
+      for (let k=0; k<path.length-1; k++){
+        if (path[k].enter == null) break;
+        pts.push(endpointW(path[k].x, path[k].y, path[k].enter));
+        pts.push(centerW(path[k+1].x, path[k+1].y));
+      }
+      const train = {
+        id: state.nextTrainId++, x, y, from,
+        speed: 0, wait: 0, holds: [], wantSince: null,
+        units, mode: cmd.mode === "shunt" ? "shunt" : (cmd.mode === "stop" ? "stop" : "drive"),
+        trail: pts, path
+      };
+      const eng = units.find(u => u.kind === "engine");
+      train.type = eng && eng.type != null ? eng.type : (cmd.type != null ? Number(cmd.type) : state.selectedType);
+      train._tiles = computeBodyTiles(train);
+      for (const tk of train._tiles){ const {x:ox, y:oy} = readKey(tk); if (occupied(ox, oy, train.id)) return {ok:false, error:"another train is in the way"}; }
+      state.trains.push(train);
+      updateSignals();
+      return {ok:true, ...consistSummary(train)};
     }
 
     // ---- Edit commands (build/layout mutations) ----
@@ -1153,11 +1872,18 @@
       switch (cmd.type){
         case "throwSwitch":   return cmdThrowSwitch(cmd.x, cmd.y);
         case "setSwitch":     return cmdSetSwitch(cmd.x, cmd.y, cmd.to);
-        case "toggleSignal":  return cmdToggleSignal(cmd.x, cmd.y, cmd.dir);
-        case "clearSignal":   return cmdSetSignal(cmd.x, cmd.y, cmd.dir, true);
+        case "toggleSignal":  return cmdToggleSignal(cmd.x, cmd.y, cmd.dir, {shunt: !!cmd.shunt});
+        case "clearSignal":   return cmdSetSignal(cmd.x, cmd.y, cmd.dir, true, {shunt: !!cmd.shunt});
         case "redSignal":     return cmdSetSignal(cmd.x, cmd.y, cmd.dir, false);
-        case "spawn":         return cmdSpawn(cmd.x, cmd.y, cmd.dir, cmd.type);
+        case "spawn":         return cmdSpawn(cmd.x, cmd.y, cmd.dir, cmd.type, cmd.cars);
         case "removeTrain":   return cmdRemoveTrain(cmd.x, cmd.y);
+        case "reverse":       return cmdReverse(cmd);
+        case "setTrainMode":  return cmdSetTrainMode(cmd);
+        case "detach":        return cmdDetach(cmd);
+        case "couple":        return cmdCouple(cmd);
+        case "placeTrain":    return cmdPlaceTrain(cmd);
+        case "toggleShuntSignal": return cmdToggleShuntSignal(cmd.x, cmd.y);
+        case "setShuntSignal":    return cmdSetShuntSignal(cmd.x, cmd.y, cmd.stop);
         case "setTile":       return cmdSetTile(cmd.x, cmd.y, cmd.tile);
         case "removeTile":    return cmdRemoveTile(cmd.x, cmd.y, cmd.andTrains);
         case "setStations":   return cmdSetStations(cmd.stations);
@@ -1195,7 +1921,16 @@
       return hit ? {station: st, x: hit.x, y: hit.y, tile: hit.tile} : null;
     }
     const DIRNAMES = ["N","NE","E","SE","S","SW","W","NW"];
-    function trainStopped(t){ return !(trainMoving(t) || (t.speed || 0) > 0); }
+    // Stopped = not gaining ground. A shunting consist halted buffers-to-buffers sits
+    // mid-transition (progress < 1) with speed 0 — that counts as stopped; so do engineless
+    // cuts of cars, whatever discrete state they were left in.
+    function trainStopped(t){
+      if ((t.speed || 0) > 0) return false;
+      if (!hasActiveEngine(t)) return true;
+      if (t.mode === "stop") return true;    // handbrake: standing wherever it is, even mid-tile
+      if (!trainMoving(t)) return true;
+      return !!t._touch;
+    }
     // Track when each train last became stopped, so masters can see how long one has been waiting
     // and clear the longest-waiting first. (haltedSince is a simFrame; null when moving.)
     function updateHaltTimers(){
@@ -1210,6 +1945,11 @@
     // Why a train is sitting still (best effort), so a master can see what to do about it.
     function trainWaitReason(t){
       if (!trainStopped(t)) return null;
+      if (!hasActiveEngine(t)) return "no engine (uncoupled cars)";
+      if (t._touch) return t.mode === "stop"
+        ? "buffers touching — holding in stop mode (couple / reverse / set a mode)"
+        : "buffers touching the consist ahead (couple or reverse)";
+      if (t.mode === "stop") return "holding in stop mode (ordered to stand)";
       const tile = getTile(t.x, t.y);
       if (!tile) return "off track";
       const ex = exitFor(tile, t.from);
@@ -1220,7 +1960,9 @@
         if (!mainIsGreenFor(t, mk)) return "held at a red automatic signal";
       }
       if (tile.kind === "stop" && ex === tile.dir && state.simFrame < t.releaseFrame) return "dwelling at stop";
+      if (isShunting(t) && tile.shuntSignal && tile.shuntStop) return "held at a shunting disc";
       const nx = t.x + DIRS[ex].dx, ny = t.y + DIRS[ex].dy;
+      if (isShunting(t) && !stationContaining(nx, ny)) return "at the station boundary (shunting stays inside the station)";
       if (occupied(nx, ny, t.id)) return "train ahead";
       const nt = getTile(nx, ny);
       if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return "switch set against ahead";
@@ -1235,10 +1977,11 @@
         const tt = trainTypeById(t.type);
         const st = stationContaining(t.x, t.y);
         return {
-          id: t.id, type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
+          type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
           x: t.x, y: t.y, station: st ? st.name : null, at: tile && tile.name ? tile.name : null,
           heading: ex != null ? DIRNAMES[ex] : null, moving: !trainStopped(t),
-          waitingFor: trainWaitReason(t), waitedSeconds: waitedSecs(t)
+          waitingFor: trainWaitReason(t), waitedSeconds: waitedSecs(t),
+          ...consistSummary(t), touching: !!t._touch
         };
       });
     }
@@ -1269,7 +2012,20 @@
             waiting
           };
         });
-        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals};
+        // shunting discs (bidirectional, on plain track): clear by default, "stop" halts shunting moves
+        const shuntSignals = items.filter(i => i.tile.kind === "track" && i.tile.shuntSignal).map(i => ({
+          name: i.tile.name || null, x: i.x, y: i.y, stop: !!i.tile.shuntStop
+        }));
+        // consists whose head stands inside this station — the targets of shunting orders
+        const r = normRect(st.rect);
+        const consists = state.trains
+          .filter(t => r && t.x >= r.x0 && t.x <= r.x1 && t.y >= r.y0 && t.y <= r.y1)
+          .map(t => {
+            const tile = getTile(t.x, t.y);
+            return {...consistSummary(t), at: tile && tile.name ? tile.name : `${t.x},${t.y}`,
+              moving: !trainStopped(t), waitingFor: trainWaitReason(t), touching: !!t._touch};
+          });
+        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals, shuntSignals, consists};
       });
     }
     // Trains CURRENTLY stopped at the given owners' signals — synthetic "waiting" events so the
@@ -1281,17 +2037,21 @@
       for (const st of state.stations){
         if (set && !set.has(st.name)) continue;
         for (const i of tilesInStation(st)){
-          if (i.tile.kind !== "signal" || !manualDirs(i.tile).length) continue; // only operator-cleared signals
+          // operator-cleared signals — and shunting discs set to stop with a shunter held at them
+          const disc = i.tile.kind === "track" && i.tile.shuntSignal && i.tile.shuntStop;
+          if (!disc && (i.tile.kind !== "signal" || !manualDirs(i.tile).length)) continue;
           for (const t of state.trains){
             if (t.x !== i.x || t.y !== i.y || !trainStopped(t) || !trainWaitReason(t)) continue;
+            if (!hasActiveEngine(t)) continue;             // parked cars are not "waiting" for a signal
+            if (disc && !isShunting(t)) continue;          // a disc only concerns shunting moves
             const ex = exitFor(i.tile, t.from);
             // Only a train facing this signal in one of its MANUAL directions is the master's to clear;
             // a train passing the other (automatic) way is held by automatic logic, not this signal.
-            if (ex == null || !manualDirs(i.tile).includes(ex)) continue;
+            if (!disc && (ex == null || !manualDirs(i.tile).includes(ex))) continue;
             const tt = trainTypeById(t.type);
             out.push({ mode: "waiting", owner: st.name, element: i.tile.name || null,
-              trainId: t.id, trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
-              wantsDir: DIRNAMES[ex], waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
+              trainId: publicTrainId(t), trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
+              wantsDir: ex != null ? DIRNAMES[ex] : null, waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
           }
         }
       }
@@ -1436,7 +2196,8 @@
         seq: ++watchEventSeq, frame: state.simFrame, clock: formatClock(state.simFrame),
         watchId: w.id, owner: w.owner, label: w.label || null, element: w.element || null,
         mode: w.mode, x: w.x, y: w.y,
-        trainId, trainType: type, trainTypeName: tt && tt.name ? tt.name : (type != null ? `type ${type}` : null)
+        trainId: t ? publicTrainId(t) : trainId,   // events expose the PUBLIC (active-engine) id
+        trainType: type, trainTypeName: tt && tt.name ? tt.name : (type != null ? `type ${type}` : null)
       });
       if (state.watchEvents.length > 500) state.watchEvents.shift();
     }
@@ -1541,15 +2302,15 @@
     function serHold(h){ return {blockId:h.blockId, entryMainKey:h.entryMainKey, entryMainTile:h.entryMainTile, approach: h.approach ? [...h.approach] : null, rollThrough: !!h.rollThrough}; }
     function cleanTrain(t){
       const o = {};
-      for (const k in t){ if (k === "_tiles" || k === "_ap") continue; if (k === "holds") o.holds = (t.holds||[]).map(serHold); else o[k] = t[k]; }
+      for (const k in t){ if (k.startsWith("_")) continue; if (k === "holds") o.holds = (t.holds||[]).map(serHold); else o[k] = t[k]; }
       return o;
     }
-    function serRouteLock(rl){ return {mk:rl.mk, switchKeys:rl.switchKeys, path:rl.path, trainId:rl.trainId, armed:rl.armed, enteredTile:[...rl.enteredTile], passedTile:[...rl.passedTile]}; }
+    function serRouteLock(rl){ return {mk:rl.mk, switchKeys:rl.switchKeys, path:rl.path, trainId:rl.trainId, armed:rl.armed, shunt:!!rl.shunt, moved:!!rl.moved, enteredTile:[...rl.enteredTile], passedTile:[...rl.passedTile]}; }
     function snapshot(){
       return {
         version: 3,
         simFrame: state.simFrame, frame: state.frame, tick: state.tick, paused: state.paused, speedScale: state.speedScale || 1, dayLength: state.dayLength || 600,
-        nextTrainId: state.nextTrainId, nextStationId: state.nextStationId, selectedType: state.selectedType,
+        nextTrainId: state.nextTrainId, nextStationId: state.nextStationId, nextUnitId: state.nextUnitId || 0, selectedType: state.selectedType,
         trainTypes: state.trainTypes, stations: state.stations,
         tiles: [...state.tiles].map(([k,tile]) => ({...readKey(k), tile})),
         trains: state.trains.map(cleanTrain),
@@ -1578,6 +2339,9 @@
       state.tiles = new Map();
       for (const it of (s.tiles||[])){ if (it && it.tile && Number.isFinite(it.x) && Number.isFinite(it.y)) setTile(it.x, it.y, it.tile); }
       state.trains = (s.trains||[]).map(deHydrateTrain);
+      // keep unit ids unique across a reload (legacy trains migrate lazily via trainUnits)
+      state.nextUnitId = s.nextUnitId || 0;
+      for (const t of state.trains) for (const u of (t.units || [])) if (u.id > state.nextUnitId) state.nextUnitId = u.id;
       state.manualGreen = new Set(s.manualGreen||[]);
       state.routeLocks = (s.routeLocks||[]).map(deRouteLock);
       state.lockedSwitchKeys = new Set();
@@ -1585,7 +2349,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SHUNT_SPEED_FACTOR, COUPLE_DIST, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, activeEngine, hasActiveEngine, trainEngines, unitsLength, defaultUnits, unitsFor, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, bodyGeometry, obstacleDistance, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, cmdReverse, cmdSetTrainMode, cmdDetach, cmdCouple, cmdPlaceTrain, resolveConsist, consistSummary, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
   }
   return { createEngine };
 });

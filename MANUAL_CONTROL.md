@@ -128,6 +128,79 @@ Points are listed here with status, and the work was delivered incrementally.
 
 ---
 
+## Shunting — **done** (branch `shunting`)
+
+Trains are **consists of units** — engines and cars, front-to-back, each unit with a persistent
+id; exactly one engine per consist is **active** and drives it. A cut of cars (no active engine)
+never moves but occupies track. Coupled vehicles **touch** (no gap); rendering insets each unit's
+rounded caps so bodies meet at the coupling without overlapping. Inactive (hauled) engines draw
+dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
+
+- **Exact tile paths.** Besides the sampled trail, every train keeps `path` — the ordered tiles
+  under it (`{x, y, enter, exit}` head-first), maintained on every step. Reversing and splitting
+  re-derive the head's discrete state from it exactly, including mid-tile (buffers-touching) stops.
+- **Reverse** flips units/path/trail in place; an engine behind cars then pushes them. Refused if
+  the new front would pass a red manual main; passing a green one does the normal drop-red+arm-lock
+  bookkeeping.
+- **Uncouple / couple.** `detach` cuts at a coupling (`keep` cars stay on the active engine); the
+  standing portion becomes a new engineless consist. `couple` merges with the touching consist
+  (either end; the other consist is reversed in place if needed) — the commanding engine stays
+  active, picked-up engines go inactive, and the merged train keeps its identity: a consist is
+  EXPOSED (UI/API/MCP) under its **active engine's fixed unit id** — engine "2" dropping some
+  cars and picking up others is still train "2"; a pure cut of cars goes by its first vehicle's
+  id. Internal consist ids stay internal.
+- **Modes** (`setTrainMode`): `drive` (normal), `shunt` (~⅓ speed, skips stop dwell, and replaces
+  the one-tile standoff with a per-frame forward scan that clamps motion to the **touch distance**
+  of the next body) and `stop` (the handbrake: the consist stands where it is even when it could
+  move). A shunting consist that comes to a stand buffers-to-buffers enters `stop` by itself, so a
+  `couple` never sends the merged train creeping off — couple → reverse → drive is the idiom.
+  Switching to `drive` is refused while the buffers touch stock ahead (the one-tile standoff is
+  already gone and a driving train would pull straight through) — and as a belt-and-braces
+  backstop, a drive-mode train whose head shares a tile with another body engages the touch clamp
+  too, so stock can never be driven through even from a forced state.
+  Signals apply to the leading end in every mode (3d: the "flagman" rides the leading car).
+  A shunting consist also **never crosses a station boundary outward**: it halts on the last
+  tile inside the station like at a signal at danger, stays in shunting mode, and can be
+  reversed back — the boundary is a natural shunting limit (entering a station is allowed).
+- **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
+  clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route
+  lock releases once the move comes to a stand.
+- **Shunting discs.** A bidirectional shunt-only signal carried by a plain two-ended track tile
+  (`shuntSignal`; never on switches, buffers, crossings, stops or signal tiles — a manual signal
+  already halts shunting moves). **Clear by default**: a white disc with a black rim at the tile
+  centre, drawn above the rails but below the trains (a shunter standing on it covers it, like
+  any lineside equipment; its state stays visible in reports); set to
+  **stop** it turns **bright blue** and halts SHUNTING moves at the disc — every other train
+  ignores it in both states. Operate-click toggles it; the right-click menu on a track tile
+  adds/removes one (placed clear) and names it. State flips via the operate commands
+  `toggleShuntSignal` / `setShuntSignal` (no layout undo, like throwing a switch), the
+  station API `POST /api/stations/:id/shunt-signal`, and MCP `set_shunt_signal`; station reports
+  list `shuntSignals`, and a held shunter surfaces as a `waiting` event.
+- **Station rule.** reverse/uncouple/couple (and entering shunt mode) are refused unless the
+  consist stands inside a station — and inside *that* station when ordered through the
+  station-scoped API. Shunting is the station master's job (see `STATION_MASTER.md`).
+- **UI.** Right-click any tile under a consist: composition, Reverse, Drive/Shunt/Stop, Couple,
+  and an Uncouple button per coupling; manual signals gain per-direction "clear for shunting"
+  buttons. A shunt-cleared main renders as a **red triangle with a green ring** (vs. the proper
+  green of a normal clear); the front-of-consist dot is white/amber/red for drive/shunt/stop.
+  Every **closed coupling** carries a small light disc, so connected vehicles read differently
+  from ones merely standing buffer-to-buffer; a cut with **no engine** draws a **red outline**
+  (handbrakes on) instead of the normal black one. Under an occupied-block / cleared-route halo
+  (whose dark band runs along BOTH legs of a switch) the switch's **set-against outbound leg
+  draws its inactive marker thick**, cutting through the band's black outline (the inbound stem
+  keeps its normal outlined look), so the dead leg can't be mistaken for a live rail and which
+  way the switch lies stays obvious.
+  Left-clicking a **bidirectional** manual signal in Operate operates the main on the side of the
+  track that was clicked (each main's triangle sits to the right of its travel direction).
+  Spawning a train (right-click a track tile, or a spawn tile's config) takes a **number of
+  cars** to put behind the engine.
+- **Test case.** `examples/shuttle.json` — a single line between two run-around termini; an
+  engine+car shuttle whose engine runs around the car at each end. `node test/engine-shunt.test.js`
+  (in-process geometry + a full round trip) and `node test/shuttle.test.js` (the same choreography
+  through the HTTP Station-Master API against a real isolated server).
+
+---
+
 ## Server-only authoritative mode + external control API — **done**
 
 The game **always** runs on a **server** (there is no single-page / offline mode), so it can be
