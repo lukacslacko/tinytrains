@@ -177,6 +177,32 @@ console.log("snapshot round trip preserves consists mid-shunt");
 }
 
 // ---------------------------------------------------------------------------
+// Shunting never leaves the station: the boundary halts a shunting consist like a signal
+// at danger — it stays in shunting mode and can be reversed back; drive mode crosses freely.
+console.log("shunting stops at the station boundary");
+{
+  const layout = straightLine(14);
+  layout.stations = [{id:1, name:"Yard", instructions:"", overrides:[], rect:{x0:0, y0:0, x1:6, y1:0}}];
+  const E = engineWith(layout);
+  const r = assertOk(E.command({type:"placeTrain", x:2, y:0, heading:"E", units:[{kind:"engine", len:0.5, type:1}], mode:"shunt"}), "place a shunting engine");
+  const eng = trainById(E, r.id);
+  waitFor(E, () => eng.x === 6 && !E.trainMoving(eng) && (eng.speed||0) === 0, 6000, "engine halts on the last tile inside the station");
+  for (let i = 0; i < 300; i++) E.simStep();
+  assert(eng.x === 6 && !E.trainMoving(eng), "it stays at the boundary");
+  assert(eng.mode === "shunt", "it STAYS in shunting mode (not stop mode)");
+  const report = E.trainsReport().find(t => t.id === eng.id);
+  assert(/station boundary/.test(report.waitingFor || ""), `wait reason names the boundary (got: ${report.waitingFor})`);
+  // reverse back into the station: the boundary is a natural shunting limit
+  assertOk(E.command({type:"reverse", train: eng.id}), "reverse at the boundary");
+  waitFor(E, () => E.headWorld(eng).x < 4.5, 6000, "engine shunts back into the station");
+  waitFor(E, () => eng.x === 0 && !E.trainMoving(eng) && (eng.speed||0) === 0, 8000, "engine runs to the end of the yard and stops");
+  // a DRIVING train crosses the boundary freely
+  assertOk(E.command({type:"reverse", train: eng.id}), "turn it around again");
+  assertOk(E.command({type:"setTrainMode", train: eng.id, mode: "drive"}), "drive mode");
+  waitFor(E, () => eng.x > 8, 6000, "in drive mode it leaves the station normally");
+}
+
+// ---------------------------------------------------------------------------
 // Regression: a consist standing buffers-to-buffers must not be able to DRIVE through
 // the stock ahead. Switching to drive while touching is refused; and even if the mode
 // is forced (old snapshot, direct edit), the drive-mode overlap clamp holds the train.

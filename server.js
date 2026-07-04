@@ -316,7 +316,10 @@ but ONLY while standing inside a station, and it is YOUR job at your station. Th
     mode first; the report shows \`touching\`). The engine you command stays in charge; engines in
     the picked-up consist go inactive until cut off again.
 Shunting moves obey signals like any train — the LEADING end (even when it is a pushed car)
-stops at a red main. Two extras exist for shunting:
+stops at a red main. A shunting consist also NEVER LEAVES THE STATION: the station boundary
+halts it exactly like a signal at danger (it stays in shunting mode — set the switches and
+reverse it back; entering a station from outside is allowed, only the way out is barred).
+Two extras exist for shunting:
   - clear_signal with **shunt:true** opens a route INTO occupied track (needed to reach stock you
     want to couple), and its route lock releases as soon as the move comes to a stand.
   - A route may end at a BUFFER (a stub), not only at the next signal.

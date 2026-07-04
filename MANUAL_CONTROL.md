@@ -156,6 +156,9 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
   backstop, a drive-mode train whose head shares a tile with another body engages the touch clamp
   too, so stock can never be driven through even from a forced state.
   Signals apply to the leading end in every mode (3d: the "flagman" rides the leading car).
+  A shunting consist also **never crosses a station boundary outward**: it halts on the last
+  tile inside the station like at a signal at danger, stays in shunting mode, and can be
+  reversed back — the boundary is a natural shunting limit (entering a station is allowed).
 - **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
   clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route
   lock releases once the move comes to a stand.

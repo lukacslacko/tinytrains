@@ -93,6 +93,10 @@ every order below is refused unless the consist stands **inside the commanding s
   `stop` **by itself**, so a `couple` order never makes the merged train creep off — the usual
   sequence is *couple → reverse → drive*. Signals apply in every mode, always to the **leading
   end** of the consist (a pushed car respects them like a flagman riding the leading step).
+  A shunting consist also **never leaves the station**: the station boundary halts it exactly
+  like a signal at danger — it stays in shunting mode, ready to be reversed back (entering a
+  station from outside is allowed; only the way out is barred). The boundary is thus a natural
+  shunting limit: run an engine up to it, throw the switches behind it, reverse.
 - **Reverse** flips the whole consist: the leading end becomes the trailing end, so an engine
   behind cars pushes them. Only while stopped. If the new front would roll past a **red** manual
   main (the consist stands right on the signal), the reverse is refused — clear that signal first;

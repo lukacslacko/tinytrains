@@ -1078,6 +1078,10 @@
     const nx = x + DIRS[ex].dx, ny = y + DIRS[ex].dy;
     const nt = getTile(nx,ny);
     if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return false;
+    // Shunting never leaves the station: the boundary halts a shunting consist exactly like
+    // a signal at danger (it stays in shunting mode and can be reversed back). Entering a
+    // station from outside is fine — only the way OUT is barred.
+    if (isShunting(train) && !stationContaining(nx,ny)) return false;
     // Driving on sight: never roll onto an occupied tile, brake to a stop one tile short.
     // A SHUNTING consist is allowed closer — the touch clamp (advanceWithSpeed) stops it
     // the moment its buffers meet the other body instead.
@@ -1219,6 +1223,8 @@
     const nextTile = getTile(nx,ny);
     if (!nextTile || !tileAccepts(nextTile,nf) || !switchAccepts(nextTile,nf)){ train.speed = 0; return; }
     if (isShunting(train)){
+      // the station boundary halts a shunting move (still in shunting mode, ready to reverse)
+      if (!stationContaining(nx,ny)){ train.speed = 0; return; }
       // buffers already touching the next body: stay put (in stop mode) instead of committing a step
       if (obstacleDistance(train) <= TOUCH_NEAR + 0.02){ train.speed = 0; train._touch = true; train.mode = "stop"; return; }
     } else if (occupied(nx,ny,train.id)){ train.speed = 0; return; } // drive on sight: stop a tile short
@@ -1910,6 +1916,7 @@
       }
       if (tile.kind === "stop" && ex === tile.dir && state.simFrame < t.releaseFrame) return "dwelling at stop";
       const nx = t.x + DIRS[ex].dx, ny = t.y + DIRS[ex].dy;
+      if (isShunting(t) && !stationContaining(nx, ny)) return "at the station boundary (shunting stays inside the station)";
       if (occupied(nx, ny, t.id)) return "train ahead";
       const nt = getTile(nx, ny);
       if (!nt || !tileAccepts(nt, opposite(ex)) || !switchAccepts(nt, opposite(ex))) return "switch set against ahead";
