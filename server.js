@@ -304,7 +304,9 @@ but ONLY while standing inside a station, and it is YOUR job at your station. Th
     restores normal running (do this before dispatching a train onto the line). "stop" is the
     handbrake: the consist stands where it is even when it could move. A shunting consist that
     comes to a stand buffers-to-buffers enters "stop" BY ITSELF — so after **couple** nothing
-    creeps off: the usual sequence is couple → reverse_engine → set_drive_mode "drive".
+    creeps off: the usual sequence is couple → reverse_engine → set_drive_mode "drive". Switching
+    to "drive" is REFUSED while the buffers touch stock ahead (a driving train would pull
+    straight through it) — couple, or reverse away first.
   - **reverse_engine(train)** — change direction (an engine behind cars then pushes them). Only
     when stopped. If the front would roll past a red manual signal, the reverse is refused —
     clear that signal first.

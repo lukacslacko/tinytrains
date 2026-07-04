@@ -151,6 +151,10 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
   of the next body) and `stop` (the handbrake: the consist stands where it is even when it could
   move). A shunting consist that comes to a stand buffers-to-buffers enters `stop` by itself, so a
   `couple` never sends the merged train creeping off — couple → reverse → drive is the idiom.
+  Switching to `drive` is refused while the buffers touch stock ahead (the one-tile standoff is
+  already gone and a driving train would pull straight through) — and as a belt-and-braces
+  backstop, a drive-mode train whose head shares a tile with another body engages the touch clamp
+  too, so stock can never be driven through even from a forced state.
   Signals apply to the leading end in every mode (3d: the "flagman" rides the leading car).
 - **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
   clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route

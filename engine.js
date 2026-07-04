@@ -1103,10 +1103,12 @@
     let target = maxV;
     if (halt) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, remaining)));
     let obstDist = Infinity;
-    if (shunt){
-      obstDist = obstacleDistance(train);
-      if (obstDist < Infinity) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, obstDist)));
-    }
+    // Shunting always creeps under the touch clamp. Driving normally relies on the one-tile
+    // standoff instead — but when the head SHARES its tile with another body (e.g. the mode
+    // was switched off shunting while standing buffers-to-buffers), that standoff is already
+    // gone: engage the clamp there too, so a train can never drive THROUGH stock.
+    if (shunt || occupied(train.x, train.y, train.id)) obstDist = obstacleDistance(train);
+    if (obstDist < Infinity) target = Math.min(target, Math.sqrt(2 * DECEL * Math.max(0, obstDist)));
     if (train.speed < target) train.speed = Math.min(target, train.speed + accV);
     else train.speed = target;
     let advance = train.speed;
@@ -1116,7 +1118,7 @@
     } else {
       train.progress = Math.min(1, train.progress + advance / seg);
     }
-    train._touch = shunt && train.speed === 0 && obstDist <= 0.1;
+    train._touch = train.speed === 0 && obstDist <= 0.1;
     // Coming to a stand buffers-to-buffers drops the consist into STOP mode: after a couple
     // (or an accidental nudge) it must not creep off on its own — the master reverses it or
     // picks a mode explicitly.
@@ -1511,6 +1513,11 @@
       if (mode === "shunt"){
         const g = shuntGuard(t, cmd.station); if (!g.ok) return g;
       }
+      // Driving assumes a one-tile standoff to other stock; standing buffers-to-buffers that
+      // is already gone, so a consist touching stock AHEAD may not switch to drive — it would
+      // pull straight through it. Couple, or reverse away first.
+      if (mode === "drive" && obstacleDistance(t) <= 0.12)
+        return {ok:false, error:"the buffers are touching the stock ahead — couple or reverse away first (or keep shunting)"};
       t.mode = mode;
       if (mode === "drive") delete t._touch;
       updateSignals();

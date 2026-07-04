@@ -177,6 +177,30 @@ console.log("snapshot round trip preserves consists mid-shunt");
 }
 
 // ---------------------------------------------------------------------------
+// Regression: a consist standing buffers-to-buffers must not be able to DRIVE through
+// the stock ahead. Switching to drive while touching is refused; and even if the mode
+// is forced (old snapshot, direct edit), the drive-mode overlap clamp holds the train.
+console.log("drive mode cannot pass through touching stock");
+{
+  const E = engineWith(straightLine(14));
+  assertOk(E.command({type:"placeTrain", x:9, y:0, heading:"E", units:[{kind:"car", len:0.5}]}), "park a single car");
+  const r = assertOk(E.command({type:"placeTrain", x:3, y:0, heading:"E", units:[{kind:"engine", len:0.5, type:1}], mode:"shunt"}), "place a shunting engine");
+  const eng = trainById(E, r.id);
+  waitFor(E, () => eng._touch, 6000, "engine touches the car");
+  const sw = E.command({type:"setTrainMode", train: eng.id, mode:"drive"});
+  assert(!sw.ok && /touching/.test(sw.error), "switching to drive while touching is refused");
+  // force the mode anyway: the overlap clamp must still keep it off the car (rear at x 9.0)
+  eng.mode = "drive";
+  for (let i = 0; i < 400; i++) E.simStep();
+  assert(E.headWorld(eng).x <= 9.02, `clamped short of the car even in drive mode (head x ${E.headWorld(eng).x.toFixed(3)})`);
+  assert(eng.mode === "stop", "the anomaly drops the consist onto the handbrake");
+  // reversing away and THEN driving is fine
+  assertOk(E.command({type:"reverse", train: eng.id}), "reverse away from the car");
+  assertOk(E.command({type:"setTrainMode", train: eng.id, mode:"drive"}), "drive is allowed once the stock is behind");
+  waitFor(E, () => E.headWorld(eng).x < 7, 4000, "engine drives away west");
+}
+
+// ---------------------------------------------------------------------------
 // Regression: couple with a TWO-car cut whose tail sits exactly ON a tile boundary,
 // then reverse IMMEDIATELY (before anything moves). The merged tile path used to pick
 // up doubled-back duplicate tiles at the junction (F's path cut one tile too deep +
