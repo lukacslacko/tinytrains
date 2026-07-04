@@ -128,6 +128,42 @@ Points are listed here with status, and the work was delivered incrementally.
 
 ---
 
+## Shunting — **done** (branch `shunting`)
+
+Trains are **consists of units** — engines and cars, front-to-back, each unit with a persistent
+id; exactly one engine per consist is **active** and drives it. A cut of cars (no active engine)
+never moves but occupies track. Coupled vehicles **touch** (no gap); rendering insets each unit's
+rounded caps so bodies meet at the coupling without overlapping. Inactive (hauled) engines draw
+dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
+
+- **Exact tile paths.** Besides the sampled trail, every train keeps `path` — the ordered tiles
+  under it (`{x, y, enter, exit}` head-first), maintained on every step. Reversing and splitting
+  re-derive the head's discrete state from it exactly, including mid-tile (buffers-touching) stops.
+- **Reverse** flips units/path/trail in place; an engine behind cars then pushes them. Refused if
+  the new front would pass a red manual main; passing a green one does the normal drop-red+arm-lock
+  bookkeeping.
+- **Uncouple / couple.** `detach` cuts at a coupling (`keep` cars stay on the active engine); the
+  standing portion becomes a new engineless consist. `couple` merges with the touching consist
+  (either end; the other consist is reversed in place if needed) — the commanding engine stays
+  active, picked-up engines go inactive, and the merge yields a new train id (engine ids persist).
+- **Shunt mode** (`setTrainMode`): ~⅓ speed, skips stop dwell, and replaces the one-tile standoff
+  with a per-frame forward scan that clamps motion to the **touch distance** of the next body.
+  Signals still apply to the leading end in both modes (3d: the "flagman" rides the leading car).
+- **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
+  clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route
+  lock releases once the move comes to a stand.
+- **Station rule.** reverse/uncouple/couple (and entering shunt mode) are refused unless the
+  consist stands inside a station — and inside *that* station when ordered through the
+  station-scoped API. Shunting is the station master's job (see `STATION_MASTER.md`).
+- **UI.** Right-click any tile under a consist: composition, Reverse, Shunt/Drive, Couple, and an
+  Uncouple button per coupling; manual signals gain per-direction "clear for shunting" buttons.
+- **Test case.** `examples/shuttle.json` — a single line between two run-around termini; an
+  engine+car shuttle whose engine runs around the car at each end. `node test/engine-shunt.test.js`
+  (in-process geometry + a full round trip) and `node test/shuttle.test.js` (the same choreography
+  through the HTTP Station-Master API against a real isolated server).
+
+---
+
 ## Server-only authoritative mode + external control API — **done**
 
 The game **always** runs on a **server** (there is no single-page / offline mode), so it can be
