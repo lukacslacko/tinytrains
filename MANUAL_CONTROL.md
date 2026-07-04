@@ -168,7 +168,9 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
   green of a normal clear); the front-of-consist dot is white/amber/red for drive/shunt/stop.
   Every **closed coupling** carries a small light disc, so connected vehicles read differently
   from ones merely standing buffer-to-buffer; a cut with **no engine** draws a **red outline**
-  (handbrakes on) instead of the normal black one.
+  (handbrakes on) instead of the normal black one. Under an occupied-block / cleared-route halo
+  (whose dark band runs along BOTH legs of a switch) the switch's **set branch is drawn bold**
+  over the band, so which way it lies stays obvious.
   Left-clicking a **bidirectional** manual signal in Operate operates the main on the side of the
   track that was clicked (each main's triangle sits to the right of its travel direction).
   Spawning a train (right-click a track tile, or a spawn tile's config) takes a **number of

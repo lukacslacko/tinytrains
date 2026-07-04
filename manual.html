@@ -846,15 +846,20 @@
     for (const s of segs) drawRouteWide(s.x, s.y, s.seg, "#0b0e12", blackW);  // …then black over it
   }
   // Occupied AUTOMATIC blocks get a grey outline (same band style as a locked manual route),
-  // marking every track in the flood-filled block while a train sits inside it.
+  // marking every track in the flood-filled block while a train sits inside it. The tile keys
+  // painted this frame are stashed so drawTileRoutes can bold a switch's SET branch on top —
+  // the band runs along BOTH branches, which would otherwise make the thin set-against branch
+  // read as a full-thickness rail.
+  let occupiedBandKeys = new Set();
   function drawOccupiedBlockOutlines(){
     const sys = state.sys;
+    occupiedBandKeys = new Set();
     if (!sys) return;
     const railW = trackW();
     const bandW = railW + tileSize() * .18;
     const blackW = railW + tileSize() * .09;
     const segs = [];
-    const seen = new Set();
+    const seen = occupiedBandKeys;
     for (const [id, tiles] of sys.blockTiles){
       if (!blockOccupiedByOther(id, sys, null)) continue;   // only occupied blocks
       for (const k of tiles){
@@ -957,7 +962,13 @@
     if (tile.kind === "switch"){
       const cur = switchCurrent(tile), other = switchOther(tile);
       if (other != null) drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch, true); // dimmed + THIN: set-against side
-      drawRoute(x,y,[tile.stem, cur], false);                                              // full rail: the set route
+      // Under a block/route halo the dark band runs along BOTH branches, which makes even the
+      // thin set-against branch read as a full rail. Bold the SET branch over the black band
+      // (still inside the coloured rim) so which way the switch lies stays obvious.
+      if (occupiedBandKeys.has(key(x,y)) || switchLocked(x,y))
+        drawRouteWide(x,y,[tile.stem, cur], T.rail, trackW() + tileSize() * .10);
+      else
+        drawRoute(x,y,[tile.stem, cur], false);                                            // full rail: the set route
       return;
     }
     for (const route of routesFor(tile)) drawRoute(x,y,route,false);
