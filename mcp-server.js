@@ -81,7 +81,7 @@ const TOOLS = [
     run: async (a) => ({ youManage: POSTS, stations: ((await api("GET", "/api/stations", null, someGame(a))).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) }) },
 
   { name: "get_infrastructure",
-    description: "A station's switches, signals and consists with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type, which way it wants to go, and waitedSeconds = how long it has been stuck); plus `consists` — every train standing in the station with its units (engines+cars, ids), mode (drive/shunt), active engine, and whether its buffers are touching other stock. Check regularly: route waiting trains, clearing the one with the HIGHEST waitedSeconds first.",
+    description: "A station's switches, signals and consists with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type, which way it wants to go, and waitedSeconds = how long it has been stuck); `shuntSignals` — the station's shunting discs and whether each is at stop; plus `consists` — every train standing in the station with its units (engines+cars, ids), mode (drive/shunt/stop), active engine, and whether its buffers are touching other stock. Check regularly: route waiting trains, clearing the one with the HIGHEST waitedSeconds first.",
     inputSchema: { type: "object", properties: STATION_PROP },
     run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station; } },
 
@@ -130,6 +130,11 @@ const TOOLS = [
     description: "Couple a consist with the stock it is TOUCHING (drive up to it in shunting mode first — get_infrastructure shows `touching:true` when the buffers meet). Your engine stays the active one; engines inside the picked-up stock go inactive until cut off again. Returns the merged consist — NOTE it has a NEW train id (engine unit ids are stable, so addressing by `engine` keeps working).",
     inputSchema: { type: "object", properties: { train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP } },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "couple", train: a.train, engine: a.engine }, p.game)).body; } },
+
+  { name: "set_shunt_signal",
+    description: "Set a SHUNTING DISC to 'stop' or 'clear'. Discs are bidirectional markers on plain track that ONLY shunting moves obey: clear (white) by default, everyone passes; set to stop (blue) a SHUNTING consist halts at the disc while ordinary trains ignore it completely. Use one to hold a shunter at a spot or to protect part of the yard during shunting. Your station's discs are listed by get_infrastructure under `shuntSignals` (with their state).",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "disc name, e.g. 'D1'" }, state: { type: "string", enum: ["stop", "clear"] }, ...STATION_PROP }, required: ["element", "state"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/shunt-signal`, { name: a.element, action: a.state }, p.game)).body; } },
 
   { name: "set_path",
     description: "Route a train in one call — the EASY way to follow a 'set path …' instruction. Give the path as element names: the entry SIGNAL the train arrives at, then the SWITCHES in order, and optionally a final signal or compass direction. It lines up every switch and clears the entry signal. The entry signal is implied by your instruction: 'arrives at A: set path 1,2,3' → set_path(path=[\"A\",\"1\",\"2\",\"3\"]); 'set path 4 East' at B → set_path(path=[\"B\",\"4\",\"E\"]). Returns which switches were set, or why it couldn't.",

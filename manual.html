@@ -915,6 +915,18 @@
     ctx.fillStyle = LOCK_GREEN; ctx.fill();
     ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
+  // A shunting disc at a tile's centre: white = clear, bright blue = stops shunting moves
+  // (ordinary trains ignore it). Drawn ON TOP of trains — its state must stay readable while
+  // a shunter stands right on it.
+  function drawShuntDisc(x,y,tile){
+    if (tile.kind !== "track" || !tile.shuntSignal) return;
+    const c = centerPoint(x,y), s = tileSize();
+    const r = Math.max(4, s*0.15);
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2);
+    ctx.fillStyle = tile.shuntStop ? "#1e90ff" : "#f6f9fc";
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, s*0.045); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
+  }
   // The id (name) of a signal/switch, drawn in the MIDDLE of its tile on top of everything (even
   // trains) with a translucent background, so the operator can always read which element it is.
   function drawElementId(x,y,tile){
@@ -1307,7 +1319,7 @@
     drawStationLabels();
     drawTrains();
     // Only the signal/switch IDS are drawn last — centred, on top of everything (even trains).
-    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawElementId(x,y,t); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawShuntDisc(x,y,t); drawElementId(x,y,t); }
     drawFlash();
     const dt = dayTime();
     stats.textContent = `${dt.clock} | day ${dt.day} ${dt.dayClock} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
@@ -1533,6 +1545,11 @@
     if (!tile) return;
     if (tile.kind === "switch"){
       mutate({ type: "throwSwitch", x, y });
+      return;
+    }
+    if (tile.kind === "track" && tile.shuntSignal){
+      state.message = tile.shuntStop ? "Shunting disc cleared" : "Shunting disc set to stop";
+      mutate({ type: "toggleShuntSignal", x, y });
       return;
     }
     if (tile.kind === "signal"){
@@ -1799,6 +1816,18 @@
       body += `<div class="field"><span>Add a stop facing</span><div class="row">` +
         tile.route.map(d => `<button type="button" data-action="addstop" data-dir="${d}">${dirArrow(d)}</button>`).join("") +
         `</div></div>`;
+      // Shunting disc: bidirectional, only on plain two-ended track (not on buffers).
+      if (tile.route.length === 2){
+        if (!tile.shuntSignal){
+          body += `<div class="field"><span>Shunting disc (halts shunting moves only)</span><div class="row">` +
+            `<button type="button" data-action="addshuntdisc">Add disc</button></div></div>`;
+        } else {
+          body += `<div class="field"><span>Shunting disc — ${tile.shuntStop ? "STOP (blue)" : "clear (white)"}</span><div class="row">` +
+            `<button type="button" data-action="toggleshuntdisc">${tile.shuntStop ? "Set clear" : "Set stop"}</button>` +
+            `<button type="button" data-action="rmshuntdisc">Remove disc</button>` +
+            `</div></div>`;
+        }
+      }
     }
     if (tile.kind === "track" || tile.kind === "signal"){
       const sig = tile.kind === "signal" ? signalDirs(tile) : [];
@@ -1838,7 +1867,7 @@
       const branchOpts = sel => tile.branches.map(b => `<option value="${b}" ${sel===b?"selected":""}>${dirArrow(b)} ${DIRS[b].name}</option>`).join("");
       body += `<label class="field"><span>Set direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
     }
-    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal"){
+    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal" || (tile.kind === "track" && tile.shuntSignal)){
       const st = stationContaining(Number(x),Number(y));
       const hint = st ? ` in ${escapeHtml(st.name)}` : "";
       body += `<label class="field"><span>Name${hint}</span><input name="elname" type="text" maxlength="24" placeholder="e.g. 1E, A, 2" value="${escapeHtml(tile.name || "")}"></label>`;
@@ -2031,6 +2060,20 @@
     } else if (action === "clearshunt"){
       cmd = {type:"clearSignal", x, y, dir, shunt:true};
       state.message = `Cleared ${DIRS[dir].name} for shunting`;
+    } else if (action === "addshuntdisc"){
+      if (tile.kind !== "track" || tile.route.length !== 2){ closeContext(); return; }
+      const nt = JSON.parse(JSON.stringify(tile));
+      nt.shuntSignal = true; delete nt.shuntStop;            // placed clear (white)
+      cmd = {type:"setTile", x, y, tile: nt};
+      state.message = "Added a shunting disc (clear)";
+    } else if (action === "toggleshuntdisc"){
+      cmd = {type:"toggleShuntSignal", x, y};
+      state.message = "Toggled the shunting disc";
+    } else if (action === "rmshuntdisc"){
+      const nt = JSON.parse(JSON.stringify(tile));
+      delete nt.shuntSignal; delete nt.shuntStop;
+      cmd = {type:"setTile", x, y, tile: nt};
+      state.message = "Removed the shunting disc";
     } else if (action === "revtrain"){
       cmd = {type:"reverse", train: Number(t.dataset.train)};
       state.message = `Reversing consist ${t.dataset.train}`;

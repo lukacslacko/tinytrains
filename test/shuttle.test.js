@@ -63,6 +63,17 @@ async function main(){
   // guide mentions shunting so AI masters learn the tools
   const guide = await api("GET", "/api/guide");
   assert(/Shunting/.test(guide.guide || ""), "the operating guide documents shunting");
+  assert(/shunting disc/i.test(guide.guide || ""), "the operating guide documents shunting discs");
+
+  // shunting discs over the station API: place one on West track 1, set stop, read it back, clear
+  await ok("POST", "/api/command", { type: "setTile", x: 5, y: 0, tile: { kind: "track", route: [6,2], shuntSignal: true, name: "D" } }, "place a disc");
+  const stopped1 = await ok("POST", st("West") + "/shunt-signal", { name: "D", action: "stop" }, "set the disc to stop");
+  assert(stopped1.stop === true, "disc reports stop");
+  const westReport = (await api("GET", st("West"))).station;
+  assert(westReport.shuntSignals && westReport.shuntSignals.some(d => d.name === "D" && d.stop), "station report lists the disc at stop");
+  const cleared1 = await ok("POST", st("West") + "/shunt-signal", { name: "D", action: "clear" }, "clear the disc");
+  assert(cleared1.stop === false, "disc reports clear");
+  // it stays clear through the choreography below — the shunting engine passes right over it
 
   // shunting orders are refused outside the commanding station's limits
   const wrong = await api("POST", st("East") + "/engine", { action: "reverse", train: trainId });

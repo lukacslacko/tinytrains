@@ -33,6 +33,7 @@
 //                                            (shunt:true = clear INTO occupied track, for coupling)
 //   POST /api/stations/:id/engine { action:reverse|mode|uncouple|couple, train|engine, ... }
 //                                          → shunting orders to an engine standing in this station
+//   POST /api/stations/:id/shunt-signal { name|x,y, action:stop|clear|toggle } → set a shunting disc
 //   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
 
 "use strict";
@@ -323,6 +324,11 @@ Two extras exist for shunting:
   - clear_signal with **shunt:true** opens a route INTO occupied track (needed to reach stock you
     want to couple), and its route lock releases as soon as the move comes to a stand.
   - A route may end at a BUFFER (a stub), not only at the next signal.
+Some stations also have **shunting discs** (get_infrastructure lists them under \`shuntSignals\`):
+bidirectional markers on plain track that ONLY shunting moves obey — clear by default, and when
+set to **stop** a shunting consist halts at the disc (every other train ignores it). Use
+**set_shunt_signal(element, "stop"|"clear")** to protect a spot during shunting or to hold a
+shunter where you want it, and clear it to let the move continue.
 Find your targets with get_infrastructure (each station lists its \`consists\`: id, units, mode,
 what it is waiting for, whether it is touching) or list_trains. Address orders by \`train\` id or
 by \`engine\` (unit) id — engine ids survive coupling, train ids change when consists merge.
@@ -562,6 +568,23 @@ const server = http.createServer(async (req, res) => {
       const result = applyCommand(lg, make());
       smlog(`${gname(lg)} ${st.name} | engine_${body.action} ${body.train != null ? "train " + body.train : "engine " + body.engine}${body.mode ? " -> " + body.mode : ""}${body.keep != null ? " keep " + body.keep : ""}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+
+    // ---- Shunting discs: bidirectional shunt-only signals on plain track ----
+    // POST /api/stations/:id/shunt-signal { name|x,y, action: "stop" | "clear" | "toggle" }
+    // Clear by default; "stop" halts SHUNTING moves at the disc (other trains ignore it).
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/shunt-signal$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const t = resolveTarget(lg, id, body);
+      if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
+      const cmd = body.action === "toggle"
+        ? { type: "toggleShuntSignal", x: t.x, y: t.y }
+        : { type: "setShuntSignal", x: t.x, y: t.y, stop: body.action === "stop" };
+      const result = applyCommand(lg, cmd);
+      smlog(`${gname(lg)} ${id} | set_shunt_signal ${body.name || (t.x + "," + t.y)} -> ${body.action}  ${result.ok ? (result.stop ? "stop" : "clear") : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
     // ---- Operator <-> Station Master chat ----

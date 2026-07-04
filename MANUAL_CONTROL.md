@@ -162,6 +162,16 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
 - **Signalling extensions.** A manual route may terminate at a **buffer** (stub), and a **shunt
   clear** (`clearSignal … shunt:true`) may open a route into occupied track (to couple); its route
   lock releases once the move comes to a stand.
+- **Shunting discs.** A bidirectional shunt-only signal carried by a plain two-ended track tile
+  (`shuntSignal`; never on switches, buffers, crossings, stops or signal tiles — a manual signal
+  already halts shunting moves). **Clear by default**: a white disc with a black rim at the tile
+  centre, drawn on top of trains so its state stays readable under a standing shunter; set to
+  **stop** it turns **bright blue** and halts SHUNTING moves at the disc — every other train
+  ignores it in both states. Operate-click toggles it; the right-click menu on a track tile
+  adds/removes one (placed clear) and names it. State flips via the operate commands
+  `toggleShuntSignal` / `setShuntSignal` (no layout undo, like throwing a switch), the
+  station API `POST /api/stations/:id/shunt-signal`, and MCP `set_shunt_signal`; station reports
+  list `shuntSignals`, and a held shunter surfaces as a `waiting` event.
 - **Station rule.** reverse/uncouple/couple (and entering shunt mode) are refused unless the
   consist stands inside a station — and inside *that* station when ordered through the
   station-scoped API. Shunting is the station master's job (see `STATION_MASTER.md`).

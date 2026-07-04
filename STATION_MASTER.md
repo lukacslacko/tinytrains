@@ -109,6 +109,13 @@ every order below is refused unless the consist stands **inside the commanding s
   is reversed in place if needed). The **commanded** engine stays active; engines in the picked-up
   stock go **inactive** until cut off again. The merged consist gets a **new train id** — engine
   unit ids are stable, so orders addressed by `engine` id keep working across couplings.
+- **Shunting discs.** A bidirectional shunt-only signal on plain track (never on switches,
+  buffers, crossings or signal tiles): **clear by default** (white disc), and set to **stop**
+  (bright blue) it halts a SHUNTING move at the disc — ordinary trains ignore it completely, in
+  both states. Operate one with `POST /api/stations/:id/shunt-signal { name|x,y, action:
+  "stop" | "clear" | "toggle" }` (MCP: `set_shunt_signal(element, state)`); the station report
+  lists them under `shuntSignals` with their state, and a shunter held at one surfaces as a
+  `waiting` event. Place/remove them in the UI via the track tile's right-click menu.
 - **Finding targets.** `GET /api/stations/:id` (and `get_infrastructure`) lists the station's
   `consists` — id, units, mode, active engine, what it waits for, `touching`; `/api/trains`
   (`list_trains`) shows the same fleet-wide.

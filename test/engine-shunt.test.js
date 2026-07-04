@@ -177,6 +177,45 @@ console.log("snapshot round trip preserves consists mid-shunt");
 }
 
 // ---------------------------------------------------------------------------
+// Shunting discs: bidirectional shunt-only signals on plain track. Clear (default) lets
+// everyone pass; "stop" halts SHUNTING moves at the disc while ordinary trains ignore it.
+console.log("shunting discs: stop shunting moves only, everyone else ignores them");
+{
+  const E = engineWith(straightLine(14));
+  assertOk(E.command({type:"setTile", x:7, y:0, tile:{kind:"track", route:[6,2], shuntSignal:true, shuntStop:true, name:"D"}}), "place a disc at stop");
+  const r = assertOk(E.command({type:"placeTrain", x:2, y:0, heading:"E", units:[{kind:"engine", len:0.5, type:1}], mode:"shunt"}), "place a shunting engine");
+  const eng = trainById(E, r.id);
+  waitFor(E, () => eng.x === 7 && !E.trainMoving(eng) && (eng.speed||0) === 0, 6000, "shunter halts at the disc");
+  assert(eng.mode === "shunt", "held shunter stays in shunting mode");
+  const report = E.trainsReport().find(t => t.id === eng.id);
+  assert(/shunting disc/.test(report.waitingFor || ""), `wait reason names the disc (got: ${report.waitingFor})`);
+  const st = E.stationsReport()[0];
+  assert(st.shuntSignals && st.shuntSignals.length === 1 && st.shuntSignals[0].name === "D" && st.shuntSignals[0].stop === true, "stationsReport lists the disc at stop");
+  const waiting = E.waitingTrainsReport();
+  assert(waiting.some(w => w.element === "D" && w.trainId === eng.id), "the held shunter surfaces as a waiting event at the disc");
+  // clear it: the shunter continues
+  const clr = assertOk(E.command({type:"setShuntSignal", x:7, y:0, stop:false}), "clear the disc");
+  assert(clr.stop === false, "disc reports clear");
+  waitFor(E, () => eng.x >= 10, 8000, "shunter passes the cleared disc");
+  // set it back to stop: a DRIVE-mode train sails through regardless
+  assertOk(E.command({type:"toggleShuntSignal", x:7, y:0}), "toggle back to stop");
+  const r2 = assertOk(E.command({type:"placeTrain", x:2, y:0, heading:"E", units:[{kind:"engine", len:0.5, type:2}]}), "place a driving train");
+  const drv = trainById(E, r2.id);
+  waitFor(E, () => drv.x >= 10, 6000, "the driving train ignores the stop disc completely");
+  // command validation + placement rules
+  const noDisc = E.command({type:"toggleShuntSignal", x:3, y:0});
+  assert(!noDisc.ok && /no shunting disc/.test(noDisc.error), "toggling a disc-less tile is refused");
+  assertOk(E.command({type:"setTile", x:0, y:5, tile:{kind:"track", route:[2], shuntSignal:true}}), "try a disc on a buffer");
+  assert(!E.getTile(0,5).shuntSignal, "discs are stripped from buffers (single-ended track)");
+  assertOk(E.command({type:"setTile", x:1, y:5, tile:{kind:"switch", stem:6, branches:[2,3], current:2, shuntSignal:true}}), "try a disc on a switch");
+  assert(!E.getTile(1,5).shuntSignal, "discs are stripped from switches");
+  // state survives a snapshot round trip
+  const E2 = (() => { const n = require("../engine.js").createEngine(); n.applySnapshot(JSON.parse(JSON.stringify(E.snapshot()))); return n; })();
+  const d2 = E2.getTile(7,0);
+  assert(d2 && d2.shuntSignal && d2.shuntStop, "disc + state survive the snapshot");
+}
+
+// ---------------------------------------------------------------------------
 // Shunting never leaves the station: the boundary halts a shunting consist like a signal
 // at danger — it stays in shunting mode and can be reversed back; drive mode crosses freely.
 console.log("shunting stops at the station boundary");

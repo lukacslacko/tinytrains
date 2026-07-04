@@ -1064,6 +1064,9 @@
       if (train.stopKey !== key(x,y)) return false;          // hasn't docked yet
       if (state.simFrame < train.releaseFrame) return false; // still dwelling
     }
+    // A shunting DISC (bidirectional marker on plain track) set to "stop" holds SHUNTING
+    // moves only — every other train ignores it completely.
+    if (isShunting(train) && tile.shuntSignal && tile.shuntStop) return false;
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(x,y,ex);
       if (mainIsManual(x,y,ex)){
@@ -1195,6 +1198,7 @@
       }
       if (state.simFrame < train.releaseFrame){ train.speed = 0; return; }
     }
+    if (isShunting(train) && tile.shuntSignal && tile.shuntStop){ train.speed = 0; return; } // held at a shunting disc
     if (tile.kind === "signal" && signalDirs(tile).includes(ex)){
       const mk = mkMain(train.x, train.y, ex);
       if (mainIsManual(train.x, train.y, ex)){
@@ -1314,6 +1318,12 @@
       if (tile.current == null) tile.current = (tile.default != null ? tile.default : (tile.defaultBranch != null ? tile.defaultBranch : tile.branches[0]));
       delete tile.mode; delete tile.default; delete tile.filters; delete tile.defaultBranch;
     }
+    // A shunting disc lives only on plain two-ended track (never on switches, buffers,
+    // crossings, stops or signal tiles — a manual signal already halts shunting moves).
+    if (tile.shuntSignal && !(tile.kind === "track" && Array.isArray(tile.route) && tile.route.length === 2)){
+      delete tile.shuntSignal; delete tile.shuntStop;
+    }
+    if (!tile.shuntSignal) delete tile.shuntStop;
     return tile;
   }
   function deserialize(text){
@@ -1439,6 +1449,26 @@
       state.trains = state.trains.filter(t => !trainOccupies(t,x,y));
       updateSignals();
       return {ok:true, removed: before - state.trains.length};
+    }
+
+    // ---- Shunting discs (operate state, like throwing a switch — no layout undo) ----
+    // A shunting disc is a bidirectional marker on plain track: clear by default, and when
+    // set to "stop" it halts SHUNTING moves only. Placing/removing one is a tile edit
+    // (setTile with shuntSignal on the track tile); these commands flip its state.
+    function cmdSetShuntSignal(x,y,stop){
+      const tile = getTile(x,y);
+      if (!tile || !tile.shuntSignal) return {ok:false, error:"no shunting disc here"};
+      const to = !!stop;
+      const was = !!tile.shuntStop;
+      if (to) tile.shuntStop = true; else delete tile.shuntStop;
+      updateSignals();
+      if (was !== to) emit("info", `Shunting disc ${placeLabel(x,y)} set to ${to ? "stop" : "clear"}`);
+      return {ok:true, stop: to, noop: was === to};
+    }
+    function cmdToggleShuntSignal(x,y){
+      const tile = getTile(x,y);
+      if (!tile || !tile.shuntSignal) return {ok:false, error:"no shunting disc here"};
+      return cmdSetShuntSignal(x, y, !tile.shuntStop);
     }
 
     // ---- Shunting commands (reverse / mode / uncouple / couple / place) ----
@@ -1839,6 +1869,8 @@
         case "detach":        return cmdDetach(cmd);
         case "couple":        return cmdCouple(cmd);
         case "placeTrain":    return cmdPlaceTrain(cmd);
+        case "toggleShuntSignal": return cmdToggleShuntSignal(cmd.x, cmd.y);
+        case "setShuntSignal":    return cmdSetShuntSignal(cmd.x, cmd.y, cmd.stop);
         case "setTile":       return cmdSetTile(cmd.x, cmd.y, cmd.tile);
         case "removeTile":    return cmdRemoveTile(cmd.x, cmd.y, cmd.andTrains);
         case "setStations":   return cmdSetStations(cmd.stations);
@@ -1915,6 +1947,7 @@
         if (!mainIsGreenFor(t, mk)) return "held at a red automatic signal";
       }
       if (tile.kind === "stop" && ex === tile.dir && state.simFrame < t.releaseFrame) return "dwelling at stop";
+      if (isShunting(t) && tile.shuntSignal && tile.shuntStop) return "held at a shunting disc";
       const nx = t.x + DIRS[ex].dx, ny = t.y + DIRS[ex].dy;
       if (isShunting(t) && !stationContaining(nx, ny)) return "at the station boundary (shunting stays inside the station)";
       if (occupied(nx, ny, t.id)) return "train ahead";
@@ -1966,6 +1999,10 @@
             waiting
           };
         });
+        // shunting discs (bidirectional, on plain track): clear by default, "stop" halts shunting moves
+        const shuntSignals = items.filter(i => i.tile.kind === "track" && i.tile.shuntSignal).map(i => ({
+          name: i.tile.name || null, x: i.x, y: i.y, stop: !!i.tile.shuntStop
+        }));
         // consists whose head stands inside this station — the targets of shunting orders
         const r = normRect(st.rect);
         const consists = state.trains
@@ -1975,7 +2012,7 @@
             return {...consistSummary(t), at: tile && tile.name ? tile.name : `${t.x},${t.y}`,
               moving: !trainStopped(t), waitingFor: trainWaitReason(t), touching: !!t._touch};
           });
-        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals, consists};
+        return {id: st.id, name: st.name, instructions: st.instructions || "", overrides: st.overrides || [], rect: st.rect, switches, signals, shuntSignals, consists};
       });
     }
     // Trains CURRENTLY stopped at the given owners' signals — synthetic "waiting" events so the
@@ -1987,18 +2024,21 @@
       for (const st of state.stations){
         if (set && !set.has(st.name)) continue;
         for (const i of tilesInStation(st)){
-          if (i.tile.kind !== "signal" || !manualDirs(i.tile).length) continue; // only operator-cleared signals
+          // operator-cleared signals — and shunting discs set to stop with a shunter held at them
+          const disc = i.tile.kind === "track" && i.tile.shuntSignal && i.tile.shuntStop;
+          if (!disc && (i.tile.kind !== "signal" || !manualDirs(i.tile).length)) continue;
           for (const t of state.trains){
             if (t.x !== i.x || t.y !== i.y || !trainStopped(t) || !trainWaitReason(t)) continue;
             if (!hasActiveEngine(t)) continue;             // parked cars are not "waiting" for a signal
+            if (disc && !isShunting(t)) continue;          // a disc only concerns shunting moves
             const ex = exitFor(i.tile, t.from);
             // Only a train facing this signal in one of its MANUAL directions is the master's to clear;
             // a train passing the other (automatic) way is held by automatic logic, not this signal.
-            if (ex == null || !manualDirs(i.tile).includes(ex)) continue;
+            if (!disc && (ex == null || !manualDirs(i.tile).includes(ex))) continue;
             const tt = trainTypeById(t.type);
             out.push({ mode: "waiting", owner: st.name, element: i.tile.name || null,
               trainId: t.id, trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
-              wantsDir: DIRNAMES[ex], waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
+              wantsDir: ex != null ? DIRNAMES[ex] : null, waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
           }
         }
       }
