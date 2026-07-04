@@ -966,10 +966,18 @@
         // visually overpowers the thin set-against marker — the dead leg reads as a live
         // rail. Draw the INACTIVE marker thick there, cutting through the black band (the
         // coloured rim stays), so the set-against branch clearly reads as "not available".
-        if (occupiedBandKeys.has(key(x,y)) || switchLocked(x,y))
-          drawRouteWide(x,y,[tile.stem, other], T.inactiveBranch, trackW() + tileSize() * .10);
-        else
+        // Only the OUTBOUND set-against leg gets the stripe — the inbound (stem) segment
+        // belongs to the live route and keeps its normal outlined look.
+        if (occupiedBandKeys.has(key(x,y)) || switchLocked(x,y)){
+          const c = centerPoint(x,y), e = endpointPoint(x,y,other);
+          ctx.strokeStyle = T.inactiveBranch;
+          ctx.lineWidth = trackW() + tileSize() * .10;
+          ctx.lineCap = "butt";
+          ctx.beginPath(); ctx.moveTo(c.x,c.y); ctx.lineTo(e.x,e.y); ctx.stroke();
+          ctx.lineCap = "round";
+        } else {
           drawRoute(x,y,[tile.stem, other], false, T.inactiveBranch, true); // dimmed + THIN: set-against side
+        }
       }
       drawRoute(x,y,[tile.stem, cur], false);                               // full rail: the set route
       return;
