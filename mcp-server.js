@@ -81,12 +81,12 @@ const TOOLS = [
     run: async (a) => ({ youManage: POSTS, stations: ((await api("GET", "/api/stations", null, someGame(a))).body.stations || []).map(s => ({ name: s.name, switches: s.switches.length, signals: s.signals.length })) }) },
 
   { name: "get_infrastructure",
-    description: "A station's switches and signals with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type, which way it wants to go, and waitedSeconds = how long it has been stuck). Check regularly: route waiting trains, clearing the one with the HIGHEST waitedSeconds first.",
+    description: "A station's switches, signals and consists with LIVE state: each switch's branches + current set direction (compass) and whether it is locked; each signal's mains (manual/automatic, green/red) AND any train currently WAITING at it (type, which way it wants to go, and waitedSeconds = how long it has been stuck); plus `consists` — every train standing in the station with its units (engines+cars, ids), mode (drive/shunt), active engine, and whether its buffers are touching other stock. Check regularly: route waiting trains, clearing the one with the HIGHEST waitedSeconds first.",
     inputSchema: { type: "object", properties: STATION_PROP },
     run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}`, null, p.game)).body.station; } },
 
   { name: "list_trains",
-    description: "Where EVERY train in a game is and which way it is about to go: type, station/element, heading (compass), moving?, (if stopped) why it is waiting, and waitedSeconds (how long it has been stuck). Spot trains stranded a long time and prioritise them.",
+    description: "Where EVERY consist in a game is and which way it is about to go: type, station/element, heading (compass), moving?, (if stopped) why it is waiting, waitedSeconds, its units (engine/car, ids, which engine is active), mode (drive/shunt) and touching (buffers met). A consist with no active engine is a cut of parked cars. Spot trains stranded a long time and prioritise them.",
     inputSchema: { type: "object", properties: { game: { type: "string" } } },
     run: async (a) => (await api("GET", "/api/trains", null, someGame(a))).body.trains },
 
@@ -101,14 +101,35 @@ const TOOLS = [
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/switch`, { name: a.element, to: a.direction }, p.game)).body; } },
 
   { name: "clear_signal",
-    description: "Clear one manual signal to green, opening (and locking) the route ahead by the current switch settings. Set the switches FIRST. Refused (with a reason) if the path is broken/occupied/conflicting.",
-    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal name, e.g. 'A'" }, ...STATION_PROP }, required: ["element"] },
-    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "clear" }, p.game)).body; } },
+    description: "Clear one manual signal to green, opening (and locking) the route ahead by the current switch settings. Set the switches FIRST. A signal can carry manual mains BOTH ways — pass `direction` (compass) to clear a specific one, else every manual main on the element is cleared. Set shunt:true for a SHUNTING move: the route may then lead into OCCUPIED track (to go couple with standing stock) or end at a buffer, and its lock releases once the move stops. Refused (with a reason) if the path is broken/occupied/conflicting.",
+    inputSchema: { type: "object", properties: { element: { type: "string", description: "signal name, e.g. 'A'" }, direction: { type: "string", description: "compass N/NE/E/SE/S/SW/W/NW — which main to clear (needed when a signal has manual mains both ways)" }, shunt: { type: "boolean", description: "clear for a shunting move (may enter occupied track; lock releases at standstill)" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "clear", dir: a.direction, shunt: !!a.shunt }, p.game)).body; } },
 
   { name: "set_signal_red",
-    description: "Set one manual signal back to red (only before a train has taken the cleared route).",
-    inputSchema: { type: "object", properties: { element: { type: "string" }, ...STATION_PROP }, required: ["element"] },
-    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "red" }, p.game)).body; } },
+    description: "Set one manual signal back to red (only before a train has taken the cleared route). Pass `direction` (compass) to target one main of a both-ways signal.",
+    inputSchema: { type: "object", properties: { element: { type: "string" }, direction: { type: "string", description: "compass N/NE/E/SE/S/SW/W/NW" }, ...STATION_PROP }, required: ["element"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/signal`, { name: a.element, action: "red", dir: a.direction }, p.game)).body; } },
+
+  // ---- Shunting: engine orders (only while the consist stands inside YOUR station) ----
+  { name: "reverse_engine",
+    description: "Reverse a consist: its leading end becomes its trailing end, so an engine behind cars PUSHES them. Only while it is stopped, and only inside your station. Refused if the new front would roll past a red manual signal — clear that signal first. Address it by `train` (consist id) or `engine` (engine unit id — survives coupling).",
+    inputSchema: { type: "object", properties: { train: { type: "number", description: "consist (train) id" }, engine: { type: "number", description: "engine unit id (alternative to train)" }, ...STATION_PROP } },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "reverse", train: a.train, engine: a.engine }, p.game)).body; } },
+
+  { name: "set_drive_mode",
+    description: "Switch a consist between 'shunt' and 'drive'. SHUNT: slow, ignores passenger stops, and instead of holding a tile back it creeps up until buffers TOUCH other stock (so it can couple) — signals are still obeyed by the leading end. DRIVE: normal running with the one-tile standoff; set it back to drive before dispatching a train onto the line.",
+    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["shunt", "drive"] }, train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP }, required: ["mode"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "mode", mode: a.mode, train: a.train, engine: a.engine }, p.game)).body; } },
+
+  { name: "uncouple",
+    description: "Cut a standing consist at a coupling. keep = how many cars stay attached to the ACTIVE engine (0 = the engine runs alone; 2 = engine keeps two cars). The cut-off portion stays standing exactly where it is (it has no engine). If the engine is mid-consist pass side:'front'|'back'. Returns both resulting consists (the standing one gets a NEW train id).",
+    inputSchema: { type: "object", properties: { keep: { type: "number", description: "cars kept on the engine (default 0)" }, side: { type: "string", enum: ["front", "back"] }, train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP } },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "uncouple", keep: a.keep, side: a.side, train: a.train, engine: a.engine }, p.game)).body; } },
+
+  { name: "couple",
+    description: "Couple a consist with the stock it is TOUCHING (drive up to it in shunting mode first — get_infrastructure shows `touching:true` when the buffers meet). Your engine stays the active one; engines inside the picked-up stock go inactive until cut off again. Returns the merged consist — NOTE it has a NEW train id (engine unit ids are stable, so addressing by `engine` keeps working).",
+    inputSchema: { type: "object", properties: { train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP } },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "couple", train: a.train, engine: a.engine }, p.game)).body; } },
 
   { name: "set_path",
     description: "Route a train in one call — the EASY way to follow a 'set path …' instruction. Give the path as element names: the entry SIGNAL the train arrives at, then the SWITCHES in order, and optionally a final signal or compass direction. It lines up every switch and clears the entry signal. The entry signal is implied by your instruction: 'arrives at A: set path 1,2,3' → set_path(path=[\"A\",\"1\",\"2\",\"3\"]); 'set path 4 East' at B → set_path(path=[\"B\",\"4\",\"E\"]). Returns which switches were set, or why it couldn't.",

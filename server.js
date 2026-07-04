@@ -26,10 +26,13 @@
 //   POST /api/command    { type, ... }    → operate command (throwSwitch/setSwitch/toggleSignal/…,
 //                                            setSpeed { scale }, setDayLength { seconds })
 //   Station Master API:
-//   GET  /api/stations                    → every station with instructions + its switches/signals
+//   GET  /api/stations                    → every station with instructions + its switches/signals/consists
 //   GET  /api/stations/:id                → one station's report
 //   POST /api/stations/:id/switch { name|x,y, to }                → set a switch by element name
-//   POST /api/stations/:id/signal { name|x,y, dir?, action:clear|red } → operate a manual signal
+//   POST /api/stations/:id/signal { name|x,y, dir?, action:clear|red, shunt? } → operate a manual signal
+//                                            (shunt:true = clear INTO occupied track, for coupling)
+//   POST /api/stations/:id/engine { action:reverse|mode|uncouple|couple, train|engine, ... }
+//                                          → shunting orders to an engine standing in this station
 //   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
 
 "use strict";
@@ -293,6 +296,29 @@ destination), or they will conflict.
    also lists each signal's waiting train + waitedSeconds) and list_trains give the fuller picture.
    Don't go idle while any train is waiting — keep looping on await_events.
 
+## Shunting (inside your station)
+Trains are CONSISTS of an engine plus cars. Engines can uncouple, run around and pick up cars —
+but ONLY while standing inside a station, and it is YOUR job at your station. The tools:
+  - **set_drive_mode(train, "shunt")** — shunting mode: the engine moves slowly and, instead of
+    holding a tile back from other stock, creeps up until the buffers TOUCH. "drive" restores
+    normal running (do this before dispatching a train onto the line).
+  - **reverse_engine(train)** — change direction (an engine behind cars then pushes them). Only
+    when stopped. If the front would roll past a red manual signal, the reverse is refused —
+    clear that signal first.
+  - **uncouple(train, keep)** — cut the consist: keep = how many cars stay on the active engine
+    (0 = the engine alone). The rest stays standing where it is.
+  - **couple(train)** — couple with the stock the consist is TOUCHING (drive up to it in shunting
+    mode first; the report shows \`touching\`). The engine you command stays in charge; engines in
+    the picked-up consist go inactive until cut off again.
+Shunting moves obey signals like any train — the LEADING end (even when it is a pushed car)
+stops at a red main. Two extras exist for shunting:
+  - clear_signal with **shunt:true** opens a route INTO occupied track (needed to reach stock you
+    want to couple), and its route lock releases as soon as the move comes to a stand.
+  - A route may end at a BUFFER (a stub), not only at the next signal.
+Find your targets with get_infrastructure (each station lists its \`consists\`: id, units, mode,
+what it is waiting for, whether it is touching) or list_trains. Address orders by \`train\` id or
+by \`engine\` (unit) id — engine ids survive coupling, train ids change when consists merge.
+
 ## Notes
 - A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train
   passes; \`watch(element,"pass")\` tells you the moment that's safe (on a switch = free to re-throw,
@@ -487,8 +513,8 @@ const server = http.createServer(async (req, res) => {
       const t = resolveTarget(lg, id, body);
       if (!t) return sendJSON(res, 404, { ok: false, error: "element not found in station (give name or x,y)" });
       const type = (body.action === "red") ? "redSignal" : "clearSignal";
-      const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: body.dir });
-      smlog(`${gname(lg)} ${id} | ${body.action === "red" ? "set_signal_red" : "clear_signal"} ${body.name}  ${result.ok ? (result.action || "ok") : "REFUSED: " + result.error}`);
+      const result = applyCommand(lg, { type, x: t.x, y: t.y, dir: parseDir(body.dir), shunt: !!body.shunt });
+      smlog(`${gname(lg)} ${id} | ${body.action === "red" ? "set_signal_red" : "clear_signal"} ${body.name}${body.dir != null ? " " + body.dir : ""}${body.shunt ? " (shunt)" : ""}  ${result.ok ? (result.action || "ok") : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, { ...result, x: t.x, y: t.y });
     }
 
@@ -500,6 +526,33 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(m[1]);
       const result = applyCommand(lg, { type: "setPath", station: id, path: body.path });
       smlog(`${gname(lg)} ${id} | set_path [${(body.path || []).join(",")}]  ${result.ok ? "set " + (result.set || []).map(s => s.name + "=" + s.dir).join(",") + (result.cleared ? " +clear " + result.entry : "") : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+
+    // ---- Shunting: engine orders (station-scoped) ----
+    // POST /api/stations/:id/engine { action, train | engine, ... } — orders to one engine's
+    // consist, allowed only while it stands inside THIS station:
+    //   { action:"reverse" }                          change direction (push instead of pull)
+    //   { action:"mode", mode:"shunt"|"drive" }       switch driving mode
+    //   { action:"uncouple", keep?, side?, cut? }     cut the consist (keep = cars kept on the engine)
+    //   { action:"couple" }                           couple with the touching consist
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/engine$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const st = lg.engine.stationsReport().find(s => String(s.id) === id || s.name.toLowerCase() === id.toLowerCase());
+      if (!st) return sendJSON(res, 404, { ok: false, error: "no such station" });
+      const sel = { train: body.train, engine: body.engine, station: st.name };
+      const ACTIONS = {
+        reverse:  () => ({ type: "reverse", ...sel }),
+        mode:     () => ({ type: "setTrainMode", ...sel, mode: body.mode }),
+        uncouple: () => ({ type: "detach", ...sel, keep: body.keep, side: body.side, cut: body.cut }),
+        couple:   () => ({ type: "couple", ...sel })
+      };
+      const make = ACTIONS[body.action];
+      if (!make) return sendJSON(res, 400, { ok: false, error: "action must be reverse | mode | uncouple | couple" });
+      const result = applyCommand(lg, make());
+      smlog(`${gname(lg)} ${st.name} | engine_${body.action} ${body.train != null ? "train " + body.train : "engine " + body.engine}${body.mode ? " -> " + body.mode : ""}${body.keep != null ? " keep " + body.keep : ""}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
 
