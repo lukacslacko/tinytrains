@@ -575,7 +575,7 @@
     switchCurrent, switchOther, switchLocked, switchAccepts,
     getTile, setTile, removeTile, defaultSwitch, makeTile,
     sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex,
-    centerW, endpointW, lerpW, headWorld, trainCars, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
+    centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, hasActiveEngine, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan,
     trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor,
     buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion,
     updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mayRollThrough, occupied,
@@ -1062,30 +1062,46 @@
   }
 
 
+  // Mix a colour toward grey for INACTIVE engines (hauled dead, till cut off again).
+  function dimColor(hex){
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return "#5a6470";
+    const v = parseInt(m[1], 16);
+    const mix = (c, g) => Math.round(c * .45 + g * .55);
+    const r = mix((v >> 16) & 255, 92), g = mix((v >> 8) & 255, 100), b = mix(v & 255, 112);
+    return `rgb(${r},${g},${b})`;
+  }
   function drawTrains(){
     const s = tileSize();
     for (const train of state.trains){
       const trail = train.trail && train.trail.length ? train.trail : [headWorld(train)];
-      const cars = trainCars(train);
+      const units = trainUnits(train);
+      // Coupled vehicles TOUCH: each unit's rounded caps are inset by the cap radius so the
+      // drawn bodies meet exactly at the coupling without overlapping.
+      const capR = CAR_WIDTH / 2;
       let dist = 0;
-      cars.forEach((len, idx) => {
-        const pts = trailSpan(trail, dist, dist+len).map(worldPtToScreen);
+      for (const u of units){
+        const inset = Math.min(capR, u.len * 0.45);
+        const pts = trailSpan(trail, dist + inset, dist + u.len - inset).map(worldPtToScreen);
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         // dark outline then body
         ctx.strokeStyle = "#06090d";
         ctx.lineWidth = CAR_WIDTH * s + Math.max(3, s*.06);
         strokePolyline(pts);
-        ctx.strokeStyle = idx === 0 ? typeColor(train.type) : "#7c8898";
+        ctx.strokeStyle = u.kind === "engine" ? (u.active ? typeColor(u.type) : dimColor(typeColor(u.type))) : "#7c8898";
         ctx.lineWidth = CAR_WIDTH * s;
         strokePolyline(pts);
-        dist += len + CAR_GAP;
-      });
-      // engine front highlight
-      const hp = worldPtToScreen(trail[0]);
-      ctx.fillStyle = "#fff"; ctx.globalAlpha = .85;
-      ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.06), 0, Math.PI*2); ctx.fill();
-      ctx.globalAlpha = 1;
+        dist += u.len + CAR_GAP;
+      }
+      // front-of-consist highlight: white when driving, amber while shunting. Parked cuts
+      // (no active engine) get none — their "front" is just where they were cut off.
+      if (hasActiveEngine(train)){
+        const hp = worldPtToScreen(trail[0]);
+        ctx.fillStyle = isShunting(train) ? "#ffb02e" : "#fff"; ctx.globalAlpha = .9;
+        ctx.beginPath(); ctx.arc(hp.x, hp.y, Math.max(2, s*.07), 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
     }
   }
   function worldPtToScreen(pt){
@@ -1663,9 +1679,35 @@
     contextMenu.dataset.y = y;
     let body = `<h2>${tile.kind} ${x}, ${y}</h2>`;
     const trainsHere = state.trains.filter(t => trainOccupies(t,x,y));
+    for (const tr of trainsHere){
+      // Consist controls (shunting): front-first composition, mode, reverse, un/couple.
+      const units = trainUnits(tr);
+      const chips = units.map(u => u.kind === "engine"
+        ? `<b style="color:${u.active ? typeColor(u.type) : "#8a94a2"}">${u.active ? "engine" : "engine·off"}</b>`
+        : "car").join(" + ");
+      const inStation = !!stationContaining(x, y);
+      const shunting = isShunting(tr);
+      body += `<div class="field"><span>Consist ${tr.id} · ${shunting ? "shunting" : "driving"} · front: ${chips}</span>`;
+      if (hasActiveEngine(tr)){
+        body += `<div class="row">` +
+          `<button type="button" data-action="revtrain" data-train="${tr.id}" ${inStation ? "" : "disabled title='only inside a station'"}>Reverse</button>` +
+          `<button type="button" data-action="modetrain" data-train="${tr.id}" data-mode="${shunting ? "drive" : "shunt"}" ${(shunting || inStation) ? "" : "disabled title='only inside a station'"}>${shunting ? "Drive mode" : "Shunt mode"}</button>` +
+          `<button type="button" data-action="coupletrain" data-train="${tr.id}" title="couples with the stock the buffers are touching">Couple</button>` +
+          `</div>`;
+        if (units.length > 1){
+          body += `<div class="row"><span style="opacity:.75">Uncouple:</span>` +
+            units.slice(0, -1).map((u, i) =>
+              `<button type="button" data-action="uncoupletrain" data-train="${tr.id}" data-cut="${i}" ${inStation ? "" : "disabled title='only inside a station'"}>✂ after ${i + 1}</button>`).join("") +
+            `</div>`;
+        }
+      } else {
+        body += `<div class="row"><span style="opacity:.75">parked cars (no engine)</span></div>`;
+      }
+      body += `</div>`;
+    }
     if (trainsHere.length){
-      body += `<div class="field"><span>Train${trainsHere.length > 1 ? "s" : ""} here</span><div class="row">` +
-        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? ` (${trainsHere.length})` : ""}</button>` +
+      body += `<div class="field"><div class="row">` +
+        `<button type="button" data-action="removetrain">Remove train${trainsHere.length > 1 ? `s (${trainsHere.length})` : ""}</button>` +
         `</div></div>`;
     }
     if (tile.kind === "track" || tile.kind === "stop" || tile.kind === "spawn"){
@@ -1695,6 +1737,13 @@
       body += `<div class="field"><span>Main type (click to switch automatic ↔ manual)</span><div class="row">` +
         signalDirs(tile).map(d => `<button type="button" data-action="togglemanual" data-dir="${d}">${dirArrow(d)} ${man.includes(d) ? "Manual" : "Auto"}</button>`).join("") +
         `</div></div>`;
+      if (man.length){
+        // A shunt clear may open a route INTO occupied track (to couple) or to a buffer,
+        // and releases its lock once the move stops. Normal clears: left-click in Operate.
+        body += `<div class="field"><span>Clear for shunting (into occupied track)</span><div class="row">` +
+          man.map(d => `<button type="button" data-action="clearshunt" data-dir="${d}">${dirArrow(d)} shunt</button>`).join("") +
+          `</div></div>`;
+      }
     }
     if (tile.kind === "spawn"){
       body += `<label class="field"><span>Direction</span><select name="dir">${dirOptions(tile.dir)}</select></label>`;
@@ -1897,6 +1946,21 @@
     } else if (action === "removetrain"){
       cmd = {type:"removeTrain", x, y};
       state.message = `Removed train`;
+    } else if (action === "clearshunt"){
+      cmd = {type:"clearSignal", x, y, dir, shunt:true};
+      state.message = `Cleared ${DIRS[dir].name} for shunting`;
+    } else if (action === "revtrain"){
+      cmd = {type:"reverse", train: Number(t.dataset.train)};
+      state.message = `Reversing consist ${t.dataset.train}`;
+    } else if (action === "modetrain"){
+      cmd = {type:"setTrainMode", train: Number(t.dataset.train), mode: t.dataset.mode};
+      state.message = `Consist ${t.dataset.train} → ${t.dataset.mode === "shunt" ? "shunting" : "driving"} mode`;
+    } else if (action === "coupletrain"){
+      cmd = {type:"couple", train: Number(t.dataset.train)};
+      state.message = `Coupling consist ${t.dataset.train}`;
+    } else if (action === "uncoupletrain"){
+      cmd = {type:"detach", train: Number(t.dataset.train), cut: Number(t.dataset.cut)};
+      state.message = `Uncoupling consist ${t.dataset.train}`;
     }
     if (cmd) mutate(cmd);
     closeContext();
