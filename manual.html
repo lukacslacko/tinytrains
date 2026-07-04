@@ -580,7 +580,7 @@
     buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion,
     updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied,
     maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed,
-    formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
+    formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds,
     moveTrain, spawnTrains, simStep, serialize, migrateTile,
     command, snapshot, applySnapshot, setPaused, stationsReport, dayTime
   } = ENG;
@@ -916,8 +916,8 @@
     ctx.lineWidth = Math.max(1.5, s*0.03); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
   // A shunting disc at a tile's centre: white = clear, bright blue = stops shunting moves
-  // (ordinary trains ignore it). Drawn ON TOP of trains — its state must stay readable while
-  // a shunter stands right on it.
+  // (ordinary trains ignore it). Drawn with the tile markers — above the rails, below the
+  // trains (a shunter standing on it covers it, like any lineside equipment).
   function drawShuntDisc(x,y,tile){
     if (tile.kind !== "track" || !tile.shuntSignal) return;
     const c = centerPoint(x,y), s = tileSize();
@@ -1004,6 +1004,7 @@
       if (switchLocked(x,y)) drawLock(x,y);
       return;
     }
+    if (tile.kind === "track") drawShuntDisc(x,y,tile);
     if (tile.kind === "spawn") drawTriangle(x,y,tile.dir,typeColor(tile.type),.2);
     if (tile.kind === "stop") drawStopMarker(x,y,tile.dir);
     if (tile.kind === "signal"){
@@ -1319,7 +1320,7 @@
     drawStationLabels();
     drawTrains();
     // Only the signal/switch IDS are drawn last — centred, on top of everything (even trains).
-    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawShuntDisc(x,y,t); drawElementId(x,y,t); }
+    for (const [k,t] of tiles){ const {x,y} = readKey(k); drawElementId(x,y,t); }
     drawFlash();
     const dt = dayTime();
     stats.textContent = `${dt.clock} | day ${dt.day} ${dt.dayClock} | ${state.trains.length} trains | ${state.tiles.size} tiles | zoom ${state.view.zoom.toFixed(2)}x`;
@@ -1778,21 +1779,22 @@
         ? `<b style="color:${u.active ? typeColor(u.type) : "#8a94a2"}">${u.active ? "engine" : "engine·off"}</b>`
         : "car").join(" + ");
       const inStation = !!stationContaining(x, y);
+      const pid = publicTrainId(tr);   // trains are identified by their active engine's fixed id
       const mode = tr.mode === "shunt" ? "shunt" : (tr.mode === "stop" ? "stop" : "drive");
       const modeName = {drive: "driving", shunt: "shunting", stop: "stopped"}[mode];
-      body += `<div class="field"><span>Consist ${tr.id} · ${modeName} · front: ${chips}</span>`;
+      body += `<div class="field"><span>Consist ${pid} · ${modeName} · front: ${chips}</span>`;
       if (hasActiveEngine(tr)){
-        const modeBtn = (m, label) => `<button type="button" data-action="modetrain" data-train="${tr.id}" data-mode="${m}" ` +
+        const modeBtn = (m, label) => `<button type="button" data-action="modetrain" data-train="${pid}" data-mode="${m}" ` +
           `${mode === m ? "disabled" : (m === "shunt" && !inStation ? "disabled title='only inside a station'" : "")}>${label}</button>`;
         body += `<div class="row">` +
-          `<button type="button" data-action="revtrain" data-train="${tr.id}" ${inStation ? "" : "disabled title='only inside a station'"}>Reverse</button>` +
-          `<button type="button" data-action="coupletrain" data-train="${tr.id}" title="couples with the stock the buffers are touching">Couple</button>` +
+          `<button type="button" data-action="revtrain" data-train="${pid}" ${inStation ? "" : "disabled title='only inside a station'"}>Reverse</button>` +
+          `<button type="button" data-action="coupletrain" data-train="${pid}" title="couples with the stock the buffers are touching">Couple</button>` +
           `</div>`;
         body += `<div class="row">` + modeBtn("drive", "Drive") + modeBtn("shunt", "Shunt") + modeBtn("stop", "Stop") + `</div>`;
         if (units.length > 1){
           body += `<div class="row"><span style="opacity:.75">Uncouple:</span>` +
             units.slice(0, -1).map((u, i) =>
-              `<button type="button" data-action="uncoupletrain" data-train="${tr.id}" data-cut="${i}" ${inStation ? "" : "disabled title='only inside a station'"}>✂ after ${i + 1}</button>`).join("") +
+              `<button type="button" data-action="uncoupletrain" data-train="${pid}" data-cut="${i}" ${inStation ? "" : "disabled title='only inside a station'"}>✂ after ${i + 1}</button>`).join("") +
             `</div>`;
         }
       } else {

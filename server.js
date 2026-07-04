@@ -331,7 +331,9 @@ set to **stop** a shunting consist halts at the disc (every other train ignores 
 shunter where you want it, and clear it to let the move continue.
 Find your targets with get_infrastructure (each station lists its \`consists\`: id, units, mode,
 what it is waiting for, whether it is touching) or list_trains. Address orders by \`train\` id or
-by \`engine\` (unit) id — engine ids survive coupling, train ids change when consists merge.
+by \`engine\` (unit) id. A train's id IS its active engine's fixed id, so it keeps its identity
+through uncoupling and coupling — engine "2" dropping some cars and picking up others is still
+train "2". A pure cut of cars is identified by its first vehicle's id.
 
 ## Notes
 - A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train

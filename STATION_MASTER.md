@@ -103,12 +103,14 @@ every order below is refused unless the consist stands **inside the commanding s
   reversing past a **green** one performs the normal pass bookkeeping (drops it red, arms its lock).
 - **Uncouple** (`keep` = cars kept on the active engine, `0` = engine alone; or an explicit `cut`
   boundary, with `side: "front"|"back"` when the engine is mid-consist). The cut-off portion
-  becomes a **new consist** (new train id) standing exactly where it was, engineless unless it
+  becomes a **new consist** (identified by its first vehicle's id) standing exactly where it was, engineless unless it
   contained an engine (then its first engine re-activates).
 - **Couple** merges with whatever the consist is touching, whichever ends meet (the other consist
   is reversed in place if needed). The **commanded** engine stays active; engines in the picked-up
-  stock go **inactive** until cut off again. The merged consist gets a **new train id** — engine
-  unit ids are stable, so orders addressed by `engine` id keep working across couplings.
+  stock go **inactive** until cut off again. The merged consist **keeps the commanding train's
+  id**: a train is identified by its **active engine's fixed unit id**, so engine "2" dropping
+  some cars and picking up others is still train "2" (a pure cut of cars is identified by its
+  first vehicle's id; internal consist ids are never exposed).
 - **Shunting discs.** A bidirectional shunt-only signal on plain track (never on switches,
   buffers, crossings or signal tiles): **clear by default** (white disc), and set to **stop**
   (bright blue) it halts a SHUNTING move at the disc — ordinary trains ignore it completely, in

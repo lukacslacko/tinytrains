@@ -145,7 +145,10 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
 - **Uncouple / couple.** `detach` cuts at a coupling (`keep` cars stay on the active engine); the
   standing portion becomes a new engineless consist. `couple` merges with the touching consist
   (either end; the other consist is reversed in place if needed) — the commanding engine stays
-  active, picked-up engines go inactive, and the merge yields a new train id (engine ids persist).
+  active, picked-up engines go inactive, and the merged train keeps its identity: a consist is
+  EXPOSED (UI/API/MCP) under its **active engine's fixed unit id** — engine "2" dropping some
+  cars and picking up others is still train "2"; a pure cut of cars goes by its first vehicle's
+  id. Internal consist ids stay internal.
 - **Modes** (`setTrainMode`): `drive` (normal), `shunt` (~⅓ speed, skips stop dwell, and replaces
   the one-tile standoff with a per-frame forward scan that clamps motion to the **touch distance**
   of the next body) and `stop` (the handbrake: the consist stands where it is even when it could
@@ -165,7 +168,8 @@ dimmed; the front-of-consist dot is white in drive mode, amber while shunting.
 - **Shunting discs.** A bidirectional shunt-only signal carried by a plain two-ended track tile
   (`shuntSignal`; never on switches, buffers, crossings, stops or signal tiles — a manual signal
   already halts shunting moves). **Clear by default**: a white disc with a black rim at the tile
-  centre, drawn on top of trains so its state stays readable under a standing shunter; set to
+  centre, drawn above the rails but below the trains (a shunter standing on it covers it, like
+  any lineside equipment; its state stays visible in reports); set to
   **stop** it turns **bright blue** and halts SHUNTING moves at the disc — every other train
   ignores it in both states. Operate-click toggles it; the right-click menu on a track tile
   adds/removes one (placed clear) and names it. State flips via the operate commands

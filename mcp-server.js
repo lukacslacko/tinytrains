@@ -122,12 +122,12 @@ const TOOLS = [
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "mode", mode: a.mode, train: a.train, engine: a.engine }, p.game)).body; } },
 
   { name: "uncouple",
-    description: "Cut a standing consist at a coupling. keep = how many cars stay attached to the ACTIVE engine (0 = the engine runs alone; 2 = engine keeps two cars). The cut-off portion stays standing exactly where it is (it has no engine). If the engine is mid-consist pass side:'front'|'back'. Returns both resulting consists (the standing one gets a NEW train id).",
+    description: "Cut a standing consist at a coupling. keep = how many cars stay attached to the ACTIVE engine (0 = the engine runs alone; 2 = engine keeps two cars). The cut-off portion stays standing exactly where it is (it has no engine). If the engine is mid-consist pass side:'front'|'back'. Returns both resulting consists — your train KEEPS its id (the active engine's fixed id); the standing cut is identified by its first vehicle's id.",
     inputSchema: { type: "object", properties: { keep: { type: "number", description: "cars kept on the engine (default 0)" }, side: { type: "string", enum: ["front", "back"] }, train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP } },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "uncouple", keep: a.keep, side: a.side, train: a.train, engine: a.engine }, p.game)).body; } },
 
   { name: "couple",
-    description: "Couple a consist with the stock it is TOUCHING (drive up to it in shunting mode first — get_infrastructure shows `touching:true` when the buffers meet). Your engine stays the active one; engines inside the picked-up stock go inactive until cut off again. Returns the merged consist — NOTE it has a NEW train id (engine unit ids are stable, so addressing by `engine` keeps working).",
+    description: "Couple a consist with the stock it is TOUCHING (drive up to it in shunting mode first — get_infrastructure shows `touching:true` when the buffers meet). Your engine stays the active one; engines inside the picked-up stock go inactive until cut off again. Returns the merged consist — it KEEPS your train's id (a train is identified by its active engine's fixed id, so the id survives coupling).",
     inputSchema: { type: "object", properties: { train: { type: "number" }, engine: { type: "number" }, ...STATION_PROP } },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/engine`, { action: "couple", train: a.train, engine: a.engine }, p.game)).body; } },
 

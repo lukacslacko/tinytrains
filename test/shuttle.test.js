@@ -107,6 +107,7 @@ async function main(){
     await eng(S, "reverse", {}, `${S}: reverse toward the car`);
     await waitFor(ts => { const t = ts.find(t => t.id === trainId); return (t && t.touching) ? t : null; }, 60000, `${S}: buffers touch the car`);
     const c = await eng(S, "couple", {}, `${S}: couple`);
+    assert(c.id === trainId, `${S}: the train keeps its engine's id through coupling`);
     trainId = c.id;
     assert(c.units.length === 2, `${S}: coupled consist has engine + car`);
     assert(c.mode === "stop", `${S}: coupled consist holds in stop mode (no creep)`);

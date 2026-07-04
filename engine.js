@@ -1153,10 +1153,21 @@
     if (t && t.name) parts.push(t.name);
     return parts.length ? parts.join(" ") : `${x},${y}`;
   }
+  // The PUBLIC identity of a consist — what the UI, API, MCP and every event expose. A train
+  // is identified by its ACTIVE ENGINE's fixed unit id, so it keeps its identity through
+  // uncoupling and coupling as long as the same engine commands it (engine "2" dropping some
+  // cars and picking up others is still train "2"). A pure cut of cars (no engine) is
+  // identified by its first vehicle's unit id. Internal train ids stay internal.
+  function publicTrainId(train){
+    const ae = activeEngine(train);
+    if (ae) return ae.id;
+    const units = trainUnits(train);
+    return units.length ? units[0].id : train.id;
+  }
   function trainDesc(train){
     const t = trainTypeById(train.type);
     const nm = t && t.name ? t.name : `type ${train.type}`;
-    return `Train ${train.id} (${nm})`;
+    return `Train ${publicTrainId(train)} (${nm})`;
   }
   // Called the first frame a train docks at a stop: records when it may leave (arrival + dwell).
   function registerStopArrival(train, tile){
@@ -1474,12 +1485,14 @@
     // ---- Shunting commands (reverse / mode / uncouple / couple / place) ----
     // These are STATION MASTER moves: every one of them requires the consist to stand inside
     // a station (and, when the command is scoped to a station, inside THAT station). Consists
-    // are addressed by train id or by any engine unit id they contain.
+    // are addressed by their PUBLIC id (the active engine's fixed unit id — see publicTrainId)
+    // or by any unit id they contain; the internal train id is accepted as a last resort.
     function findConsist(ref){
       if (ref == null) return null;
       const n = Number(ref);
-      return state.trains.find(t => t.id === n) ||
-             state.trains.find(t => trainUnits(t).some(u => u.id === n)) || null;
+      return state.trains.find(t => publicTrainId(t) === n) ||
+             state.trains.find(t => trainUnits(t).some(u => u.id === n)) ||
+             state.trains.find(t => t.id === n) || null;
     }
     function resolveConsist(cmd){
       if (cmd.engine != null){
@@ -1504,7 +1517,7 @@
     function consistSummary(t){
       const units = trainUnits(t);
       const ae = activeEngine(t);
-      return {id:t.id, mode: t.mode || "drive", length: trainTotalLength(t),
+      return {id: publicTrainId(t), mode: t.mode || "drive", length: trainTotalLength(t),
         units: units.map(unitPublic), engines: units.filter(u => u.kind === "engine").map(u => u.id),
         activeEngine: ae ? ae.id : null};
     }
@@ -1535,7 +1548,7 @@
       const tile = getTile(t.x, t.y);
       const ex = tile ? exitFor(tile, t.from) : null;
       emit("info", `${trainDesc(t)} reversed at ${placeLabel(t.x,t.y)}`);
-      return {ok:true, train: t.id, heading: ex != null ? DIRNAMES[ex] : null, ...consistSummary(t)};
+      return {ok:true, train: publicTrainId(t), heading: ex != null ? DIRNAMES[ex] : null, ...consistSummary(t)};
     }
     // Modes: "drive" (normal), "shunt" (slow, creeps to touch), "stop" (handbrake — the
     // consist stands where it is, even when signals and track would let it move). A shunting
@@ -1559,7 +1572,7 @@
       updateSignals();
       const modeName = mode === "shunt" ? "shunting" : (mode === "stop" ? "stop (standing)" : "driving");
       emit("info", `${trainDesc(t)} switched to ${modeName} mode`);
-      return {ok:true, train: t.id, mode};
+      return {ok:true, train: publicTrainId(t), mode};
     }
     // Uncouple: cut the consist at a coupling. The cut is given either as `cut` (boundary
     // index: between units[cut] and units[cut+1]) or as `keep` — how many vehicles stay with
@@ -1964,7 +1977,7 @@
         const tt = trainTypeById(t.type);
         const st = stationContaining(t.x, t.y);
         return {
-          id: t.id, type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
+          type: t.type, typeName: tt && tt.name ? tt.name : `type ${t.type}`,
           x: t.x, y: t.y, station: st ? st.name : null, at: tile && tile.name ? tile.name : null,
           heading: ex != null ? DIRNAMES[ex] : null, moving: !trainStopped(t),
           waitingFor: trainWaitReason(t), waitedSeconds: waitedSecs(t),
@@ -2037,7 +2050,7 @@
             if (!disc && (ex == null || !manualDirs(i.tile).includes(ex))) continue;
             const tt = trainTypeById(t.type);
             out.push({ mode: "waiting", owner: st.name, element: i.tile.name || null,
-              trainId: t.id, trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
+              trainId: publicTrainId(t), trainType: t.type, trainTypeName: tt && tt.name ? tt.name : `type ${t.type}`,
               wantsDir: ex != null ? DIRNAMES[ex] : null, waitedSeconds: waitedSecs(t), clock: formatClock(state.simFrame) });
           }
         }
@@ -2183,7 +2196,8 @@
         seq: ++watchEventSeq, frame: state.simFrame, clock: formatClock(state.simFrame),
         watchId: w.id, owner: w.owner, label: w.label || null, element: w.element || null,
         mode: w.mode, x: w.x, y: w.y,
-        trainId, trainType: type, trainTypeName: tt && tt.name ? tt.name : (type != null ? `type ${type}` : null)
+        trainId: t ? publicTrainId(t) : trainId,   // events expose the PUBLIC (active-engine) id
+        trainType: type, trainTypeName: tt && tt.name ? tt.name : (type != null ? `type ${type}` : null)
       });
       if (state.watchEvents.length > 500) state.watchEvents.shift();
     }
@@ -2335,7 +2349,7 @@
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SHUNT_SPEED_FACTOR, COUPLE_DIST, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, activeEngine, hasActiveEngine, trainEngines, unitsLength, defaultUnits, unitsFor, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, bodyGeometry, obstacleDistance, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, cmdReverse, cmdSetTrainMode, cmdDetach, cmdCouple, cmdPlaceTrain, resolveConsist, consistSummary, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SHUNT_SPEED_FACTOR, COUPLE_DIST, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, activeEngine, hasActiveEngine, trainEngines, unitsLength, defaultUnits, unitsFor, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, bodyGeometry, obstacleDistance, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, cmdReverse, cmdSetTrainMode, cmdDetach, cmdCouple, cmdPlaceTrain, resolveConsist, consistSummary, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
   }
   return { createEngine };
 });
