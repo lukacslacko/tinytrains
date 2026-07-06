@@ -244,6 +244,19 @@
   .chat-op{align-self:flex-end;background:#243042}
   .chat-master{align-self:flex-start;background:#152a20;border:1px solid #2f5a3f}
   .chat-empty{color:var(--muted);font-size:12px}
+  /* boxscript editor + execution log in the station pop-up */
+  .script-edit{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;min-height:88px;white-space:pre;overflow-x:auto}
+  .script-status{font-size:12px;color:var(--muted);align-self:center;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
+  .script-status.err{color:#ff8a7e}
+  .script-status.saved{color:#43d17b}
+  .scriptlog{max-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;gap:2px}
+  .slog{white-space:pre-wrap}
+  .slog-clock{color:var(--muted);margin-right:6px}
+  .slog-fail,.slog-error,.slog-alert{color:#ff9a8e}
+  .slog-event,.slog-time{color:#8fc7ff}
+  .slog-chain{color:#cdb2ff}
+  .slog-script{color:var(--muted)}
+  .mini{min-height:20px;padding:1px 8px;font-size:11px;margin-left:6px}
   .note-master{border-left-color:var(--accent);background:#102420}
   .type-row .type-notes{flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;text-align:center}
   .type-row .type-notes.has-notes{border-color:var(--accent);color:var(--accent)}
@@ -441,6 +454,7 @@
     </section>
   </main>
 </div>
+<script src="boxscript.js"></script>
 <script src="engine.js"></script>
 <script>
 (() => {
@@ -927,10 +941,11 @@
     ctx.fill();
     ctx.lineWidth = Math.max(1.5, s*0.045); ctx.strokeStyle = "#0b0e12"; ctx.stroke();
   }
-  // The id (name) of a signal/switch, drawn in the MIDDLE of its tile on top of everything (even
+  // The id (name) of a signal/switch — or a NAMED track tile (a stub letter, a disc, a
+  // boxscript waypoint) — drawn in the MIDDLE of its tile on top of everything (even
   // trains) with a translucent background, so the operator can always read which element it is.
   function drawElementId(x,y,tile){
-    if (!tile.name || (tile.kind !== "signal" && tile.kind !== "switch")) return;
+    if (!tile.name || (tile.kind !== "signal" && tile.kind !== "switch" && tile.kind !== "track")) return;
     const s = tileSize();
     if (s < 16) return; // unreadable when zoomed far out
     const c = centerPoint(x,y);
@@ -1869,7 +1884,10 @@
       const branchOpts = sel => tile.branches.map(b => `<option value="${b}" ${sel===b?"selected":""}>${dirArrow(b)} ${DIRS[b].name}</option>`).join("");
       body += `<label class="field"><span>Set direction (stem &rarr; branch)</span><select name="switchCurrent">${branchOpts(cur)}</select></label>`;
     }
-    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal" || (tile.kind === "track" && tile.shuntSignal)){
+    // Stops/switches/signals/discs carry station-local names — and so can any TRACK tile:
+    // a stub (buffer) gets a letter like a signal (trains stop there too), and a named plain
+    // tile is a waypoint a boxscript `permit` path can steer by.
+    if (tile.kind === "stop" || tile.kind === "switch" || tile.kind === "signal" || tile.kind === "track"){
       const st = stationContaining(Number(x),Number(y));
       const hint = st ? ` in ${escapeHtml(st.name)}` : "";
       body += `<label class="field"><span>Name${hint}</span><input name="elname" type="text" maxlength="24" placeholder="e.g. 1E, A, 2" value="${escapeHtml(tile.name || "")}"></label>`;
@@ -1925,12 +1943,20 @@
       `<label class="field"><span>Station Master instructions</span>` +
         `<textarea name="instructions" placeholder="Free-text orders for the Station Master — who sets this station's switches and manual signals.">${escapeHtml(st.instructions||"")}</textarea></label>` +
       `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>` +
+      `<label class="field"><span>Automation script (<a href="/BOXSCRIPT.md" target="_blank">boxscript</a> — the server runs it as a scripted master)</span>` +
+        `<textarea id="scriptText" class="script-edit" spellcheck="false" placeholder="on (red at A) { clear 1,2,B }">${escapeHtml(st.script||"")}</textarea></label>` +
+      `<div class="row"><button type="button" id="scriptSave">Save script</button><span id="scriptStatus" class="script-status"></span></div>` +
+      `<div class="field"><span>Script log — events fired, actions taken<button type="button" id="scriptLogRefresh" class="mini">refresh</button></span>` +
+        `<div id="scriptLog" class="chatlog scriptlog"></div></div>` +
       `<div class="field grow"><span>Chat with the station master</span>` +
         `<div id="stationChat" class="chatlog"></div>` +
         `<div class="chatrow"><input id="chatInput" type="text" autocomplete="off" placeholder="message ${escapeHtml(st.name)}…"><button type="button" id="chatSend">Send</button></div>` +
       `</div>`;
     stationMenu.classList.add("open");
     renderStationChat(st.name);
+    refreshScriptLog();
+    if (scriptLogTimer) clearInterval(scriptLogTimer);
+    scriptLogTimer = setInterval(refreshScriptLog, 2500);   // live while the pop-up is open
     // Place near the click, clamped to the stage using the pop-up's actual (possibly resized) size.
     const rect = stage.getBoundingClientRect();
     const w = stationMenu.offsetWidth, h = stationMenu.offsetHeight;
@@ -1938,7 +1964,38 @@
     stationMenu.style.top = Math.max(8, Math.min(clientY - rect.top, rect.height - h - 8)) + "px";
     const f = stationMenu.querySelector("input[name=name]"); if (f) f.focus();
   }
-  function closeStationContext(){ stationMenu.classList.remove("open"); }
+  function closeStationContext(){
+    stationMenu.classList.remove("open");
+    if (scriptLogTimer){ clearInterval(scriptLogTimer); scriptLogTimer = null; }
+  }
+
+  // ---- boxscript: save the station's automation script, show its execution log ----
+  let scriptLogTimer = null;
+  async function refreshScriptLog(){
+    const name = stationMenu.dataset.station;
+    const box = document.getElementById("scriptLog");
+    if (!box || !name || !stationMenu.classList.contains("open")) return;
+    const r = await apiFetch(`/api/stations/${encodeURIComponent(name)}/script-log?game=${encodeURIComponent(server.gameId || "")}`);
+    const entries = (r.body && r.body.entries) || [];
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+    box.innerHTML = entries.length
+      ? entries.map(e => `<div class="slog slog-${escapeHtml(e.kind)}"><span class="slog-clock">${escapeHtml(e.clock)}</span>${escapeHtml(e.text)}</div>`).join("")
+      : `<div class="chat-empty">Nothing yet — every event the script handles and every action it takes lands here.</div>`;
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  stationMenu.addEventListener("click", async event => {
+    if (event.target.id === "scriptLogRefresh") return refreshScriptLog();
+    if (event.target.id !== "scriptSave") return;
+    const name = stationMenu.dataset.station;
+    const status = document.getElementById("scriptStatus");
+    status.textContent = "saving…"; status.className = "script-status";
+    const r = await apiFetch(`/api/stations/${encodeURIComponent(name)}/script`,
+      { method: "POST", body: JSON.stringify(withGame({ script: document.getElementById("scriptText").value })) });
+    if (!(r.body && r.body.ok)){ status.textContent = (r.body && r.body.error) || SERVER_DOWN; status.className = "script-status err"; return; }
+    if (r.body.error){ status.textContent = "✗ " + r.body.error; status.className = "script-status err"; }
+    else { status.textContent = "saved — script active"; status.className = "script-status saved"; }
+    refreshScriptLog();
+  });
 
   // ---- Operator <-> station-master chat (per station, by name) ----
   const stationChats = {};        // station name -> [{from:"operator"|"master", text}]

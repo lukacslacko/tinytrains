@@ -58,8 +58,17 @@ Operate (by station-local element name, or `x,y`):
 - `POST /api/stations/:id/path` `{ path: [entrySignal, switch, switch, …, (signal|compass)?] }` —
   **sets a whole route at once**: traces the live track element-to-element and sets every switch so
   the route threads through it (one port is the stem, the other the set branch), then clears the entry
-  signal. An optional final signal/compass fixes the last switch's exit when it's entered via its stem.
+  signal **for the routed direction only** (a both-ways signal keeps its opposite main red). An
+  optional final signal/compass fixes the last switch's exit when it's entered via its stem.
   This is the easy way to satisfy a "set path 1,2,3" instruction without computing switch directions.
+  With `shunt: true` (or a `to`) it **permits a shunting path** instead: waypoints may be ANY named
+  elements (signals, switches, discs, stubs, named plain tiles), facing manual mains along the route
+  are cleared for shunting, discs cleared, and the `to` limit is set against the move (BOXSCRIPT.md §6).
+- `GET/POST /api/stations/:id/script` and `GET /api/stations/:id/script-log?after=N` — the station's
+  **boxscript**: a small event-driven automation program the server runs as a *scripted station
+  master*, plus its execution log (every event fired / action taken). See `BOXSCRIPT.md` for the
+  language; the pop-up UI has an editor + live log, and masters get `get_script` / `set_script` /
+  `get_script_log` tools — write a script for the mechanical rules once, then just review the log.
 
 Notify:
 - `POST /api/watches` `{ station, element, mode, tiles? }` (or `{ owner, x, y, mode }`) → `{ watch }`.
@@ -144,7 +153,10 @@ clears the entry signal; the easy way to follow "set path …" instructions), `s
 shunting orders — see *Shunting* above), `watch`, `watch_arrivals` (approach-watch every signal at once),
 `await_events` (the blocking notification receiver), `send_message`, `set_override` / `clear_override`
 (record/cancel a **standing operator override** given over chat — "until further notice …" — which
-takes precedence over the base instructions until cleared), `list_watches`, `cancel_watch`.
+takes precedence over the base instructions until cleared), `list_watches`, `cancel_watch`, and the
+**boxscript tools** — `get_script`, `set_script`, `get_script_log`: install a per-station automation
+script (BOXSCRIPT.md) so the server routes the mechanical traffic and the master only supervises,
+reviewing the execution log at the end of a shift instead of routing every train (a big token saver).
 
 Because approach/arrival notifications are edge-triggered, a master also **sweeps `get_infrastructure`
 every cycle** for trains already waiting at its signals and routes them — so trains don't get
@@ -241,6 +253,9 @@ suggestion noting the gap.)
 ## Status
 
 Implemented and tested: the HTTP API (guide / instructions / infra / operate-by-name / watches /
-long-poll), the engine watch system (approach/reach/pass, owner-scoped), and the MCP server
-(handshake + all tools, including `await_events` delivering a real arrival event). Not yet built:
-the engine-driver API and shunting; multi-station coordination is left to the per-station AIs.
+long-poll), the engine watch system (approach/reach/pass, owner-scoped), the MCP server
+(handshake + all tools, including `await_events` delivering a real arrival event), shunting
+(consists, reverse/uncouple/couple, discs, boundary), and **boxscript** — the per-station
+automation language with its execution log (`BOXSCRIPT.md`; `test/boxscript*.test.js` includes a
+fully scripted shuttle run-around). Multi-station coordination is left to the per-station
+masters/scripts (script-to-script message passing is a TODO in BOXSCRIPT.md).

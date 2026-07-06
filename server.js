@@ -35,6 +35,10 @@
 //                                          → shunting orders to an engine standing in this station
 //   POST /api/stations/:id/shunt-signal { name|x,y, action:stop|clear|toggle } → set a shunting disc
 //   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
+//   GET  /api/stations/:id/script                → the station's boxscript (automation program)
+//   POST /api/stations/:id/script { script }     → install/replace it (returns compile error, if any)
+//   GET  /api/stations/:id/script-log?after=N    → the script EXECUTION LOG (events fired, actions taken)
+//   POST /api/stations/:id/path { path, shunt? } — with shunt/to: permit a shunting path (see BOXSCRIPT.md)
 
 "use strict";
 const http = require("http");
@@ -335,6 +339,26 @@ by \`engine\` (unit) id. A train's id IS its active engine's fixed id, so it kee
 through uncoupling and coupling — engine "2" dropping some cars and picking up others is still
 train "2". A pure cut of cars is identified by its first vehicle's id.
 
+## Scripts — automate the routine, supervise the rest (saves you tokens)
+A station can carry a BOXSCRIPT: a small event-driven program the SERVER runs as a scripted
+station master, so mechanical instructions don't need you awake for every train. If your orders
+are fully mechanical ("train at A → set path 1,2,B"), write a script ONCE with set_script, then
+just check get_script_log now and then (it shows every event fired and action taken since a
+cursor) and handle only what the script can't. The language, one glance:
+  platform_busy := false
+  on (red at A) { clear 1,2,B }                      # a red-type train stands at signal A → set that path
+  on (any at A) { if (!platform_busy) { clear 1,C; platform_busy := true } }
+  on (any at C) { clear 3,2,B; platform_busy := false }
+  on (any at X) { reverse }                          # X may be a named stub (buffer)
+  on (red at B) { wait until (hh:00); clear 1,2,B }  # hold for the next hour, then go
+  on (22:00) { daytime := false }                    # time-of-day rules
+Shunting sequences read sequentially: statements, then \`when (at X) {...}\` / \`when (touching)
+{...}\` steps; \`permit 1,2,S to X\` opens a shunting route (limit set against the move); macros
+bundle a whole manoeuvre. Failures leave the event pending and retry — see /BOXSCRIPT.md for the
+full language. A failing action shows up in get_script_log with its reason. set_script replaces
+the whole script (get_script first to extend it); a compile error is returned AND logged, and a
+broken script routes nothing.
+
 ## Notes
 - A switch can't be re-thrown until a train clears it, nor a signal's block re-used until a train
   passes; \`watch(element,"pass")\` tells you the moment that's safe (on a switch = free to re-throw,
@@ -536,12 +560,18 @@ const server = http.createServer(async (req, res) => {
 
     // Set a whole path of switches at once (and clear the entry signal). body.path is a list of
     // station-local names: an entry signal, then switches (with an optional final signal / compass dir).
+    // With shunt:true it PERMITS a shunting path instead (waypoints may be any named elements,
+    // `to` is the movement limit — see BOXSCRIPT.md §6): signals along the route are cleared for
+    // shunting, discs cleared, and the limit is set against the move.
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/path$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       const id = decodeURIComponent(m[1]);
-      const result = applyCommand(lg, { type: "setPath", station: id, path: body.path });
-      smlog(`${gname(lg)} ${id} | set_path [${(body.path || []).join(",")}]  ${result.ok ? "set " + (result.set || []).map(s => s.name + "=" + s.dir).join(",") + (result.cleared ? " +clear " + result.entry : "") : "REFUSED: " + result.error}`);
+      const shunt = !!body.shunt || body.to != null;
+      const result = applyCommand(lg, shunt
+        ? { type: "permitPath", station: id, path: body.path, to: body.to }
+        : { type: "setPath", station: id, path: body.path });
+      smlog(`${gname(lg)} ${id} | ${shunt ? "permit_path" : "set_path"} [${(body.path || []).join(",")}]${body.to ? " to " + body.to : ""}  ${result.ok ? "set " + (result.set || []).map(s => s.name + "=" + s.dir).join(",") + (result.cleared && result.cleared.length !== 0 ? " +clear " + (result.entry || (result.cleared.join ? result.cleared.join(",") : result.entry)) : "") : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
 
@@ -614,6 +644,35 @@ const server = http.createServer(async (req, res) => {
       smlog(`${gname(lg)} ${id} | ${clear ? "clear_overrides" : `set_override "${body.text}"`}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
+    // ---- Boxscript: a station's automation script + its execution log (BOXSCRIPT.md) ----
+    // The script is a small event-driven program the SERVER runs as a scripted station master.
+    // POST stores the text even when it does not compile (the error comes back in `error`);
+    // only a clean script actually runs. The execution log shows which events fired and what
+    // actions were taken since a given cursor — how an operator (or an AI master back from a
+    // break) reviews what the script did on its shift.
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script$/)) && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const result = lg.engine.getScript(id);
+      smlog(`${gname(lg)} ${id} | get_script  ${result.ok ? (result.error ? "has ERROR: " + result.error : (result.script ? "ok" : "empty")) : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 404, result);
+    }
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const result = applyCommand(lg, { type: "setScript", station: id, script: body.script });
+      smlog(`${gname(lg)} ${id} | set_script (${String(body.script || "").length} chars)  ${result.ok ? (result.error ? "stored, ERROR: " + result.error : "ok") : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script-log$/)) && req.method === "GET"){
+      const lg = reqGame(query); if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const result = lg.engine.scriptLog(id, Number(query.get("after") || 0));
+      smlog(`${gname(lg)} ${id} | get_script_log after ${query.get("after") || 0} -> ${result.ok ? (result.entries || []).length + " entrie(s)" : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 404, result);
+    }
+
     // From a station master TO the operator: shown in the game notification log + highlights the station.
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/operator-message$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
