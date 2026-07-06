@@ -16,8 +16,8 @@
   // ================= Lexer =================
   // Words are [A-Za-z0-9_]+ so element names like "1E" lex as one token; pure digits are numbers.
   // "3:00" / "hh:00" lex as one TIME token. Newlines are insignificant; ';' separates statements;
-  // '#' starts a comment.
-  function tokenize(text){
+  // '#' starts a comment (dropped for parsing; kept as tokens for the formatter).
+  function tokenize(text, keepComments){
     const toks = [];
     let i = 0, line = 1;
     const isW = c => /[A-Za-z0-9_]/.test(c);
@@ -25,7 +25,11 @@
       const c = text[i];
       if (c === "\n"){ line++; i++; continue; }
       if (c === " " || c === "\t" || c === "\r"){ i++; continue; }
-      if (c === "#"){ while (i < text.length && text[i] !== "\n") i++; continue; }
+      if (c === "#"){
+        let j = i + 1; while (j < text.length && text[j] !== "\n") j++;
+        if (keepComments) toks.push({ t: "comment", v: text.slice(i + 1, j).trim(), line });
+        i = j; continue;
+      }
       if (c === '"'){
         let j = i + 1, s = "";
         while (j < text.length && text[j] !== '"'){
@@ -410,6 +414,90 @@
     }
 
     return { decls: ast.decls, handlers };
+  }
+
+  // ================= Formatter =================
+  // Token-based, so comments survive. Normalizes indentation to the brace depth and the spacing
+  // between tokens, but KEEPS the author's line structure: a one-liner body stays a one-liner, a
+  // multi-line chain stays multi-line, and blank lines between sections are preserved (collapsed
+  // to one). Redundant end-of-line semicolons are dropped; inline ones ("a; b") are kept.
+  // Throws (with .line) on a syntax error — a broken script is never "formatted".
+  function format(text){
+    if (!text || !text.trim()) return "";
+    parse(text);   // syntax first
+    const toks = tokenize(text, true);
+    const OPS = new Set([":=", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "+", "-"]);
+    const KEYW_PAREN = new Set(["on", "if", "elif", "when", "require", "until"]);
+    const WORDY = new Set(["name", "num", "str", "time"]);
+    const tokText = t => t.t === "str" ? JSON.stringify(t.v)
+      : t.t === "time" ? `${t.h}:${String(t.m).padStart(2, "0")}`
+      : String(t.v);
+    // tag unary - / ! (they glue to their operand)
+    for (let k = 0; k < toks.length; k++){
+      const t = toks[k];
+      if (t.t !== "p" || (t.v !== "-" && t.v !== "!")) continue;
+      let p = k - 1; while (p >= 0 && toks[p].t === "comment") p--;
+      const prev = p >= 0 ? toks[p] : null;
+      const wordyPrev = prev && ((WORDY.has(prev.t) && !(prev.t === "name" && RESERVED.has(prev.v))) || (prev.t === "p" && prev.v === ")"));
+      t._unary = t.v === "!" || !wordyPrev;
+    }
+    function glue(prev, t){
+      if (!prev) return "";
+      if (t.t === "p" && [",", ";", ")", "."].includes(t.v)) return "";
+      if (prev.t === "p" && ["(", ".", ","].includes(prev.v)) return "";  // tight commas: clear 1,2,B
+      if (prev.t === "p" && (prev.v === "-" || prev.v === "!") && prev._unary) return "";
+      if (t.t === "p" && t.v === "("){
+        if (prev.t === "p" && OPS.has(prev.v)) return " ";
+        if (prev.t === "name" && KEYW_PAREN.has(prev.v)) return " ";
+        if (prev.t === "num") return " ";   // a handler priority: on 2 (...)
+        return "";                          // a macro call: m(train)
+      }
+      return " ";
+    }
+    // a source newline is kept unless the previous token clearly continues the line (an open
+    // operator/paren) or the current one does (a closing/infix token) — so the author's layout
+    // survives while indentation and spacing are normalized
+    const CONT_PREV = new Set([",", ":=", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "+", "-", "(", "."]);
+    const CONT_CUR = new Set([")", ",", ":=", "==", "!=", "<=", ">=", "<", ">", "&&", "||", "+", "-", ".", "{"]);
+    const CONT_CUR_NAMES = new Set(["to", "at", "after", "until"]);
+    const out = [];
+    let buf = "", depth = 0, lastTok = null, lastLine = null;
+    const flush = () => { if (buf.trim() !== "") out.push(buf.replace(/\s+$/, "")); buf = ""; };
+    for (let k = 0; k < toks.length; k++){
+      const t = toks[k];
+      if (t.t === "eof") break;
+      // a semicolon at the end of a source line is redundant — the line break separates
+      if (t.t === "p" && t.v === ";"){
+        let nx = k + 1; while (nx < toks.length && toks[nx].t === "comment") nx++;
+        const nt = toks[nx];
+        if (!nt || nt.t === "eof" || nt.line > t.line || (nt.t === "p" && nt.v === "}")){ lastLine = t.line; continue; }
+      }
+      if (t.t === "p" && t.v === "}") depth = Math.max(0, depth - 1);
+      let newline = lastTok == null;
+      if (!newline && t.line > lastLine){
+        const contPrev = lastTok.t === "p" && CONT_PREV.has(lastTok.v);
+        const contCur = (t.t === "p" && CONT_CUR.has(t.v)) || (t.t === "name" && CONT_CUR_NAMES.has(t.v));
+        newline = !(contPrev || contCur) || t.t === "comment";
+      }
+      if (t.t === "comment"){
+        if (!newline && buf.trim() !== ""){ buf += "   # " + t.v; }
+        else { flush(); if (lastLine != null && t.line - lastLine >= 2 && out.length && out[out.length - 1] !== "") out.push(""); buf = "  ".repeat(depth) + "# " + t.v; }
+        flush();
+        lastTok = null; lastLine = t.line;
+        continue;
+      }
+      if (newline){
+        flush();
+        if (lastLine != null && t.line - lastLine >= 2 && out.length && out[out.length - 1] !== "") out.push("");
+        buf = "  ".repeat(depth) + tokText(t);
+      } else {
+        buf += glue(lastTok, t) + tokText(t);
+      }
+      if (t.t === "p" && t.v === "{") depth++;
+      lastTok = t; lastLine = t.line;
+    }
+    flush();
+    return out.join("\n") + "\n";
   }
 
   // ================= Runtime =================
@@ -882,9 +970,24 @@
         if (E.state.simFrame % TICK_EVERY !== 0) return;
         for (const st of E.state.stations){
           if (!st.script || !st.script.trim()) continue;
+          if (st.scriptPaused) continue;   // the operator has the trains — resume with Run
           const c = ensure(st);
           if (c.prog) runStation(st, c.prog, allRt()[st.id]);
         }
+      },
+      // compile-check some text WITHOUT touching the station's running program/runtime
+      // (used for live feedback while a draft is being typed)
+      checkText(text){
+        if (!text || !text.trim()) return null;
+        try { compile(text); return null; }
+        catch (e){ return e.message; }
+      },
+      // drop a line into a station's execution log (pause/resume and other operator acts)
+      note(st, kind, text){
+        const all = allRt();
+        let rt = all[st.id];
+        if (!rt) rt = all[st.id] = { hash: "", vars: {}, consumed: {}, chains: [], timers: {}, lastFail: {}, log: [], logSeq: 0 };
+        log(rt, kind, text);
       },
       // called by the setScript command: compile now and report the result
       scriptChanged(st){
@@ -909,5 +1012,5 @@
     };
   }
 
-  return { compile, parse, tokenize, createRunner };
+  return { compile, parse, tokenize, format, createRunner };
 });

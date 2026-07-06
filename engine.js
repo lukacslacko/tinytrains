@@ -190,8 +190,10 @@
     // station's switches and manual signals). It travels with the layout and is exposed by the API.
     // `overrides` are temporary operator instructions (set over chat, "until further notice …") that
     // take precedence over `instructions` until cleared; they travel with the layout like instructions.
-    // `script` is the station's boxscript automation program (see BOXSCRIPT.md) — also persisted.
-    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], script:"", rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    // `script` is the station's boxscript automation program (see BOXSCRIPT.md) — also persisted,
+    // together with the editor's `scriptDraft` (typed but not yet deployed; null = in sync) and
+    // `scriptPaused` (the operator took the trains; the runner skips the station).
+    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], script:"", scriptDraft:null, scriptPaused:false, rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
     state.stations.push(st);
     return st;
   }
@@ -1353,7 +1355,7 @@
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.stations = (Array.isArray(data.stations) ? data.stations : [])
       .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", scriptDraft: s.scriptDraft != null ? String(s.scriptDraft) : null, scriptPaused: !!s.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
@@ -1853,7 +1855,7 @@
     function sanitizeStations(list){
       return (Array.isArray(list) ? list : [])
         .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", scriptDraft: s.scriptDraft != null ? String(s.scriptDraft) : null, scriptPaused: !!s.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     }
     function sanitizeTypes(list){
       return (Array.isArray(list) && list.length)
@@ -1895,12 +1897,33 @@
     function cmdSetScript(idOrName, text){
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       st.script = String(text == null ? "" : text);
+      st.scriptDraft = null;   // deploying brings the editor draft in sync
       const error = boxscriptRunner ? boxscriptRunner.scriptChanged(st).error : null;
+      return {ok:true, station: st.name, id: st.id, error: error || null, paused: !!st.scriptPaused};
+    }
+    // The editor's draft: auto-saved as typed, persisted with the game, deployed only on demand.
+    // Returns a compile check of the DRAFT so the author gets live feedback without deploying.
+    function cmdSetScriptDraft(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.scriptDraft = text == null ? null : String(text);
+      const error = (boxscriptRunner && st.scriptDraft != null) ? boxscriptRunner.checkText(st.scriptDraft) : null;
       return {ok:true, station: st.name, id: st.id, error: error || null};
+    }
+    // Pause/Run: a paused station's script keeps its state (variables, chains, log) but the
+    // runner skips it — the operator arranges the trains by hand, then presses Run. Time
+    // triggers that came due meanwhile fire once (their latest missed moment) on resume.
+    function cmdSetScriptPaused(idOrName, paused){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      const to = !!paused;
+      if (to !== !!st.scriptPaused && boxscriptRunner)
+        boxscriptRunner.note(st, "script", to ? "script paused — the operator has the trains" : "script resumed");
+      st.scriptPaused = to;
+      return {ok:true, station: st.name, id: st.id, paused: to};
     }
     function getScript(idOrName){
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       return {ok:true, station: st.name, id: st.id, script: st.script || "",
+        draft: st.scriptDraft != null ? st.scriptDraft : null, paused: !!st.scriptPaused,
         error: boxscriptRunner ? boxscriptRunner.compileError(st) : null};
     }
     // The script EXECUTION LOG: which events fired and what actions were taken, so an
@@ -1964,6 +1987,8 @@
         case "setPath":       return cmdSetPath(cmd.station, cmd.path);
         case "permitPath":    return cmdPermitPath(cmd.station, cmd.path, cmd.to);
         case "setScript":     return cmdSetScript(cmd.station, cmd.script);
+        case "setScriptDraft":  return cmdSetScriptDraft(cmd.station, cmd.draft);
+        case "setScriptPaused": return cmdSetScriptPaused(cmd.station, cmd.paused);
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
         case "setDayLength":  return setDayLength(cmd.seconds);
@@ -2567,7 +2592,7 @@
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
       state.stations = (Array.isArray(s.stations) ? s.stations : [])
         .filter(st => st && st.rect)
-        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], script: st.script || "", rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], script: st.script || "", scriptDraft: st.scriptDraft != null ? String(st.scriptDraft) : null, scriptPaused: !!st.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
       state.tiles = new Map();
       for (const it of (s.tiles||[])){ if (it && it.tile && Number.isFinite(it.x) && Number.isFinite(it.y)) setTile(it.x, it.y, it.tile); }
       state.trains = (s.trains||[]).map(deHydrateTrain);

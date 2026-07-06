@@ -77,11 +77,56 @@ async function main(){
   const noSuch = await api("POST", st + "/path", { path: ["A", "nowhere"], shunt: true });
   assert(noSuch && noSuch.ok === false && /not an element/.test(noSuch.error || ""), "permit path validates element names");
 
+  // ---- draft autosave: stored beside the running script, compile-checked, cleared by deploy ----
+  const running = (await api("GET", st + "/script")).script;
+  const draftText = running + "\n# tweaked in the editor";
+  await ok("POST", st + "/script", { draft: draftText }, "save a draft");
+  const g1 = await ok("GET", st + "/script", null, "read back with draft");
+  assert(g1.draft === draftText, "the draft is stored");
+  assert(g1.script === running, "the RUNNING script is unchanged by the draft");
+  const badDraft = await ok("POST", st + "/script", { draft: "on (any at A) { claer A }" }, "save a broken draft");
+  assert(/expected a statement/.test(badDraft.error || ""), "a draft gets a live compile check");
+  await ok("POST", st + "/script", { script: running }, "re-deploy");
+  assert((await api("GET", st + "/script")).draft === null, "deploying brings the draft in sync (null)");
+
+  // ---- pause/run: a paused station's script routes nothing; resume picks the train up ----
+  await ok("POST", "/api/command", { type: "removeTrain", x: 10, y: 0 }, "clear the buffer (free route for the next train)");
+  await ok("POST", st + "/script", { paused: true }, "pause the script");
+  assert((await api("GET", st + "/script")).paused === true, "reports paused");
+  await ok("POST", "/api/command", { type: "placeTrain", x: 1, y: 0, heading: "E", units: [{ kind: "engine", len: 0.5, type: 1 }] }, "place a second train");
+  let deadline2 = Date.now() + 20000, second = null;
+  while (Date.now() < deadline2){   // it drives up to A and stops there
+    const ts = (await api("GET", "/api/trains")).trains || [];
+    second = ts.find(t => t.x === 5 && !t.moving);
+    if (second) break;
+    await sleep(150);
+  }
+  assert(second, "the second train reaches A and waits");
+  await sleep(2000);
+  const still = ((await api("GET", "/api/trains")).trains || []).find(t => t.x === 5 && !t.moving);
+  assert(still, "paused: the script does not clear it (the route ahead is free — only the pause holds it)");
+  const pauseLog = await ok("GET", st + "/script-log", null, "log while paused");
+  assert(pauseLog.entries.some(e => /script paused/.test(e.text)), "the pause is noted in the execution log");
+  await ok("POST", st + "/script", { paused: false }, "resume the script");
+  deadline2 = Date.now() + 20000;
+  let released = false;
+  while (Date.now() < deadline2 && !released){
+    const ts = (await api("GET", "/api/trains")).trains || [];
+    released = ts.some(t => t.x > 5);   // cleared through A on resume
+    await sleep(150);
+  }
+  assert(released, "resumed: the waiting train is routed");
+
+  // ---- draft + paused flag persist into the save file ----
+  await ok("POST", st + "/script", { draft: "x := 1" }, "leave a draft for the save");
+
   // the script persists into the save file
   const saved = await ok("POST", "/api/game/save", {}, "save the game");
   const rec = JSON.parse(fs.readFileSync(path.join(GAMES_DIR, saved.id + ".json"), "utf8"));
   const stRec = rec.snapshot.stations.find(s => s.name === "Yard");
   assert(stRec && stRec.script.includes("clear A"), "the script is in the saved snapshot");
+  assert(stRec.scriptDraft === "x := 1", "the editor draft is in the saved snapshot");
+  assert(stRec.scriptPaused === false, "the paused flag is in the saved snapshot");
   assert(rec.snapshot.boxscript && rec.snapshot.boxscript["1"], "the runtime state (log, vars) is in the saved snapshot");
 }
 

@@ -15,6 +15,23 @@ state: variables, in-flight manoeuvres and the execution log ride along in every
 server restart resumes a script mid-shunt. A script that does not compile is stored anyway (so
 you can fix it) but runs nothing; the compile error comes back from the save and is logged.
 
+**Editing workflow** (the station pop-up; same protocol over the API):
+
+- What you type is a **draft, auto-saved as you type** (`POST { draft }` — persisted with the
+  game, compile-checked live, shown again when you reopen the pop-up). The running script is
+  untouched until you press **Deploy** (`POST { script }`), which lights up whenever the editor
+  differs from what is running. Deploying brings the draft back in sync.
+- **Pause / Run** (`POST { paused: true|false }`): a paused station's script routes nothing —
+  arrange the trains by hand, then press Run. Its state (variables, chains, log) is kept, and
+  the pause itself is noted in the execution log. Time triggers that came due while paused
+  fire once (their latest missed moment) on resume. The flag persists with the game.
+- **Format** reprints the script through `boxscript.js`'s token-based formatter: indentation
+  and spacing are normalized, comments and the author's line structure survive (a one-liner
+  body stays a one-liner), redundant end-of-line semicolons drop. A broken script is never
+  "formatted" — you get the syntax error instead.
+- Clicking into the script box **widens the pop-up** and grows the editor; it shrinks back
+  when focus leaves the script section.
+
 ```
 # A two-platform terminus, fully automated.
 platform_1_busy := false
@@ -314,15 +331,17 @@ whitespace (`;` optional).
 
 ## 11. Where it lives
 
-- `boxscript.js` — lexer/parser/compiler + the per-station scheduler (`compile`,
-  `createRunner`); UMD like `engine.js`, so a browser build can run it too.
+- `boxscript.js` — lexer/parser/compiler, the token-based `format`, + the per-station
+  scheduler (`compile`, `createRunner`); UMD like `engine.js`, so the browser uses it too
+  (the Format button runs it client-side).
 - `engine.js` — attaches a runner per engine, drives it from `simStep`; `setScript` /
   `permitPath` commands; `getScript` / `scriptLog` readers; the coupling geometry
   auto-settle (`extendPathAlongRails`); station `script` field through every persistence path.
 - `server.js` — `GET/POST /api/stations/:id/script`, `GET …/script-log`, `permit` on the
   `/path` endpoint; the operating guide's *Scripts* section.
 - `mcp-server.js` — `get_script`, `set_script`, `get_script_log`.
-- `manual.html` — the station pop-up's script editor + live log; the Name field on any track
+- `manual.html` — the station pop-up's script editor (draft autosave, Deploy with
+  dirty-highlight, Pause/Run, Format, focus-widening) + live log; the Name field on any track
   tile (stub letters, waypoints).
 - Tests — `test/boxscript-parse.test.js` (grammar), `test/boxscript.test.js` (scheduler
   semantics + the fully scripted shuttle run-around), `test/boxscript-http.test.js` (API).

@@ -246,6 +246,13 @@
   .chat-empty{color:var(--muted);font-size:12px}
   /* boxscript editor + execution log in the station pop-up */
   .script-edit{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;min-height:88px;white-space:pre;overflow-x:auto}
+  /* Deploy lights up when the editor differs from the RUNNING script */
+  button.attn{background:var(--accent);border-color:var(--accent);color:#0b2320;font-weight:600}
+  /* focusing the script editor widens the pop-up and grows the editor (collapses when focus
+     leaves the script section) */
+  #stationMenu.script-wide{width:660px}
+  #stationMenu.script-wide #scriptText{height:300px}
+  #scriptSection{display:flex;flex-direction:column;gap:10px}
   .script-status{font-size:12px;color:var(--muted);align-self:center;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto}
   .script-status.err{color:#ff8a7e}
   .script-status.saved{color:#43d17b}
@@ -1943,20 +1950,26 @@
       `<label class="field"><span>Station Master instructions</span>` +
         `<textarea name="instructions" placeholder="Free-text orders for the Station Master — who sets this station's switches and manual signals.">${escapeHtml(st.instructions||"")}</textarea></label>` +
       `<div class="row"><button type="submit">Apply</button><button type="button" name="remove">Remove</button></div>` +
+      `<div id="scriptSection">` +
       `<label class="field"><span>Automation script (<a href="/BOXSCRIPT.md" target="_blank">boxscript</a> — the server runs it as a scripted master)</span>` +
-        `<textarea id="scriptText" class="script-edit" spellcheck="false" placeholder="on (red at A) { clear 1,2,B }">${escapeHtml(st.script||"")}</textarea></label>` +
-      `<div class="row"><button type="button" id="scriptSave">Save script</button><span id="scriptStatus" class="script-status"></span></div>` +
+        `<textarea id="scriptText" class="script-edit" spellcheck="false" placeholder="on (red at A) { clear 1,2,B }">${escapeHtml(st.scriptDraft != null ? st.scriptDraft : (st.script||""))}</textarea></label>` +
+      `<div class="row"><button type="button" id="scriptDeploy">Deploy</button><button type="button" id="scriptPause"></button><button type="button" id="scriptFormat">Format</button><span id="scriptStatus" class="script-status"></span></div>` +
       `<div class="field"><span>Script log — events fired, actions taken<button type="button" id="scriptLogRefresh" class="mini">refresh</button></span>` +
         `<div id="scriptLog" class="chatlog scriptlog"></div></div>` +
+      `</div>` +
       `<div class="field grow"><span>Chat with the station master</span>` +
         `<div id="stationChat" class="chatlog"></div>` +
         `<div class="chatrow"><input id="chatInput" type="text" autocomplete="off" placeholder="message ${escapeHtml(st.name)}…"><button type="button" id="chatSend">Send</button></div>` +
       `</div>`;
     stationMenu.classList.add("open");
+    stationMenu.classList.remove("script-wide");
     renderStationChat(st.name);
+    updateScriptButtons();
+    if (st.scriptPaused) setScriptStatus("paused — press Run to resume", "");
+    else if (st.scriptDraft != null && st.scriptDraft !== (st.script || "")) setScriptStatus("draft — not deployed", "");
     refreshScriptLog();
     if (scriptLogTimer) clearInterval(scriptLogTimer);
-    scriptLogTimer = setInterval(refreshScriptLog, 2500);   // live while the pop-up is open
+    scriptLogTimer = setInterval(() => { refreshScriptLog(); updateScriptButtons(); }, 2500);   // live while the pop-up is open
     // Place near the click, clamped to the stage using the pop-up's actual (possibly resized) size.
     const rect = stage.getBoundingClientRect();
     const w = stationMenu.offsetWidth, h = stationMenu.offsetHeight;
@@ -1966,11 +1979,40 @@
   }
   function closeStationContext(){
     stationMenu.classList.remove("open");
+    stationMenu.classList.remove("script-wide");
     if (scriptLogTimer){ clearInterval(scriptLogTimer); scriptLogTimer = null; }
+    if (scriptDraftTimer){ clearTimeout(scriptDraftTimer); scriptDraftTimer = null; saveScriptDraft(); }   // don't lose the last keystrokes
   }
 
-  // ---- boxscript: save the station's automation script, show its execution log ----
-  let scriptLogTimer = null;
+  // ---- boxscript: the station's automation script (draft autosave / Deploy / Pause / Format) ----
+  // The textarea is a DRAFT auto-saved to the server as you type (it persists with the game and
+  // survives reopening the pop-up); Deploy installs it as the RUNNING script and lights up
+  // whenever the editor differs from what is running. Pause/Run stops and resumes the runner
+  // for this station (its state is kept), Format reprints the script via boxscript.js.
+  let scriptLogTimer = null, scriptDraftTimer = null;
+  function scriptStation(){ return stationById(Number(stationMenu.dataset.id)); }
+  function setScriptStatus(text, cls){
+    const s = document.getElementById("scriptStatus");
+    if (s){ s.textContent = text; s.className = "script-status" + (cls ? " " + cls : ""); }
+  }
+  function updateScriptButtons(){
+    const st = scriptStation(), ta = document.getElementById("scriptText");
+    const dep = document.getElementById("scriptDeploy"), pause = document.getElementById("scriptPause");
+    if (!st || !ta || !dep) return;
+    dep.classList.toggle("attn", ta.value !== (st.script || ""));   // highlight = editor ≠ running
+    if (pause) pause.textContent = st.scriptPaused ? "Run" : "Pause";
+  }
+  async function saveScriptDraft(){
+    const st = scriptStation(), ta = document.getElementById("scriptText");
+    if (!st || !ta) return;
+    st.scriptDraft = ta.value;   // keep the local copy in step (snapshots must not fight the editor)
+    const r = await apiFetch(`/api/stations/${encodeURIComponent(st.name)}/script`,
+      { method: "POST", body: JSON.stringify(withGame({ draft: ta.value })) });
+    const err = r.body && r.body.ok ? r.body.error : ((r.body && r.body.error) || SERVER_DOWN);
+    if (err) setScriptStatus("✗ " + err, "err");   // live compile check of the draft
+    else if (ta.value !== (st.script || "")) setScriptStatus("draft saved — not deployed", "");
+    else setScriptStatus("", "");
+  }
   async function refreshScriptLog(){
     const name = stationMenu.dataset.station;
     const box = document.getElementById("scriptLog");
@@ -1983,18 +2025,62 @@
       : `<div class="chat-empty">Nothing yet — every event the script handles and every action it takes lands here.</div>`;
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
+  stationMenu.addEventListener("input", event => {
+    if (event.target.id !== "scriptText") return;
+    updateScriptButtons();
+    if (scriptDraftTimer) clearTimeout(scriptDraftTimer);
+    scriptDraftTimer = setTimeout(saveScriptDraft, 600);   // auto-save the draft as you type
+  });
+  // focusing the editor widens the pop-up; it collapses when focus moves outside the script section
+  stationMenu.addEventListener("focusin", event => {
+    if (event.target.id === "scriptText") stationMenu.classList.add("script-wide");
+  });
+  stationMenu.addEventListener("focusout", event => {
+    const sec = document.getElementById("scriptSection");
+    if (sec && event.relatedTarget && !sec.contains(event.relatedTarget)) stationMenu.classList.remove("script-wide");
+  });
   stationMenu.addEventListener("click", async event => {
-    if (event.target.id === "scriptLogRefresh") return refreshScriptLog();
-    if (event.target.id !== "scriptSave") return;
-    const name = stationMenu.dataset.station;
-    const status = document.getElementById("scriptStatus");
-    status.textContent = "saving…"; status.className = "script-status";
-    const r = await apiFetch(`/api/stations/${encodeURIComponent(name)}/script`,
-      { method: "POST", body: JSON.stringify(withGame({ script: document.getElementById("scriptText").value })) });
-    if (!(r.body && r.body.ok)){ status.textContent = (r.body && r.body.error) || SERVER_DOWN; status.className = "script-status err"; return; }
-    if (r.body.error){ status.textContent = "✗ " + r.body.error; status.className = "script-status err"; }
-    else { status.textContent = "saved — script active"; status.className = "script-status saved"; }
-    refreshScriptLog();
+    const id = event.target.id;
+    if (id === "scriptLogRefresh") return refreshScriptLog();
+    if (id === "scriptFormat"){
+      const ta = document.getElementById("scriptText");
+      const BS = window.TinyTrainsBoxscript;
+      if (!ta || !BS || !BS.format) return;
+      try {
+        const f = BS.format(ta.value);
+        if (f !== ta.value) ta.value = f;
+        setScriptStatus("formatted", "");
+      } catch (e){ setScriptStatus("✗ " + e.message, "err"); return; }
+      updateScriptButtons();
+      if (scriptDraftTimer) clearTimeout(scriptDraftTimer);
+      scriptDraftTimer = setTimeout(saveScriptDraft, 300);
+      return;
+    }
+    if (id === "scriptPause"){
+      const st = scriptStation(); if (!st) return;
+      const to = !st.scriptPaused;
+      const r = await apiFetch(`/api/stations/${encodeURIComponent(st.name)}/script`,
+        { method: "POST", body: JSON.stringify(withGame({ paused: to })) });
+      if (!(r.body && r.body.ok)){ setScriptStatus((r.body && r.body.error) || SERVER_DOWN, "err"); return; }
+      st.scriptPaused = to;
+      setScriptStatus(to ? "paused — the trains are yours" : "script running", to ? "" : "saved");
+      updateScriptButtons();
+      refreshScriptLog();
+      return;
+    }
+    if (id === "scriptDeploy"){
+      const st = scriptStation(), ta = document.getElementById("scriptText");
+      if (!st || !ta) return;
+      setScriptStatus("deploying…", "");
+      const r = await apiFetch(`/api/stations/${encodeURIComponent(st.name)}/script`,
+        { method: "POST", body: JSON.stringify(withGame({ script: ta.value })) });
+      if (!(r.body && r.body.ok)){ setScriptStatus((r.body && r.body.error) || SERVER_DOWN, "err"); return; }
+      st.script = ta.value; st.scriptDraft = null;
+      if (r.body.error) setScriptStatus("✗ " + r.body.error, "err");
+      else setScriptStatus(st.scriptPaused ? "deployed — paused (press Run)" : "deployed — script active", "saved");
+      updateScriptButtons();
+      refreshScriptLog();
+    }
   });
 
   // ---- Operator <-> station-master chat (per station, by name) ----

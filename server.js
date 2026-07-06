@@ -657,12 +657,24 @@ const server = http.createServer(async (req, res) => {
       smlog(`${gname(lg)} ${id} | get_script  ${result.ok ? (result.error ? "has ERROR: " + result.error : (result.script ? "ok" : "empty")) : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 404, result);
     }
+    // POST { script } deploys; { draft } auto-saves the editor text (compile-checked, not run);
+    // { paused: true|false } pauses/resumes the runner for this station (state is kept).
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script$/)) && req.method === "POST"){
       const body = await readBody(req); const lg = reqGame(query, body);
       if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
       const id = decodeURIComponent(m[1]);
-      const result = applyCommand(lg, { type: "setScript", station: id, script: body.script });
-      smlog(`${gname(lg)} ${id} | set_script (${String(body.script || "").length} chars)  ${result.ok ? (result.error ? "stored, ERROR: " + result.error : "ok") : "REFUSED: " + result.error}`);
+      let result, what;
+      if (body.draft !== undefined){
+        result = applyCommand(lg, { type: "setScriptDraft", station: id, draft: body.draft });
+        what = `save_script_draft (${String(body.draft || "").length} chars)`;
+      } else if (body.paused !== undefined){
+        result = applyCommand(lg, { type: "setScriptPaused", station: id, paused: body.paused });
+        what = body.paused ? "pause_script" : "run_script";
+      } else {
+        result = applyCommand(lg, { type: "setScript", station: id, script: body.script });
+        what = `set_script (${String(body.script || "").length} chars)`;
+      }
+      smlog(`${gname(lg)} ${id} | ${what}  ${result.ok ? (result.error ? "stored, ERROR: " + result.error : "ok") : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script-log$/)) && req.method === "GET"){

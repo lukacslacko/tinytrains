@@ -140,6 +140,36 @@ console.log("compile-time rejections");
   rejects(`on (any at A) { uncouple 2 }`, /expected "after"/, "uncouple needs after");
 }
 
+console.log("format: normalized spacing/indentation, comments and line structure kept");
+{
+  const src = `# header comment
+a:=false
+on   2 ( red at A ) {
+      clear 1 , 2 , B ;
+   a := true    # trailing comment
+}
+
+
+on (any at C) {clear 3,2,B;a:=false}
+on (any at B) { wait until (hh:00); clear A,E }`;
+  const f = BS.format(src);
+  const lines = f.split("\n");
+  assert(lines[0] === "# header comment", "standalone comment kept on its own line");
+  assert(lines[1] === "a := false", "declaration spacing normalized");
+  assert(lines[2] === "on 2 (red at A) {", "priority + guard spacing normalized");
+  assert(lines[3] === "  clear 1,2,B", "statement indented, commas tight, end-of-line semicolon dropped");
+  assert(lines[4] === "  a := true   # trailing comment", "trailing comment stays attached");
+  assert(lines[6] === "", "blank line between sections preserved (collapsed to one)");
+  assert(lines[7] === "on (any at C) { clear 3,2,B; a := false }", "one-liner body stays inline with its semicolons");
+  assert(BS.format(f) === f, "formatting is idempotent");
+  const strip = o => JSON.parse(JSON.stringify(o, (k, v) => k === "line" ? undefined : v));
+  assert(JSON.stringify(strip(BS.compile(src))) === JSON.stringify(strip(BS.compile(f))), "formatted script compiles to the same program");
+  checks++; try { BS.format("on (any at A) {"); failures++; console.error("  ✗ format accepted a broken script"); }
+  catch (e){ if (!/unclosed/.test(e.message)){ failures++; console.error("  ✗ format: wrong error " + e.message); } }
+  assert(BS.format("   \n\n") === "", "whitespace-only formats to empty");
+  assert(/on -1 \(any at A\)/.test(BS.format("on -1 (any at A) { reverse }")), "negative priority survives formatting");
+}
+
 console.log("line numbers in errors");
 {
   try { BS.compile(`x := 1\n\non (any at A) {\n  clear 1,B\n  y := 2\n}`); assert(false, "should not compile"); }
