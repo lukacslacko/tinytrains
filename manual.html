@@ -257,6 +257,14 @@
   .script-status.err{color:#ff8a7e}
   .script-status.saved{color:#43d17b}
   .scriptlog{max-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;gap:2px}
+  /* the variable editor: live values, checkboxes for booleans, add/remove */
+  .varlist{display:flex;flex-direction:column;gap:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .var-row{display:flex;align-items:center;gap:8px}
+  .var-row .var-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .var-row input[type=text]{width:110px;font-size:12px;padding:2px 6px}
+  .var-row input[type=checkbox]{margin:0}
+  .var-empty{color:var(--muted);font-size:12px;font-family:inherit}
+  #varAddRow input{flex:1 1 auto;width:auto}
   .slog{white-space:pre-wrap}
   .slog-clock{color:var(--muted);margin-right:6px}
   .slog-fail,.slog-error,.slog-alert{color:#ff9a8e}
@@ -1954,6 +1962,8 @@
       `<label class="field"><span>Automation script (<a href="/BOXSCRIPT.md" target="_blank">boxscript</a> — the server runs it as a scripted master)</span>` +
         `<textarea id="scriptText" class="script-edit" spellcheck="false" placeholder="on (red at A) { clear 1,2,B }">${escapeHtml(st.scriptDraft != null ? st.scriptDraft : (st.script||""))}</textarea></label>` +
       `<div class="row"><button type="button" id="scriptDeploy">Deploy</button><button type="button" id="scriptPause"></button><button type="button" id="scriptFormat">Format</button><span id="scriptStatus" class="script-status"></span></div>` +
+      `<div class="field"><span>Variables — live values; script declarations only set defaults<button type="button" id="scriptVarAdd" class="mini">+ add</button></span>` +
+        `<div id="scriptVars" class="varlist"></div></div>` +
       `<div class="field"><span>Script log — events fired, actions taken<button type="button" id="scriptLogRefresh" class="mini">refresh</button></span>` +
         `<div id="scriptLog" class="chatlog scriptlog"></div></div>` +
       `</div>` +
@@ -1964,6 +1974,7 @@
     stationMenu.classList.add("open");
     stationMenu.classList.remove("script-wide");
     renderStationChat(st.name);
+    lastVarsJson = null;   // fresh station → fresh variable panel
     updateScriptButtons();
     if (st.scriptPaused) setScriptStatus("paused — press Run to resume", "");
     else if (st.scriptDraft != null && st.scriptDraft !== (st.script || "")) setScriptStatus("draft — not deployed", "");
@@ -2024,7 +2035,59 @@
       ? entries.map(e => `<div class="slog slog-${escapeHtml(e.kind)}"><span class="slog-clock">${escapeHtml(e.clock)}</span>${escapeHtml(e.text)}</div>`).join("")
       : `<div class="chat-empty">Nothing yet — every event the script handles and every action it takes lands here.</div>`;
     if (atBottom) box.scrollTop = box.scrollHeight;
+    if (r.body) renderScriptVars(r.body.vars || {}, false);   // live variable values ride along
   }
+  // ---- the variable editor: variables are station state, independent of the script text ----
+  // Booleans render as checkboxes, anything else as a small text box ("true"/"false"/numbers
+  // are parsed back). Values are LIVE (they refresh with the log poll) — open the pop-up to
+  // watch the script flip them. Deploying keeps them; declarations only fill in missing ones.
+  let lastVarsJson = null;
+  function renderScriptVars(vars, force){
+    const box = document.getElementById("scriptVars");
+    if (!box) return;
+    const json = JSON.stringify(vars || {});
+    if (!force && json === lastVarsJson) return;
+    if (!force && box.contains(document.activeElement)) return;   // don't rip a row out mid-edit
+    lastVarsJson = json;
+    const names = Object.keys(vars || {}).sort();
+    box.innerHTML = names.length
+      ? names.map(n => {
+          const v = vars[n];
+          const control = typeof v === "boolean"
+            ? `<input type="checkbox" data-var="${escapeHtml(n)}"${v ? " checked" : ""}>`
+            : `<input type="text" data-var="${escapeHtml(n)}" value="${escapeHtml(String(v))}">`;
+          return `<div class="var-row">${control}<span class="var-name">${escapeHtml(n)}</span><button type="button" class="mini var-del" data-var="${escapeHtml(n)}">×</button></div>`;
+        }).join("")
+      : `<div class="var-empty">No variables yet — “+ add” creates one (a checkbox, starting false).</div>`;
+  }
+  async function postScriptVar(body, okText){
+    const st = scriptStation(); if (!st) return;
+    const r = await apiFetch(`/api/stations/${encodeURIComponent(st.name)}/script-var`,
+      { method: "POST", body: JSON.stringify(withGame(body)) });
+    if (!(r.body && r.body.ok)){ setScriptStatus("✗ " + ((r.body && r.body.error) || SERVER_DOWN), "err"); renderScriptVars(JSON.parse(lastVarsJson || "{}"), true); }
+    else { if (okText) setScriptStatus(okText, ""); renderScriptVars(r.body.vars || {}, true); }
+    refreshScriptLog();
+  }
+  function addScriptVar(){
+    const input = document.getElementById("varAddName");
+    if (!input) return;
+    const name = input.value.trim();
+    const row = document.getElementById("varAddRow");
+    if (row) row.remove();
+    if (name) postScriptVar({ name, value: false }, `${name} := false`);
+  }
+  stationMenu.addEventListener("change", event => {
+    const t = event.target;
+    const box = document.getElementById("scriptVars");
+    if (!box || !t.dataset || !t.dataset.var || !box.contains(t)) return;
+    let value;
+    if (t.type === "checkbox") value = t.checked;
+    else {
+      const s = t.value.trim();
+      value = s === "true" ? true : s === "false" ? false : (s !== "" && !isNaN(Number(s)) ? Number(s) : s);
+    }
+    postScriptVar({ name: t.dataset.var, value }, `${t.dataset.var} := ${JSON.stringify(value)}`);
+  });
   stationMenu.addEventListener("input", event => {
     if (event.target.id !== "scriptText") return;
     updateScriptButtons();
@@ -2042,6 +2105,24 @@
   stationMenu.addEventListener("click", async event => {
     const id = event.target.id;
     if (id === "scriptLogRefresh") return refreshScriptLog();
+    if (event.target.classList && event.target.classList.contains("var-del")){
+      postScriptVar({ name: event.target.dataset.var, remove: true }, `${event.target.dataset.var} removed`);
+      return;
+    }
+    if (id === "scriptVarAdd"){
+      const box = document.getElementById("scriptVars");
+      if (!box) return;
+      const existing = document.getElementById("varAddName");
+      if (existing){ existing.focus(); return; }
+      if (box.querySelector(".var-empty")) box.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "var-row"; row.id = "varAddRow";
+      row.innerHTML = `<input type="text" id="varAddName" placeholder="variable_name" autocomplete="off" spellcheck="false"><button type="button" class="mini" id="varAddGo">Add</button>`;
+      box.prepend(row);
+      document.getElementById("varAddName").focus();
+      return;
+    }
+    if (id === "varAddGo"){ addScriptVar(); return; }
     if (id === "scriptFormat"){
       const ta = document.getElementById("scriptText");
       const BS = window.TinyTrainsBoxscript;
@@ -2110,6 +2191,10 @@
     if (event.target.id === "chatInput" && event.key === "Enter"){
       event.preventDefault();
       sendChat(stationMenu.dataset.station, event.target.value); event.target.value = "";
+    }
+    if (event.target.id === "varAddName" && event.key === "Enter"){
+      event.preventDefault();
+      addScriptVar();
     }
   });
   // Drag the pop-up by its header so it doesn't cover the station you're writing instructions for.

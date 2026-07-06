@@ -291,8 +291,10 @@
 
   // ================= Compiler =================
   // Expand macros inline, split every handler body into SEGMENTS at when/wait boundaries
-  // (the sequential-shunting state machine), and validate variable use.
-  function compile(text){
+  // (the sequential-shunting state machine), and validate variable use. `knownVars` are the
+  // station's editor-defined variables (they live OUTSIDE the script text) — a name is valid
+  // when it is declared at the top OR already exists in the station's variable store.
+  function compile(text, knownVars){
     const ast = parse(text);
 
     function substName(n, subst){
@@ -389,11 +391,13 @@
     });
 
     // validate variable use: every read/assigned name must be a declared station variable
+    // or one that already exists in the station's variable store (the editor)
     const declared = new Set(ast.decls.map(d => d.name));
+    for (const n of (knownVars || [])) declared.add(n);
     function checkExpr(e){
       if (!e) return;
       switch (e.e){
-        case "var": if (!declared.has(e.name)) throw err(`unknown variable "${e.name}" (declare it at the top: ${e.name} := ...)`, e.line); break;
+        case "var": if (!declared.has(e.name)) throw err(`unknown variable "${e.name}" (declare it at the top: ${e.name} := ... — or add it in the station's variable editor)`, e.line); break;
         case "un": checkExpr(e.a); break;
         case "bin": checkExpr(e.a); checkExpr(e.b); break;
         case "field": checkExpr(e.obj); break;
@@ -500,6 +504,34 @@
     return out.join("\n") + "\n";
   }
 
+  // ---- does a compiled program mention a variable? (guards the editor's "remove") ----
+  function exprUsesVar(e, name){
+    if (!e) return false;
+    switch (e.e){
+      case "var": return e.name === name;
+      case "un": return exprUsesVar(e.a, name);
+      case "bin": return exprUsesVar(e.a, name) || exprUsesVar(e.b, name);
+      case "field": case "at": return exprUsesVar(e.obj, name);
+      default: return false;
+    }
+  }
+  function stmtsUseVar(stmts, name){
+    for (const s of stmts){
+      if (s.k === "assign" && (s.name === name || exprUsesVar(s.expr, name))) return true;
+      if ((s.k === "say" || s.k === "require") && exprUsesVar(s.expr, name)) return true;
+      if (s.k === "if") for (const a of s.arms){ if ((a.cond && exprUsesVar(a.cond, name)) || stmtsUseVar(a.stmts, name)) return true; }
+    }
+    return false;
+  }
+  function progUsesVar(prog, name){
+    if (prog.decls.some(d => d.name === name || exprUsesVar(d.expr, name))) return true;
+    for (const h of prog.handlers) for (const seg of h.segments){
+      if (seg.cond && seg.cond.k === "expr" && exprUsesVar(seg.cond.expr, name)) return true;
+      if (stmtsUseVar(seg.stmts, name)) return true;
+    }
+    return false;
+  }
+
   // ================= Runtime =================
   const TICK_EVERY = 15;        // run the handle loop every 15 sim frames (4×/sim-second)
   const LOG_MAX = 300;
@@ -555,32 +587,35 @@
     }
 
     // (Re)compile a station's script and keep its runtime state in sync with the script text.
-    // A CHANGED script resets the runtime (vars re-initialised, chains dropped, time triggers
-    // re-armed with past times counting as fired) — the log survives.
+    // A CHANGED script resets chains/consumed/time triggers (past times count as fired) — but
+    // VARIABLES and the log survive a deploy: variables are station state, set in the pop-up's
+    // variable editor; a top-level `x := …` declaration is only a DEFAULT for a missing one.
     function ensure(st){
       const text = st.script || "";
       const h = hashText(text);
+      const all = allRt();
+      const prevVars = (all[st.id] && all[st.id].vars) || {};
       let c = compiled.get(st.id);
       if (!c || c.hash !== h){
         c = { hash: h, prog: null, error: null };
-        try { c.prog = compile(text); }
+        try { c.prog = compile(text, Object.keys(prevVars)); }
         catch (e){ c.error = { message: e.message, line: e.line || null }; }
         compiled.set(st.id, c);
       }
-      const all = allRt();
       let rt = all[st.id];
       if (!rt || rt.hash !== h){
         const oldLog = rt ? rt.log : [], oldSeq = rt ? rt.logSeq : 0;
-        rt = all[st.id] = { hash: h, vars: {}, consumed: {}, chains: [], timers: {}, lastFail: {}, log: oldLog, logSeq: oldSeq };
+        rt = all[st.id] = { hash: h, vars: { ...prevVars }, consumed: {}, chains: [], timers: {}, lastFail: {}, log: oldLog, logSeq: oldSeq };
         if (c.prog){
           for (const d of c.prog.decls){
+            if (d.name in rt.vars) continue;   // a declaration never overwrites a live variable
             try { rt.vars[d.name] = evalExpr(d.expr, { st, rt, train: null }); }
             catch (e){ rt.vars[d.name] = false; log(rt, "error", `initialising ${d.name}: ${e.message}`); }
           }
           c.prog.handlers.forEach((hd, hi) => {
             if (hd.guard.kind === "time") rt.timers[hi] = latestTrigger(hd.guard, nowSec()) != null ? latestTrigger(hd.guard, nowSec()) : -1;
           });
-          log(rt, "script", `script loaded — ${c.prog.handlers.length} handler(s)`);
+          log(rt, "script", `script loaded — ${c.prog.handlers.length} handler(s), ${Object.keys(rt.vars).length} variable(s)`);
         } else {
           log(rt, "error", `script error: ${c.error.message}`);
         }
@@ -977,10 +1012,44 @@
       },
       // compile-check some text WITHOUT touching the station's running program/runtime
       // (used for live feedback while a draft is being typed)
-      checkText(text){
+      checkText(text, st){
         if (!text || !text.trim()) return null;
-        try { compile(text); return null; }
+        const rt = st ? allRt()[st.id] : null;
+        try { compile(text, Object.keys((rt && rt.vars) || {})); return null; }
         catch (e){ return e.message; }
+      },
+      // ---- the variable editor: variables are station state, independent of the script ----
+      getVars(st){
+        const rt = allRt()[st.id];
+        return rt ? rt.vars : {};
+      },
+      setVar(st, name, value){
+        name = String(name == null ? "" : name);
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return { ok: false, error: `bad variable name "${name}" (letters, digits, _; must not start with a digit)` };
+        if (RESERVED.has(name)) return { ok: false, error: `"${name}" is a reserved word` };
+        if (value !== true && value !== false && typeof value !== "number" && typeof value !== "string")
+          return { ok: false, error: "a variable holds a boolean, number or string" };
+        const all = allRt();
+        let rt = all[st.id];
+        if (!rt) rt = all[st.id] = { hash: "", vars: {}, consumed: {}, chains: [], timers: {}, lastFail: {}, log: [], logSeq: 0 };
+        rt.vars[name] = value;
+        compiled.delete(st.id);   // an added variable may make the script compile now
+        log(rt, "script", `variable ${name} := ${JSON.stringify(value)} (operator)`);
+        return { ok: true, vars: rt.vars };
+      },
+      removeVar(st, name){
+        name = String(name == null ? "" : name);
+        const rt = allRt()[st.id];
+        if (!rt || !(name in rt.vars)) return { ok: false, error: `no variable "${name}"` };
+        if (st.script && st.script.trim()){
+          const c = ensure(st);
+          if (c.prog && progUsesVar(c.prog, name))
+            return { ok: false, error: `the script uses "${name}" — take it out of the script first` };
+        }
+        delete rt.vars[name];
+        compiled.delete(st.id);
+        log(rt, "script", `variable ${name} removed (operator)`);
+        return { ok: true, vars: rt.vars };
       },
       // drop a line into a station's execution log (pause/resume and other operator acts)
       note(st, kind, text){
@@ -1007,7 +1076,7 @@
       scriptLog(st, after){
         const rt = allRt()[st.id];
         const entries = rt ? rt.log.filter(e => e.seq > (after || 0)) : [];
-        return { entries, cursor: rt ? rt.logSeq || 0 : 0 };
+        return { entries, cursor: rt ? rt.logSeq || 0 : 0, vars: rt ? rt.vars : {} };   // vars ride along for the live panel
       }
     };
   }

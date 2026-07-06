@@ -25,6 +25,10 @@ you can fix it) but runs nothing; the compile error comes back from the save and
   arrange the trains by hand, then press Run. Its state (variables, chains, log) is kept, and
   the pause itself is noted in the execution log. Time triggers that came due while paused
   fire once (their latest missed moment) on resume. The flag persists with the game.
+- The **Variables** panel (§4) sits between the buttons and the log: live values (checkboxes
+  for booleans), add/remove, and every operator change is stamped into the execution log. The
+  intended big-rewrite loop: **Pause → edit the script → set the variables to match where you
+  put the trains → Deploy → Run.**
 - **Format** reprints the script through `boxscript.js`'s token-based formatter: indentation
   and spacing are normalized, comments and the author's line structure survive (a one-liner
   body stays a one-liner), redundant end-of-line semicolons drop. A broken script is never
@@ -143,8 +147,19 @@ engine's fixed id), so a chain keeps addressing the right consist across cuts an
 
 ## 4. Variables and expressions
 
-- `name := expr` at **top level** declares a station variable and sets its initial value at
-  script (re)load. Inside a body, `:=` assigns; an undeclared name is a **compile error**.
+**Variables are station state, not script state.** They live in the station's variable store
+(the pop-up's **Variables** panel — booleans are checkboxes, live values, add/remove; over the
+API: `POST /api/stations/:id/script-var { name, value }` / `{ name, remove:true }`, read back
+with `GET script` and `GET script-log`). They **outlive deploys**: pause the script, edit the
+code, set the variables to match reality, deploy, run — nothing resets. Opening the station
+pop-up shows the live values, which doubles as the debugger.
+
+- `name := expr` at **top level** is a **default**: it creates the variable *only if it does
+  not already exist* — it never overwrites a live value. (You can skip declarations entirely
+  and define variables in the editor instead.)
+- Inside a body, `:=` assigns. A name that is neither declared nor in the variable store is a
+  **compile error** — typos are caught, and the error says to declare it or add it in the
+  editor. A variable the script mentions cannot be removed from the editor.
 - Values: booleans, numbers, strings, times. Operators: `! && ||`, comparisons, `+ -`
   (`+` concatenates when either side is a string; `==` compares strings case-insensitively).
 - `if (…) { } elif (…) { } else { }`.

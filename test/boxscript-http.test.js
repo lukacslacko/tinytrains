@@ -117,6 +117,53 @@ async function main(){
   }
   assert(released, "resumed: the waiting train is routed");
 
+  // ---- the variable editor: station-state variables that guard, persist, and protect ----
+  // settle: everything stopped, then clear the line east of the signal
+  let dl3 = Date.now() + 20000;
+  while (Date.now() < dl3 && ((await api("GET", "/api/trains")).trains || []).some(t => t.moving)) await sleep(150);
+  for (const t of (await api("GET", "/api/trains")).trains || [])
+    if (t.x > 5) await ok("POST", "/api/command", { type: "removeTrain", x: t.x, y: t.y }, `clear the line (train at ${t.x},${t.y})`);
+  // a script referencing a variable that exists only in the editor: rejected until it is added
+  const guarded = `on (red at A) { if (go) { clear A } }`;
+  const rej = await ok("POST", st + "/script", { script: guarded }, "deploy a script with a missing variable");
+  assert(/unknown variable "go"/.test(rej.error || ""), "compile rejects the unknown variable");
+  await ok("POST", st + "/script-var", { name: "go", value: false }, "add go = false in the editor");
+  const dep2 = await ok("POST", st + "/script", { script: guarded }, "re-deploy after adding the variable");
+  assert(!dep2.error, `the editor-defined variable satisfies the compiler (${dep2.error})`);
+  // a train waits at A while go is false…
+  await ok("POST", "/api/command", { type: "placeTrain", x: 1, y: 0, heading: "E", units: [{ kind: "engine", len: 0.5, type: 1 }] }, "place a train");
+  dl3 = Date.now() + 20000; let waiting3 = null;
+  while (Date.now() < dl3 && !waiting3){
+    waiting3 = ((await api("GET", "/api/trains")).trains || []).find(t => t.x === 5 && !t.moving);
+    if (!waiting3) await sleep(150);
+  }
+  assert(waiting3, "the train reaches A");
+  await sleep(1500);
+  assert(((await api("GET", "/api/trains")).trains || []).some(t => t.x === 5 && !t.moving), "go=false: the guard holds the train");
+  // …flipping the variable routes it (level-triggered event picked up on the next pass)
+  await ok("POST", st + "/script-var", { name: "go", value: true }, "set go = true");
+  dl3 = Date.now() + 20000; let routed3 = false;
+  while (Date.now() < dl3 && !routed3){
+    routed3 = ((await api("GET", "/api/trains")).trains || []).some(t => t.x > 5);
+    if (!routed3) await sleep(150);
+  }
+  assert(routed3, "go=true: the waiting train is routed");
+  // remove-protection + lifecycle
+  const rm = await api("POST", st + "/script-var", { name: "go", remove: true });
+  assert(rm && rm.ok === false && /uses "go"/.test(rm.error || ""), "a variable the script uses cannot be removed");
+  await ok("POST", st + "/script-var", { name: "scratch", value: true }, "add an unused variable");
+  const gv = await ok("GET", st + "/script", null, "GET script returns the live variables");
+  assert(gv.vars && gv.vars.go === true && gv.vars.scratch === true, "live variable values come back with the script");
+  const gl = await ok("GET", st + "/script-log", null, "log carries the variables too");
+  assert(gl.vars && gl.vars.go === true, "script-log responses include the live variables (for the panel)");
+  // variables OUTLIVE a deploy — a declaration is only a default for a missing variable
+  await ok("POST", st + "/script", { script: "go := false\n" + guarded }, "deploy WITH a go := false declaration");
+  const gv2 = await ok("GET", st + "/script", null, "read vars after the deploy");
+  assert(gv2.vars.go === true, "deploying kept go = true (the declaration did not overwrite it)");
+  assert(gv2.vars.scratch === true, "unrelated variables survive the deploy");
+  await ok("POST", st + "/script-var", { name: "scratch", remove: true }, "remove the unused variable");
+  assert(((await api("GET", st + "/script")).vars || {}).scratch === undefined, "removed variable is gone");
+
   // ---- draft + paused flag persist into the save file ----
   await ok("POST", st + "/script", { draft: "x := 1" }, "leave a draft for the save");
 

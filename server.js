@@ -35,8 +35,9 @@
 //                                          → shunting orders to an engine standing in this station
 //   POST /api/stations/:id/shunt-signal { name|x,y, action:stop|clear|toggle } → set a shunting disc
 //   POST /api/stations/:id/override { text } | { action:"clear" }      → standing instruction override
-//   GET  /api/stations/:id/script                → the station's boxscript (automation program)
-//   POST /api/stations/:id/script { script }     → install/replace it (returns compile error, if any)
+//   GET  /api/stations/:id/script                → the station's boxscript (+ draft, paused, vars)
+//   POST /api/stations/:id/script { script }     → deploy it ({draft} auto-saves, {paused} pauses/runs)
+//   POST /api/stations/:id/script-var { name, value } | { name, remove:true } → the variable editor
 //   GET  /api/stations/:id/script-log?after=N    → the script EXECUTION LOG (events fired, actions taken)
 //   POST /api/stations/:id/path { path, shunt? } — with shunt/to: permit a shunting path (see BOXSCRIPT.md)
 
@@ -675,6 +676,19 @@ const server = http.createServer(async (req, res) => {
         what = `set_script (${String(body.script || "").length} chars)`;
       }
       smlog(`${gname(lg)} ${id} | ${what}  ${result.ok ? (result.error ? "stored, ERROR: " + result.error : "ok") : "REFUSED: " + result.error}`);
+      return sendJSON(res, result.ok ? 200 : 400, result);
+    }
+    // Script VARIABLES live outside the script text (BOXSCRIPT.md §4): this endpoint adds/sets
+    // one ({ name, value }) or removes one ({ name, remove:true }); declarations in the script
+    // are only defaults. Current values come back with GET script and GET script-log.
+    if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script-var$/)) && req.method === "POST"){
+      const body = await readBody(req); const lg = reqGame(query, body);
+      if (!lg) return sendJSON(res, NO_GAME.code, NO_GAME.body);
+      const id = decodeURIComponent(m[1]);
+      const result = applyCommand(lg, body.remove
+        ? { type: "removeScriptVar", station: id, name: body.name }
+        : { type: "setScriptVar", station: id, name: body.name, value: body.value });
+      smlog(`${gname(lg)} ${id} | ${body.remove ? "remove_script_var " + body.name : "set_script_var " + body.name + " = " + JSON.stringify(body.value)}  ${result.ok ? "ok" : "REFUSED: " + result.error}`);
       return sendJSON(res, result.ok ? 200 : 400, result);
     }
     if ((m = url.match(/^\/api\/stations\/([^\/]+)\/script-log$/)) && req.method === "GET"){

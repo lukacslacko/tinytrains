@@ -1906,8 +1906,23 @@
     function cmdSetScriptDraft(idOrName, text){
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       st.scriptDraft = text == null ? null : String(text);
-      const error = (boxscriptRunner && st.scriptDraft != null) ? boxscriptRunner.checkText(st.scriptDraft) : null;
+      const error = (boxscriptRunner && st.scriptDraft != null) ? boxscriptRunner.checkText(st.scriptDraft, st) : null;
       return {ok:true, station: st.name, id: st.id, error: error || null};
+    }
+    // Script VARIABLES are station state, edited in the pop-up's variable editor: they outlive
+    // deploys (a top-level declaration in the script is only a default for a missing one), so
+    // the operator can pause, set them to match reality, deploy and run.
+    function cmdSetScriptVar(idOrName, name, value){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      if (!boxscriptRunner) return {ok:false, error:"scripts are not available"};
+      const r = boxscriptRunner.setVar(st, name, value);
+      return r.ok ? {ok:true, station: st.name, id: st.id, vars: r.vars} : {ok:false, error: r.error};
+    }
+    function cmdRemoveScriptVar(idOrName, name){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      if (!boxscriptRunner) return {ok:false, error:"scripts are not available"};
+      const r = boxscriptRunner.removeVar(st, name);
+      return r.ok ? {ok:true, station: st.name, id: st.id, vars: r.vars} : {ok:false, error: r.error};
     }
     // Pause/Run: a paused station's script keeps its state (variables, chains, log) but the
     // runner skips it — the operator arranges the trains by hand, then presses Run. Time
@@ -1924,6 +1939,7 @@
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       return {ok:true, station: st.name, id: st.id, script: st.script || "",
         draft: st.scriptDraft != null ? st.scriptDraft : null, paused: !!st.scriptPaused,
+        vars: boxscriptRunner ? boxscriptRunner.getVars(st) : {},
         error: boxscriptRunner ? boxscriptRunner.compileError(st) : null};
     }
     // The script EXECUTION LOG: which events fired and what actions were taken, so an
@@ -1989,6 +2005,8 @@
         case "setScript":     return cmdSetScript(cmd.station, cmd.script);
         case "setScriptDraft":  return cmdSetScriptDraft(cmd.station, cmd.draft);
         case "setScriptPaused": return cmdSetScriptPaused(cmd.station, cmd.paused);
+        case "setScriptVar":    return cmdSetScriptVar(cmd.station, cmd.name, cmd.value);
+        case "removeScriptVar": return cmdRemoveScriptVar(cmd.station, cmd.name);
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
         case "setDayLength":  return setDayLength(cmd.seconds);

@@ -140,6 +140,18 @@ console.log("compile-time rejections");
   rejects(`on (any at A) { uncouple 2 }`, /expected "after"/, "uncouple needs after");
 }
 
+console.log("editor-defined variables: compile accepts knownVars");
+{
+  rejects(`on (any at A) { if (go) { clear A } }`, /unknown variable "go"/, "unknown variable without the editor");
+  checks++;
+  try { BS.compile(`on (any at A) { if (go) { clear A } }`, ["go"]); }
+  catch (e){ failures++; console.error("  ✗ a known (editor-defined) variable should satisfy the compiler: " + e.message); }
+  rejects(`on (any at A) { go := true }`, /unknown variable "go"/, "assignment also needs the variable to exist");
+  checks++;
+  try { BS.compile(`on (any at A) { go := true }`, ["go"]); }
+  catch (e){ failures++; console.error("  ✗ assigning a known variable should compile: " + e.message); }
+}
+
 console.log("format: normalized spacing/indentation, comments and line structure kept");
 {
   const src = `# header comment
