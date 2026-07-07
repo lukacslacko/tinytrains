@@ -190,7 +190,10 @@
     // station's switches and manual signals). It travels with the layout and is exposed by the API.
     // `overrides` are temporary operator instructions (set over chat, "until further notice …") that
     // take precedence over `instructions` until cleared; they travel with the layout like instructions.
-    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
+    // `script` is the station's boxscript automation program (see BOXSCRIPT.md) — also persisted,
+    // together with the editor's `scriptDraft` (typed but not yet deployed; null = in sync) and
+    // `scriptPaused` (the operator took the trains; the runner skips the station).
+    const st = {id, name:`Station ${id}`, instructions:"", overrides:[], script:"", scriptDraft:null, scriptPaused:false, rect:{x0:r.x0, y0:r.y0, x1:r.x1, y1:r.y1}};
     state.stations.push(st);
     return st;
   }
@@ -1301,6 +1304,7 @@
     updateSignals();
     if (checkWatches) checkWatches();   // fire train-arrival / pass notifications (added below)
     if (updateHaltTimers) updateHaltTimers();   // track how long each train has been stopped
+    if (boxscriptRunner) boxscriptRunner.tick();   // per-station automation scripts (BOXSCRIPT.md)
     state.frame = (state.frame + 1) % SPAWN_TICK_FRAMES;
     if (state.frame === 0) state.tick++;
   }
@@ -1351,7 +1355,7 @@
     if (!trainTypeById(state.selectedType)) state.selectedType = state.trainTypes[0].id;
     state.stations = (Array.isArray(data.stations) ? data.stations : [])
       .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+      .map(s => { const r = normRect(s.rect); return {id: s.id, name: s.name || `Station ${s.id}`, instructions: s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", scriptDraft: s.scriptDraft != null ? String(s.scriptDraft) : null, scriptPaused: !!s.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     state.nextStationId = state.stations.reduce((m,s) => Math.max(m, s.id || 0), 0) + 1;
     state.trains = [];
     state.nextTrainId = 1;
@@ -1363,6 +1367,7 @@
     state.routeLocks = [];
     state.lockedSwitchKeys = new Set();
     state.events = [];
+    state.boxscript = {};
     if (data.view) state.view = {...state.view, ...data.view};
     updateSignals();
   }
@@ -1528,12 +1533,56 @@
       }
       return units;
     }
+    // The "short pull" fix: when a consist's tile path is shorter than its body (typically
+    // right after coupling merged two paths), walk the rails REARWARD from the path's end —
+    // only along tiles the body actually covers — to rebuild the missing tail. This is what
+    // a tiny settling pull used to do by hand; reverse/uncouple/couple repair the geometry
+    // instead of refusing with "drive it forward a little first".
+    function extendPathAlongRails(train){
+      const path = ensurePath(train);
+      const bt = train._tiles || computeBodyTiles(train);
+      const need = trainTotalLength(train) + 1.2;
+      let covered = 0;
+      for (let i=0; i<path.length; i++) covered += pathEntryLen(path[i], i === 0);
+      for (let guard=0; covered < need && guard < 64; guard++){
+        const last = path[path.length-1];
+        if (last.enter == null) break;
+        const rx = last.x + DIRS[last.enter].dx, ry = last.y + DIRS[last.enter].dy;
+        if (!bt.has(key(rx,ry))) break;              // never invent path beyond the real body
+        const rt = getTile(rx, ry);
+        if (!rt) break;
+        const exR = opposite(last.enter);
+        let enR = null;
+        if (rt.kind === "switch"){
+          if (exR === rt.stem) enR = switchCurrent(rt);
+          else if (rt.branches.includes(exR) && exR === switchCurrent(rt)) enR = rt.stem;
+          else break;
+        } else {
+          const route = routesFor(rt).find(r => r.includes(exR));
+          if (!route) break;
+          enR = route.length >= 2 ? (route[0] === exR ? route[1] : route[0]) : null;
+        }
+        path.push({x: rx, y: ry, enter: enR, exit: exR});
+        covered += halfLen(exR) + halfLen(enR);
+        if (enR == null) break;
+      }
+      return path;
+    }
+    // Body geometry, repairing a too-short tile path first (see extendPathAlongRails).
+    function fullGeometry(train){
+      let geom = bodyGeometry(train);
+      if (geom.covered + ARC_EPS < trainTotalLength(train)){
+        extendPathAlongRails(train);
+        geom = bodyGeometry(train);
+      }
+      return geom;
+    }
     // Reverse a whole consist in place: the leading end becomes the trailing end, so an
     // engine that pulled now pushes. Requires the consist to be standing (it may be standing
     // buffers-to-buffers mid-tile — that is fine, the geometry handles it).
     function reverseConsist(t){
       const L = trainTotalLength(t);
-      const geom = bodyGeometry(t);
+      const geom = fullGeometry(t);
       if (geom.covered + ARC_EPS < L) return {ok:false, error:"the consist's body geometry is incomplete — drive it forward a little first"};
       return applyReversal(t, geom, L);
     }
@@ -1608,7 +1657,7 @@
       const rearUnits = units.slice(c+1);
       const L1 = unitsLength(frontUnits);
       const L = unitsLength(units);
-      const geom = bodyGeometry(t);
+      const geom = fullGeometry(t);
       if (geom.covered + ARC_EPS < L) return {ok:false, error:"the consist's body geometry is incomplete — drive it forward a little first"};
       const rearHead = forwardHeadAt(geom, L1);
       if (!rearHead) return {ok:false, error:"could not place the uncoupled portion — drive forward a little first"};
@@ -1641,7 +1690,7 @@
       if (!hasActiveEngine(a)) return {ok:false, error:"no active engine in that consist"};
       if (!consistStanding(a)) return {ok:false, error:"the consist is still moving — wait for it to stop"};
       const LA = trainTotalLength(a);
-      const geomA = bodyGeometry(a);
+      const geomA = fullGeometry(a);
       if (geomA.covered + ARC_EPS < LA) return {ok:false, error:"the consist's body geometry is incomplete"};
       const headA = geomA.pts[0];
       const tailA = trailSpan(geomA.pts, LA, LA)[0];
@@ -1669,7 +1718,7 @@
       // Front consist F leads the merged train; R hangs behind it.
       const F = best.mode === "aBehindB" ? b : a;
       const R = best.mode === "aBehindB" ? a : b;
-      const geomF = bodyGeometry(F), geomR = bodyGeometry(R);
+      const geomF = fullGeometry(F), geomR = fullGeometry(R);
       const LF = trainTotalLength(F), LR = trainTotalLength(R);
       if (geomF.covered + ARC_EPS < LF || geomR.covered + ARC_EPS < LR) return {ok:false, error:"a consist's body geometry is incomplete — drive it a little first"};
       // Merge the tile paths at the junction (under the touching buffers). Two traps here:
@@ -1725,6 +1774,9 @@
       state.trains = state.trains.filter(t => t.id !== a.id && t.id !== b.id);
       merged._tiles = computeBodyTiles(merged);
       state.trains.push(merged);
+      // settle the merged geometry NOW (the automatic "short pull"), so an immediate
+      // reverse or uncouple never asks the master to drive forward a little first
+      extendPathAlongRails(merged);
       updateSignals();
       emit("info", `Coupled: ${trainDesc(merged)} is now ${mergedUnits.length} vehicles at ${placeLabel(merged.x,merged.y)}`);
       return {ok:true, ...consistSummary(merged)};
@@ -1799,11 +1851,11 @@
     // In server-only mode the builder routes every edit through the server too, so it persists and
     // autosaves. These are the layout-changing command types (EDIT_COMMANDS) — distinct from
     // operate (throw/toggle) — so the server can keep a layout undo-history for them.
-    const EDIT_COMMANDS = new Set(["setTile","removeTile","setStations","setTrainTypes","pasteTiles","removeTiles"]);
+    const EDIT_COMMANDS = new Set(["setTile","removeTile","setStations","setTrainTypes","pasteTiles","removeTiles","setScript"]);
     function sanitizeStations(list){
       return (Array.isArray(list) ? list : [])
         .filter(s => s && s.rect && Number.isFinite(s.rect.x0) && Number.isFinite(s.rect.y1))
-        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(s => { const r = normRect(s.rect); return {id:s.id, name:s.name || `Station ${s.id}`, instructions:s.instructions || "", overrides: Array.isArray(s.overrides) ? s.overrides.slice() : [], script: s.script || "", scriptDraft: s.scriptDraft != null ? String(s.scriptDraft) : null, scriptPaused: !!s.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
     }
     function sanitizeTypes(list){
       return (Array.isArray(list) && list.length)
@@ -1838,6 +1890,64 @@
       const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
       st.overrides = [];
       return {ok:true, station: st.name, overrides: []};
+    }
+    // ---- boxscript: a station's automation script (BOXSCRIPT.md) ----
+    // The text is stored (and persisted) even when it does not compile — the compile error
+    // comes back in `error` so the author can fix it; only a clean script actually runs.
+    function cmdSetScript(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.script = String(text == null ? "" : text);
+      st.scriptDraft = null;   // deploying brings the editor draft in sync
+      const error = boxscriptRunner ? boxscriptRunner.scriptChanged(st).error : null;
+      return {ok:true, station: st.name, id: st.id, error: error || null, paused: !!st.scriptPaused};
+    }
+    // The editor's draft: auto-saved as typed, persisted with the game, deployed only on demand.
+    // Returns a compile check of the DRAFT so the author gets live feedback without deploying.
+    function cmdSetScriptDraft(idOrName, text){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      st.scriptDraft = text == null ? null : String(text);
+      const error = (boxscriptRunner && st.scriptDraft != null) ? boxscriptRunner.checkText(st.scriptDraft, st) : null;
+      return {ok:true, station: st.name, id: st.id, error: error || null};
+    }
+    // Script VARIABLES are station state, edited in the pop-up's variable editor: they outlive
+    // deploys (a top-level declaration in the script is only a default for a missing one), so
+    // the operator can pause, set them to match reality, deploy and run.
+    function cmdSetScriptVar(idOrName, name, value){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      if (!boxscriptRunner) return {ok:false, error:"scripts are not available"};
+      const r = boxscriptRunner.setVar(st, name, value);
+      return r.ok ? {ok:true, station: st.name, id: st.id, vars: r.vars} : {ok:false, error: r.error};
+    }
+    function cmdRemoveScriptVar(idOrName, name){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      if (!boxscriptRunner) return {ok:false, error:"scripts are not available"};
+      const r = boxscriptRunner.removeVar(st, name);
+      return r.ok ? {ok:true, station: st.name, id: st.id, vars: r.vars} : {ok:false, error: r.error};
+    }
+    // Pause/Run: a paused station's script keeps its state (variables, chains, log) but the
+    // runner skips it — the operator arranges the trains by hand, then presses Run. Time
+    // triggers that came due meanwhile fire once (their latest missed moment) on resume.
+    function cmdSetScriptPaused(idOrName, paused){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      const to = !!paused;
+      if (to !== !!st.scriptPaused && boxscriptRunner)
+        boxscriptRunner.note(st, "script", to ? "script paused — the operator has the trains" : "script resumed");
+      st.scriptPaused = to;
+      return {ok:true, station: st.name, id: st.id, paused: to};
+    }
+    function getScript(idOrName){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      return {ok:true, station: st.name, id: st.id, script: st.script || "",
+        draft: st.scriptDraft != null ? st.scriptDraft : null, paused: !!st.scriptPaused,
+        vars: boxscriptRunner ? boxscriptRunner.getVars(st) : {},
+        error: boxscriptRunner ? boxscriptRunner.compileError(st) : null};
+    }
+    // The script EXECUTION LOG: which events fired and what actions were taken, so an
+    // operator (or an AI master back from its shift) can review what the script did.
+    function scriptLog(idOrName, after){
+      const st = findStation(idOrName); if (!st) return {ok:false, error:"no such station"};
+      if (!boxscriptRunner) return {ok:true, station: st.name, entries: [], cursor: 0};
+      return {ok:true, station: st.name, ...boxscriptRunner.scriptLog(st, Number(after) || 0)};
     }
     function cmdSetTrainTypes(types, selectedType){
       state.trainTypes = sanitizeTypes(types);
@@ -1891,6 +2001,12 @@
         case "pasteTiles":    return cmdPasteTiles(cmd.tiles);
         case "removeTiles":   return cmdRemoveTiles(cmd.keys, cmd.andTrains);
         case "setPath":       return cmdSetPath(cmd.station, cmd.path);
+        case "permitPath":    return cmdPermitPath(cmd.station, cmd.path, cmd.to);
+        case "setScript":     return cmdSetScript(cmd.station, cmd.script);
+        case "setScriptDraft":  return cmdSetScriptDraft(cmd.station, cmd.draft);
+        case "setScriptPaused": return cmdSetScriptPaused(cmd.station, cmd.paused);
+        case "setScriptVar":    return cmdSetScriptVar(cmd.station, cmd.name, cmd.value);
+        case "removeScriptVar": return cmdRemoveScriptVar(cmd.station, cmd.name);
         case "setPaused":     return setPaused(cmd.paused);
         case "setSpeed":      return setSpeed(cmd.scale);
         case "setDayLength":  return setDayLength(cmd.seconds);
@@ -2121,7 +2237,7 @@
         if (k !== "switch" && !(lastOne && k === "signal")) return { ok: false, error: `"${ents[i].name}" is a ${k}; a path is a signal then switches (with an optional final signal/direction)` };
       }
       const set = [];
-      let prevArrival = null;
+      let prevArrival = null, entryExit = null;
       for (let i = 0; i < ents.length - 1; i++){
         const cur = ents[i], nxt = ents[i + 1];
         let conn = null;
@@ -2130,6 +2246,7 @@
           if (seg && seg.x === nxt.x && seg.y === nxt.y){ conn = seg; conn.exit = ex; break; }
         }
         if (!conn) return { ok: false, error: `no clear track from "${cur.name}" to "${nxt.name}" (they don't connect directly, or a signal/switch is in between)` };
+        if (i === 0) entryExit = conn.exit;
         if (cur.tile.kind === "switch"){
           const r = setSwitchForPorts(cur, prevArrival, conn.exit);
           if (!r.ok) return { ok: false, error: `switch "${cur.name}": ${r.error}` };
@@ -2152,8 +2269,147 @@
       }
       updateSignals();
       let cleared = null;
-      if (manualDirs(ents[0].tile).length) cleared = cmdSetSignal(ents[0].x, ents[0].y, undefined, true);  // route the train
+      if (manualDirs(ents[0].tile).length){
+        // clear only the main FACING the routed direction — a both-ways signal must not have
+        // its opposite main cleared as a side effect of routing an arrival
+        const dir = entryExit != null && manualDirs(ents[0].tile).includes(entryExit) ? entryExit : undefined;
+        cleared = cmdSetSignal(ents[0].x, ents[0].y, dir, true);
+      }
       return { ok: true, entry: ents[0].name, set, cleared };
+    }
+
+    // ---- Permit a SHUNTING path (the boxscript `permit`; see BOXSCRIPT.md §6) ----
+    // `names` are waypoints in travel order — ANY named elements of the station: signals,
+    // switches, shunting discs, stubs (an optional final compass direction disambiguates a
+    // last switch entered via its stem). `to` is the LIMIT of the movement: a signal there is
+    // set (kept) red so it halts the shunter, a disc there is set to stop. Along the route
+    // every manual main FACING the move is cleared FOR SHUNTING and every disc is cleared.
+    // No occupancy checks: shunting runs on sight and stops when the buffers touch.
+    function cmdPermitPath(stationId, names, toName){
+      const st = findStation(stationId); if (!st) return { ok: false, error: "no such station" };
+      if (!Array.isArray(names) || !names.length) return { ok: false, error: "permit needs a path of element names" };
+      let elemNames = names.map(String), finalDir = null;
+      const lastNm = elemNames[elemNames.length - 1];
+      if (elemNames.length >= 2 && isDirName(lastNm) && !resolveElement(stationId, lastNm)){ finalDir = dirIndexOf(lastNm); elemNames = elemNames.slice(0, -1); }
+      const ents = [];
+      for (const nm of elemNames){
+        const hit = resolveElement(stationId, nm);
+        if (!hit) return { ok: false, error: `"${nm}" is not an element of this station` };
+        ents.push({ name: nm, x: hit.x, y: hit.y, tile: hit.tile });
+      }
+      let limit = null;
+      if (toName != null && toName !== ""){
+        const hit = resolveElement(stationId, toName);
+        if (!hit) return { ok: false, error: `limit "${toName}" is not an element of this station` };
+        limit = { name: String(toName), x: hit.x, y: hit.y, tile: hit.tile };
+        ents.push(limit);
+      }
+      const mains = [];  // manual mains FACING the move along the route: {x, y, dir}
+      const discs = [];  // discs on the route: {x, y}
+      const set = [];
+      const atLimit = (x, y) => limit && x === limit.x && y === limit.y;
+      function collect(x, y, tile, exDir){
+        if (atLimit(x, y)) return;
+        if (tile.kind === "signal" && exDir != null && manualDirs(tile).includes(exDir)) mains.push({ x, y, dir: exDir });
+        if (tile.shuntSignal) discs.push({ x, y });
+      }
+      // exits to try leaving a waypoint: switches by their port rules, others their route ports
+      function permitExits(ent, inPort, isFirst){
+        const t = ent.tile;
+        if (t.kind === "switch"){
+          if (isFirst || inPort == null) return [t.stem, ...t.branches];
+          if (inPort === t.stem) return t.branches.slice();
+          if (t.branches.includes(inPort)) return [t.stem];
+          return [];
+        }
+        const ports = [];
+        for (const r of routesFor(t)) for (const d of r) if (d !== inPort && !ports.includes(d)) ports.push(d);
+        return ports;
+      }
+      // walk from a waypoint toward the next through anything but switches (those must be listed)
+      function walkTo(fromEnt, exDir, target){
+        let cx = fromEnt.x, cy = fromEnt.y, d = exDir;
+        const passed = [];
+        for (let i = 0; i < 512; i++){
+          const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
+          const nt = getTile(nx, ny);
+          const from = opposite(d);
+          if (!nt || !tileAccepts(nt, from)) return null;
+          if (nx === target.x && ny === target.y) return { arrival: from, passed };
+          if (nt.kind === "switch") return null;
+          const out = exitFor(nt, from);
+          if (out == null) return null;
+          passed.push({ x: nx, y: ny, tile: nt, exitDir: out });
+          cx = nx; cy = ny; d = out;
+        }
+        return null;
+      }
+      let inPort = null;
+      for (let i = 0; i < ents.length - 1; i++){
+        const cur = ents[i], nxt = ents[i + 1];
+        let conn = null, connExit = null;
+        for (const ex of permitExits(cur, inPort, i === 0)){
+          const w = walkTo(cur, ex, nxt);
+          if (w){ conn = w; connExit = ex; break; }
+        }
+        if (!conn) return { ok: false, error: `no clear track from "${cur.name}" to "${nxt.name}" (they don't connect, or an unlisted switch is in between)` };
+        collect(cur.x, cur.y, cur.tile, connExit);
+        for (const step of conn.passed) collect(step.x, step.y, step.tile, step.exitDir);
+        if (cur.tile.kind === "switch"){
+          if (inPort != null){
+            const r = setSwitchForPorts(cur, inPort, connExit);
+            if (!r.ok) return { ok: false, error: `switch "${cur.name}": ${r.error}` };
+            set.push({ name: cur.name, dir: DIRNAMES[r.branch] });
+          } else if (cur.tile.branches.includes(connExit)){  // first waypoint is a switch: point it out the branch
+            if (switchLocked(cur.x, cur.y) && switchCurrent(cur.tile) !== connExit) return { ok: false, error: `switch "${cur.name}" is locked by another route` };
+            cur.tile.current = connExit;
+            set.push({ name: cur.name, dir: DIRNAMES[connExit] });
+          }
+        }
+        inPort = conn.arrival;
+      }
+      const last = ents[ents.length - 1];
+      if (ents.length === 1){
+        // a single element and no limit: clear that one element for shunting
+        if (last.tile.shuntSignal) { cmdSetShuntSignal(last.x, last.y, false); }
+        else if (last.tile.kind === "signal" && manualDirs(last.tile).length){ for (const d of manualDirs(last.tile)) mains.push({ x: last.x, y: last.y, dir: d }); }
+        else return { ok: false, error: "a one-element permit needs a signal or a shunting disc" };
+      }
+      if (last.tile.kind === "switch"){
+        if (inPort != null && last.tile.branches.includes(inPort)){
+          if (switchLocked(last.x, last.y) && switchCurrent(last.tile) !== inPort) return { ok: false, error: `switch "${last.name}" is locked by another route` };
+          last.tile.current = inPort; set.push({ name: last.name, dir: DIRNAMES[inPort] });
+        } else if (finalDir != null){
+          if (!last.tile.branches.includes(finalDir)) return { ok: false, error: `"${DIRNAMES[finalDir]}" is not a branch of switch "${last.name}" (branches ${last.tile.branches.map(b => DIRNAMES[b]).join("/")})` };
+          if (switchLocked(last.x, last.y) && switchCurrent(last.tile) !== finalDir) return { ok: false, error: `switch "${last.name}" is locked by another route` };
+          last.tile.current = finalDir; set.push({ name: last.name, dir: DIRNAMES[finalDir] });
+        } else {
+          return { ok: false, error: `the last switch "${last.name}" is entered via its stem — add a final compass direction to say which way to set it` };
+        }
+      }
+      // the final waypoint continues the move (unless it is the limit): a signal there is
+      // part of the route, a disc there gets cleared like any route disc
+      if (ents.length > 1 && !atLimit(last.x, last.y) && inPort != null)
+        collect(last.x, last.y, last.tile, exitFor(last.tile, inPort));
+      updateSignals();
+      // aspects: everything along the route ALLOWS the move, the limit HALTS it
+      const cleared = [];
+      for (const m of mains){
+        const r = cmdSetSignal(m.x, m.y, m.dir, true, { shunt: true });
+        if (!r.ok) return { ok: false, error: `cannot clear ${placeLabel(m.x, m.y)} for shunting: ${r.reason || r.error}`, set };
+        cleared.push(placeLabel(m.x, m.y));
+      }
+      for (const d of discs) cmdSetShuntSignal(d.x, d.y, false);
+      if (limit){
+        if (limit.tile.kind === "signal"){
+          const dirL = inPort != null ? exitFor(limit.tile, inPort) : null;
+          if (dirL != null && manualDirs(limit.tile).includes(dirL)) cmdSetSignal(limit.x, limit.y, dirL, false);
+        } else if (limit.tile.shuntSignal){
+          cmdSetShuntSignal(limit.x, limit.y, true);
+        }
+        // a stub/buffer limit needs nothing: the track ends there
+      }
+      return { ok: true, set, cleared, limit: limit ? limit.name : null };
     }
 
     // ---- Train-location watches (notifications) ----
@@ -2298,6 +2554,24 @@
     // log (carried in the snapshot) tagged with the station so the UI can show + highlight it.
     function notifyOperator(station, text){ emit("master", String(text || ""), { station: String(station) }); return { ok: true }; }
 
+    // ---- boxscript runner (per-station automation scripts, BOXSCRIPT.md) ----
+    // The interpreter lives in boxscript.js. When the module is present (require on the
+    // server, window.TinyTrainsBoxscript in the browser) every engine gets a runner and
+    // simStep drives it; without the module, scripts are stored but do not run. All runner
+    // state lives in state.boxscript (plain JSON), so it snapshots/restores with the game.
+    var boxscriptRunner = null;
+    (function attachBoxscript(){
+      let BS = null;
+      try { if (typeof require === "function") BS = require("./boxscript.js"); } catch (e) {}
+      if (!BS && typeof globalThis !== "undefined" && globalThis.TinyTrainsBoxscript) BS = globalThis.TinyTrainsBoxscript;
+      if (!BS || !BS.createRunner) return;
+      boxscriptRunner = BS.createRunner({
+        state, FRAMES_PER_SECOND, command, getTile, resolveElement, exitFor,
+        publicTrainId, trainStopped, hasActiveEngine, trainUnits, trainTypeById,
+        obstacleDistance, notifyOperator, formatClock
+      });
+    })();
+
     // ---- Live snapshot for streaming + persistence (Sets/transients made JSON-safe) ----
     function serHold(h){ return {blockId:h.blockId, entryMainKey:h.entryMainKey, entryMainTile:h.entryMainTile, approach: h.approach ? [...h.approach] : null, rollThrough: !!h.rollThrough}; }
     function cleanTrain(t){
@@ -2316,7 +2590,8 @@
         trains: state.trains.map(cleanTrain),
         manualGreen: [...state.manualGreen],
         routeLocks: state.routeLocks.map(serRouteLock),
-        events: state.events.slice(-200)
+        events: state.events.slice(-200),
+        boxscript: state.boxscript || {}
       };
     }
     function deHydrateTrain(t){ const o = {...t}; o.holds = (t.holds||[]).map(h => ({...h, approach: h.approach ? new Set(h.approach) : null})); return o; }
@@ -2335,7 +2610,7 @@
         ? s.trainTypes.map(t => ({id:t.id, color:t.color||UNKNOWN_TYPE_COLOR, name:t.name||""})) : defaultTrainTypes();
       state.stations = (Array.isArray(s.stations) ? s.stations : [])
         .filter(st => st && st.rect)
-        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
+        .map(st => { const r = normRect(st.rect); return {id:st.id, name:st.name||`Station ${st.id}`, instructions:st.instructions||"", overrides: Array.isArray(st.overrides) ? st.overrides.slice() : [], script: st.script || "", scriptDraft: st.scriptDraft != null ? String(st.scriptDraft) : null, scriptPaused: !!st.scriptPaused, rect:{x0:r.x0,y0:r.y0,x1:r.x1,y1:r.y1}}; });
       state.tiles = new Map();
       for (const it of (s.tiles||[])){ if (it && it.tile && Number.isFinite(it.x) && Number.isFinite(it.y)) setTile(it.x, it.y, it.tile); }
       state.trains = (s.trains||[]).map(deHydrateTrain);
@@ -2346,10 +2621,11 @@
       state.routeLocks = (s.routeLocks||[]).map(deRouteLock);
       state.lockedSwitchKeys = new Set();
       state.events = s.events || [];
+      state.boxscript = s.boxscript || {};
       updateSignals();
     }
 
-    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SHUNT_SPEED_FACTOR, COUPLE_DIST, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, activeEngine, hasActiveEngine, trainEngines, unitsLength, defaultUnits, unitsFor, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, bodyGeometry, obstacleDistance, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, cmdReverse, cmdSetTrainMode, cmdDetach, cmdCouple, cmdPlaceTrain, resolveConsist, consistSummary, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator };
+    return { DEFAULT_TYPE_COLORS, DEFAULT_TYPE_NAMES, LEGACY_COLOR_IDS, UNKNOWN_TYPE_COLOR, defaultTrainTypes, trainTypeById, typeColor, nextTypeId, MAX_SPEED, ACCEL, DECEL, MIN_SPEED, DEFAULT_CARS, CAR_GAP, CAR_WIDTH, SHUNT_SPEED_FACTOR, COUPLE_DIST, SIGNAL_REACTION_SECONDS, SIGNAL_SIDE_OFFSET, SPAWN_TICK_FRAMES, FRAMES_PER_SECOND, DEFAULT_DWELL_SECONDS, STOP_BROWN, SIGNAL_GREEN, SIGNAL_RED, SIGNAL_RED_DARK, MANUAL_RING, INACTIVE_BRANCH, LOCK_GREEN, BLOCK_GREY, DIRS, TRACK_SHAPES, buildDirectionalShapes, switchShape, buildSwitchShapes, SWITCH_SHAPES, SPAWN_SHAPES, STOP_SHAPES, SIGNAL_SHAPES, TOOLS, CROSSING_SHAPES, state, normRect, addStation, removeStation, stationContaining, key, readKey, opposite, cloneRoute, signalDirs, mkMain, parseMain, manualDirs, mainIsManual, mainIsManualKey, manualMainHasWaiter, routesFor, tileAccepts, switchCurrent, switchOther, switchLocked, switchAccepts, getTile, setTile, removeTile, defaultSwitch, makeTile, sortedRouteKey, findTrackShapeIndex, findDirShapeIndex, findSwitchShapeIndex, centerW, endpointW, lerpW, headWorld, trainCars, trainUnits, activeEngine, hasActiveEngine, trainEngines, unitsLength, defaultUnits, unitsFor, isShunting, trainTotalLength, updateTrail, seedTrail, computeBodyTiles, trailSpan, bodyGeometry, obstacleDistance, trainMoving, exitFor, exitsForBlock, collectProtectedBlock, scanProtectedBlock, regionIdFor, buildSignalSystem, mainEligible, approachInfo, nextWantSeq, trainHolds, blockOccupiedByOther, inBlockRegion, updateSignals, holdForMain, mainIsGreenFor, blockFree, mainRenderGreen, mainShuntCleared, mayRollThrough, occupied, maintainManualState, followManualRoute, toggleManualSignal, trainOccupies, canLeave, advanceWithSpeed, formatClock, placeLabel, publicTrainId, trainDesc, registerStopArrival, notifyDeparture, stopDwellSeconds, moveTrain, spawnTrains, simStep, serialize, migrateTile, emit, setPaused, command, cmdThrowSwitch, cmdSetSwitch, cmdToggleSignal, cmdSetSignal, cmdSpawn, cmdRemoveTrain, cmdReverse, cmdSetTrainMode, cmdDetach, cmdCouple, cmdPlaceTrain, resolveConsist, consistSummary, tilesInStation, findStation, resolveElement, stationsReport, trainsReport, waitingTrainsReport, snapshot, applySnapshot, deserialize, applyLayout, dayTime, setDayLength, EDIT_COMMANDS, addWatch, removeWatch, clearWatches, listWatches, watchCursor, watchEventsSince, notifyOwner, notifyOperator, getScript, scriptLog, cmdPermitPath };
   }
   return { createEngine };
 });

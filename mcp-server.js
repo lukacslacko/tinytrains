@@ -141,6 +141,22 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { path: { type: "array", items: { type: "string" }, description: "[entry signal, switch, …, optional final signal or compass]" }, ...STATION_PROP }, required: ["path"] },
     run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/path`, { path: a.path }, p.game)).body; } },
 
+  // ---- Boxscript: per-station automation scripts (BOXSCRIPT.md) ----
+  { name: "get_script",
+    description: "Read a station's BOXSCRIPT — the small event-driven automation program the SERVER runs as a scripted station master (returns the text plus any compile error). Use it before set_script so you extend rather than clobber the existing program.",
+    inputSchema: { type: "object", properties: STATION_PROP },
+    run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}/script`, null, p.game)).body; } },
+
+  { name: "set_script",
+    description: "Install/replace a station's BOXSCRIPT so the SERVER routes the mechanical traffic and you only supervise — a big token saver: write it once, then leave it running and review get_script_log instead of routing every train yourself. Event-driven language, e.g.: `on (red at A) { clear 1,2,B }` (a red-type train standing at signal A → set that path and clear A); `x := false` station variables with `if/elif/else`; `on (22:00) { x := false }` time rules; `wait until (hh:00)` for timetables; sequential shunting via `when (at X) {...}` / `when (touching) {...}` steps, `permit 1,2 to X` shunting routes, `uncouple after N`, `reverse`, `couple`, `shunt/drive/stop`, and `macro name(t) {...}`. The full language reference is served at /BOXSCRIPT.md on the game server. REPLACES the whole script (get_script first to extend). Returns `error` with the compile message if it does not parse (the text is stored anyway; a broken script routes nothing).",
+    inputSchema: { type: "object", properties: { script: { type: "string", description: "the full boxscript program text" }, ...STATION_PROP }, required: ["script"] },
+    run: async (a) => { const p = post(a); return (await api("POST", `/api/stations/${encodeURIComponent(p.station)}/script`, { script: a.script }, p.game)).body; } },
+
+  { name: "get_script_log",
+    description: "The script EXECUTION LOG: every event that fired and every action the station's boxscript took (with sim-clock stamps and failure reasons), since a cursor. This is how you check on a script you left running — call it at the end of a shift, fix what failed, and pass `after` = the previous response's `cursor` to see only what's new.",
+    inputSchema: { type: "object", properties: { after: { type: "number", description: "only entries with seq > after (use the last response's cursor)" }, ...STATION_PROP } },
+    run: async (a) => { const p = post(a); return (await api("GET", `/api/stations/${encodeURIComponent(p.station)}/script-log?after=${Number(a.after) || 0}`, null, p.game)).body; } },
+
   { name: "watch",
     description: "Optional: be notified when a train has PASSED an element (its tail has CLEARED it) — on a SWITCH that means it is now free to re-throw, on a SIGNAL that the block behind has cleared for a following train. ('reach' = a train's head is on the element.) There is NO advance/approach notice: you are told about a train only once it is STOPPED at a signal, via await_events. Returns a watch id.",
     inputSchema: { type: "object", properties: { element: { type: "string", description: "signal or switch name" }, mode: { type: "string", enum: ["pass", "reach"], description: "default 'pass'" }, ...STATION_PROP }, required: ["element"] },
